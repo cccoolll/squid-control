@@ -63,7 +63,7 @@ class SquidController:
         # configure the actuators
         self.microcontroller.configure_actuators()
 
-        self.configurationManager = core.ConfigurationManager(filename='./squid_control/channel_configurations.xml')
+        self.configurationManager = core.ConfigurationManager(filename='channel_configurations.xml')
 
         self.streamHandler = core.StreamHandler(display_resolution_scaling=CONFIG.DEFAULT_DISPLAY_CROP/100)
         self.liveController = core.LiveController(self.camera,self.microcontroller,self.configurationManager)
