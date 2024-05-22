@@ -6,9 +6,10 @@ import time
 import numpy as np
 import threading
 from crc import CrcCalculator, Crc8
-
+import json
 from squid_control.control.config import CONFIG
 from qtpy.QtCore import QTimer
+from scipy.spatial import ConvexHull, Delaunay
 
 
 from enum import Enum
@@ -910,6 +911,9 @@ class Microcontroller_Simulation:
 
         self.crc_calculator = CrcCalculator(Crc8.CCITT, table_based=True)
 
+        self.edge_positions = []
+        self.edge_positions_file = "edge_positions.json"
+
     def close(self):
         self.terminate_reading_received_packet_thread = True
         self.thread_read_received_packet.join()
@@ -927,41 +931,99 @@ class Microcontroller_Simulation:
         self.send_command(cmd)
         print("initialize the drivers")  # debug
 
+    def mark_edge_position(self):
+        """Marks the current XYZ position as an edge and saves it to a file"""
+        self.edge_positions.append([self.x_pos, self.y_pos, self.z_pos])
+        self.save_edge_positions()
+
+    def clear_edge_positions(self):
+        """Clears the list of edge positions"""
+        self.edge_positions = []
+        self.save_edge_positions()
+    
+    def load_edge_positions(self):
+        """Loads the list of edge positions from a file"""
+        try:
+            with open(self.edge_positions_file, "r") as f:
+                self.edge_positions = json.load(f)
+        except FileNotFoundError:
+            print("Edge positions file not found")
+            self.edge_positions = []
+        
+    def save_edge_positions(self):
+        """Saves the list of edge positions to a file"""
+        with open(self.edge_positions_file, "w") as f:
+            json.dump(self.edge_positions, f)
+    
+    def is_point_in_concave_hull(self, point):
+        """Returns True if the point is inside the concave hull of the edge positions"""
+        if len(self.edge_positions) < 4:
+            print("Not enough edge positions to form a concave hull")
+            return False
+        #Compute the Delaunay triangulation of the edge positions
+        points=np.array(self.edge_positions)
+        hull = Delaunay(points)
+        return hull.find_simplex(point) >= 0
+
     def move_x_usteps(self, usteps):
-        self.x_pos = self.x_pos + CONFIG.STAGE_MOVEMENT_SIGN_X * usteps
-        cmd = bytearray(self.tx_buffer_length)
-        self.send_command(cmd)
-        print("   mcu command " + str(self._cmd_id) + ": move x")
+        target_pos = self.x_pos + CONFIG.STAGE_MOVEMENT_SIGN_X * usteps
+        if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
+            self.x_pos = target_pos
+            cmd = bytearray(self.tx_buffer_length)
+            self.send_command(cmd)
+            print("   mcu command " + str(self._cmd_id) + ": move x")
+        else:
+            print("Target position is outside the safe area, X movement cancelled")
 
     def move_x_to_usteps(self, usteps):
-        self.x_pos = usteps
-        cmd = bytearray(self.tx_buffer_length)
-        self.send_command(cmd)
-        print("   mcu command " + str(self._cmd_id) + ": move x to")
+        target_pos = usteps
+        if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
+            self.x_pos = target_pos
+            cmd = bytearray(self.tx_buffer_length)
+            self.send_command(cmd)
+            print("   mcu command " + str(self._cmd_id) + ": move x to")
+        else:
+            print("Target position is outside the safe area, X movement cancelled")
 
     def move_y_usteps(self, usteps):
-        self.y_pos = self.y_pos + CONFIG.STAGE_MOVEMENT_SIGN_Y * usteps
-        cmd = bytearray(self.tx_buffer_length)
-        self.send_command(cmd)
-        print("   mcu command " + str(self._cmd_id) + ": move y")
+        target_pos = self.y_pos + CONFIG.STAGE_MOVEMENT_SIGN_Y * usteps
+        if self.is_point_in_concave_hull([self.x_pos, target_pos, self.z_pos]):
+            self.y_pos = target_pos
+            cmd = bytearray(self.tx_buffer_length)
+            self.send_command(cmd)
+            print("   mcu command " + str(self._cmd_id) + ": move y")
+        else:
+            print("Target position is outside the safe area, Y movement cancelled")
 
     def move_y_to_usteps(self, usteps):
-        self.y_pos = usteps
-        cmd = bytearray(self.tx_buffer_length)
-        self.send_command(cmd)
-        print("   mcu command " + str(self._cmd_id) + ": move y to")
+        target_pos = usteps
+        if self.is_point_in_concave_hull([self.x_pos, target_pos, self.z_pos]):
+            self.y_pos = target_pos
+            cmd = bytearray(self.tx_buffer_length)
+            self.send_command(cmd)
+            print("   mcu command " + str(self._cmd_id) + ": move y to")
+        else:
+            print("Target position is outside the safe area, Y movement cancelled")
 
     def move_z_usteps(self, usteps):
-        self.z_pos = self.z_pos + CONFIG.STAGE_MOVEMENT_SIGN_Z * usteps
-        cmd = bytearray(self.tx_buffer_length)
-        self.send_command(cmd)
-        print("   mcu command " + str(self._cmd_id) + ": move z")
+        target_pos = self.z_pos + CONFIG.STAGE_MOVEMENT_SIGN_Z * usteps
+        if self.is_point_in_concave_hull([self.x_pos, self.y_pos, target_pos]):
+            self.z_pos = target_pos
+            cmd = bytearray(self.tx_buffer_length)
+            self.send_command(cmd)
+            print("   mcu command " + str(self._cmd_id) + ": move z")
+        else:
+            print("Target position is outside the safe area, Z movement cancelled")
 
     def move_z_to_usteps(self, usteps):
-        self.z_pos = usteps
-        cmd = bytearray(self.tx_buffer_length)
-        self.send_command(cmd)
-        print("   mcu command " + str(self._cmd_id) + ": move z to")
+        target_pos = usteps
+        if self.is_point_in_concave_hull([self.x_pos, self.y_pos, target_pos]):
+            self.z_pos = target_pos
+            cmd = bytearray(self.tx_buffer_length)
+            self.send_command(cmd)
+            print("   mcu command " + str(self._cmd_id) + ": move z to")
+        else:
+            print("Target position is outside the safe area, Z movement cancelled")
 
     def move_theta_usteps(self, usteps):
         self.theta_pos = self.theta_pos + usteps

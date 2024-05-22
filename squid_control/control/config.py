@@ -659,4 +659,49 @@ def load_config(config_path, multipoint_function):
 
 
 
+# For flexable plate format:
+class WELLPLATE_FORMAT_384:
+    WELL_SIZE_MM = 3.3
+    WELL_SPACING_MM = 4.5
+    NUMBER_OF_SKIP = 1
+    A1_X_MM = 12.05
+    A1_Y_MM = 9.05
+
+class WELLPLATE_FORMAT_96:
+    NUMBER_OF_SKIP = 0
+    WELL_SIZE_MM = 6.21
+    WELL_SPACING_MM = 9
+    A1_X_MM = 14.3
+    A1_Y_MM = 11.36
+class WELLPLATE_FORMAT_24:
+    NUMBER_OF_SKIP = 0
+    WELL_SIZE_MM = 15.54
+    WELL_SPACING_MM = 19.3
+    A1_X_MM = 17.05
+    A1_Y_MM = 13.67
+class WELLPLATE_FORMAT_12:
+    NUMBER_OF_SKIP = 0
+    WELL_SIZE_MM = 22.05
+    WELL_SPACING_MM = 26
+    A1_X_MM = 24.75
+    A1_Y_MM = 16.86
+class WELLPLATE_FORMAT_6:
+    NUMBER_OF_SKIP = 0
+    WELL_SIZE_MM = 34.94
+    WELL_SPACING_MM = 39.2
+    A1_X_MM = 24.55
+    A1_Y_MM = 23.01
+
+LIMIT_POINTS_FOR_WELLPLATE = [
+    (20, 4),
+    (10.97, 15.33),
+    (10.97, 76.52),
+    (20, 78.5),
+    (99.32, 78.5),
+    (111.55, 67.52),
+    (111.55, 15.33),
+    (99.32, 4)
+]
+
+
     
