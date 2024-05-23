@@ -243,66 +243,73 @@ class SquidController:
             y_mm = wellplate_format.A1_Y_MM + (ord(row) - ord('A'))*wellplate_format.WELL_SPACING_MM
             y_usteps = CONFIG.STAGE_MOVEMENT_SIGN_Y*round(y_mm/mm_per_ustep_Y)
             self.microcontroller.move_y_to_usteps(y_usteps)
-    
-    def is_point_in_octagon_border(self, x, y, z):
-        if z >= 4.5 or z <= 0.1:
-            return False
-        # Create a Path object from octagon points
-        path = mpath.Path(OCTAGON_LIMIT_FOR_WELLPLATE)
+ 
+    def move_x_to_limited(self, x):
         
-        # Check if the point (x, y) is inside the octagon
-        return path.contains_point((x, y))
+        x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+
+        self.navigationController.move_x_to_limited(x)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005) 
+        
+        x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+
+        if x_pos == x:
+            return False, x_pos_before, y_pos_before, z_pos_before, x
+
+        return True, x_pos_before, y_pos_before, z_pos_before, x
     
-    def move_x_to_safely(self, x):
+    def move_y_to_limited(self, y):
+        x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+        self.navigationController.move_y_to_limited(y)
+
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
-        if self.is_point_in_octagon_border(x, y_pos, z_pos):
-            self.navigationController.move_x_to(x)
-            while self.microcontroller.is_busy():
-                time.sleep(0.005)
-        else:
-            return False, x_pos, y_pos, z_pos, x
-        return True, x_pos, y_pos, z_pos, x
+        if y_pos == y:
+            return False, x_pos_before, y_pos_before, z_pos_before, 
     
-    def move_y_to_safely(self, y):
+        return True, x_pos_before, y_pos_before, z_pos_before, y
+
+    def move_z_to_limited(self, z):
+        x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+        self.navigationController.move_z_to_limited(z)
+
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
-        if self.is_point_in_octagon_border(x_pos, y, z_pos):
-            self.navigationController.move_y_to(y)
-            while self.microcontroller.is_busy():
-                time.sleep(0.005)
-        else:
-            return False, x_pos, y_pos, z_pos, y
-        return True, x_pos, y_pos, z_pos, y
+        if z_pos == z:
+            return False, x_pos_before, y_pos_before, z_pos_before, z
 
-    def move_z_to_safely(self, z):
+        return True, x_pos_before, y_pos_before, z_pos_before, z
+
+
+    def move_by_distance_limited(self, dx, dy, dz):
+        x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+
+        self.navigationController.move_x_to_limited(dx)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        self.navigationController.move_y_limited(dy)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        self.navigationController.move_z_limited(dz)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
-        if self.is_point_in_octagon_border(x_pos, y_pos, z):
-            self.navigationController.move_z_to(z)
-            while self.microcontroller.is_busy():
-                time.sleep(0.005)
-        else:
-            return False, x_pos, y_pos, z_pos, z
-        return True, x_pos, y_pos, z_pos, z
+        if x_pos == x_pos_before and dx!=0:
+            return False, x_pos_before, y_pos_before, z_pos_before, x_pos_before+dx, y_pos_before+dy, z_pos_before+dz
+        if y_pos == y_pos_before and dy!=0:
+            return False, x_pos_before, y_pos_before, z_pos_before, x_pos_before+dx, y_pos_before+dy, z_pos_before+dz
+        if z_pos == z_pos_before and dz!=0:
+            return False, x_pos_before, y_pos_before, z_pos_before, x_pos_before+dx, y_pos_before+dy, z_pos_before+dz
 
 
-    def move_by_distance_safely(self, dx, dy, dz):
-        x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
-
-        if self.is_point_in_octagon_border(x_pos+dx, y_pos+dy, z_pos+dz):
-            self.navigationController.move_x(dx)
-            while self.microcontroller.is_busy():
-                time.sleep(0.005)
-            self.navigationController.move_y(dy)
-            while self.microcontroller.is_busy():
-                time.sleep(0.005)
-            self.navigationController.move_z(dz)
-            while self.microcontroller.is_busy():
-                time.sleep(0.005)
-        else:
-            return False, x_pos, y_pos, z_pos, x_pos+dx, y_pos+dy, z_pos+dz
-        return True, x_pos, y_pos, z_pos, x_pos+dx, y_pos+dy, z_pos+dz
+        return True, x_pos_before, y_pos_before, z_pos_before, x_pos, y_pos, z_pos
     
     def home_stage(self):
         # retract the object

@@ -882,6 +882,75 @@ class NavigationController(QObject):
             )
         )
 
+    def move_x_limited(self, delta):
+        self.microcontroller.move_x_usteps_limited(
+            int(
+                delta
+                / (
+                    CONFIG.SCREW_PITCH_X_MM
+                    / (self.x_microstepping * CONFIG.FULLSTEPS_PER_REV_X)
+                )
+            )
+        )
+
+    def move_y_limited(self, delta):
+        self.microcontroller.move_y_usteps_limited(
+            int(
+                delta
+                / (
+                    CONFIG.SCREW_PITCH_Y_MM
+                    / (self.y_microstepping * CONFIG.FULLSTEPS_PER_REV_Y)
+                )
+            )
+        )
+
+    def move_z_limited(self, delta):
+        self.microcontroller.move_z_usteps_limited(
+            int(
+                delta
+                / (
+                    CONFIG.SCREW_PITCH_Z_MM
+                    / (self.z_microstepping * CONFIG.FULLSTEPS_PER_REV_Z)
+                )
+            )
+        )
+
+    def move_x_to_limited(self, delta):
+        self.microcontroller.move_x_to_usteps_limited(
+            CONFIG.STAGE_MOVEMENT_SIGN_X
+            * int(
+                delta
+                / (
+                    CONFIG.SCREW_PITCH_X_MM
+                    / (self.x_microstepping * CONFIG.FULLSTEPS_PER_REV_X)
+                )
+            )
+        )
+
+    def move_y_to_limited(self, delta):
+        self.microcontroller.move_y_to_usteps_limited(
+            CONFIG.STAGE_MOVEMENT_SIGN_Y
+            * int(
+                delta
+                / (
+                    CONFIG.SCREW_PITCH_Y_MM
+                    / (self.y_microstepping * CONFIG.FULLSTEPS_PER_REV_Y)
+                )
+            )
+        )
+
+    def move_z_to_limited(self, delta):
+        self.microcontroller.move_z_to_usteps_limited(
+            CONFIG.STAGE_MOVEMENT_SIGN_Z
+            * int(
+                delta
+                / (
+                    CONFIG.SCREW_PITCH_Z_MM
+                    / (self.z_microstepping * CONFIG.FULLSTEPS_PER_REV_Z)
+                )
+            )
+        )
+
     def move_x_usteps(self, usteps):
         self.microcontroller.move_x_usteps(usteps)
 

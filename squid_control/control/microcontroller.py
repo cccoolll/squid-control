@@ -10,6 +10,7 @@ import json
 from squid_control.control.config import CONFIG
 from qtpy.QtCore import QTimer
 from scipy.spatial import ConvexHull, Delaunay
+import os
 
 
 from enum import Enum
@@ -386,6 +387,7 @@ class Microcontroller:
         cmd[4] = (payload >> 8) & 0xFF
         cmd[5] = payload & 0xFF
         self.send_command(cmd)
+
 
     def move_theta_usteps(self, usteps):
         direction = CONFIG.STAGE_MOVEMENT_SIGN_THETA * np.sign(usteps)
@@ -911,8 +913,11 @@ class Microcontroller_Simulation:
 
         self.crc_calculator = CrcCalculator(Crc8.CCITT, table_based=True)
 
+        script_dir = os.path.dirname(os.path.abspath(__file__))
         self.edge_positions = []
-        self.edge_positions_file = "edge_positions.json"
+        self.edge_positions_file = os.path.join(script_dir,"edge_positions.json")
+        self.load_edge_positions()
+        print("edge positions: ", self.edge_positions)
 
     def close(self):
         self.terminate_reading_received_packet_thread = True
@@ -947,8 +952,8 @@ class Microcontroller_Simulation:
             with open(self.edge_positions_file, "r") as f:
                 self.edge_positions = json.load(f)
         except FileNotFoundError:
-            print("Edge positions file not found")
-            self.edge_positions = []
+            print("Edge positions file not found!")
+            exit()
         
     def save_edge_positions(self):
         """Saves the list of edge positions to a file"""
@@ -966,6 +971,42 @@ class Microcontroller_Simulation:
         return hull.find_simplex(point) >= 0
 
     def move_x_usteps(self, usteps):
+        self.x_pos = self.x_pos + CONFIG.STAGE_MOVEMENT_SIGN_X * usteps
+        cmd = bytearray(self.tx_buffer_length)
+        self.send_command(cmd)
+        print("   mcu command " + str(self._cmd_id) + ": move x")
+
+    def move_x_to_usteps(self, usteps):
+        self.x_pos = usteps
+        cmd = bytearray(self.tx_buffer_length)
+        self.send_command(cmd)
+        print("   mcu command " + str(self._cmd_id) + ": move x to")
+
+    def move_y_usteps(self, usteps):
+        self.y_pos = self.y_pos + CONFIG.STAGE_MOVEMENT_SIGN_Y * usteps
+        cmd = bytearray(self.tx_buffer_length)
+        self.send_command(cmd)
+        print("   mcu command " + str(self._cmd_id) + ": move y")
+
+    def move_y_to_usteps(self, usteps):
+        self.y_pos = usteps
+        cmd = bytearray(self.tx_buffer_length)
+        self.send_command(cmd)
+        print("   mcu command " + str(self._cmd_id) + ": move y to")
+
+    def move_z_usteps(self, usteps):
+        self.z_pos = self.z_pos + CONFIG.STAGE_MOVEMENT_SIGN_Z * usteps
+        cmd = bytearray(self.tx_buffer_length)
+        self.send_command(cmd)
+        print("   mcu command " + str(self._cmd_id) + ": move z")
+
+    def move_z_to_usteps(self, usteps):
+        self.z_pos = usteps
+        cmd = bytearray(self.tx_buffer_length)
+        self.send_command(cmd)
+        print("   mcu command " + str(self._cmd_id) + ": move z to")
+
+    def move_x_usteps_limited(self, usteps):
         target_pos = self.x_pos + CONFIG.STAGE_MOVEMENT_SIGN_X * usteps
         if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
             self.x_pos = target_pos
@@ -975,7 +1016,7 @@ class Microcontroller_Simulation:
         else:
             print("Target position is outside the safe area, X movement cancelled")
 
-    def move_x_to_usteps(self, usteps):
+    def move_x_to_usteps_limited(self, usteps):
         target_pos = usteps
         if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
             self.x_pos = target_pos
@@ -985,7 +1026,7 @@ class Microcontroller_Simulation:
         else:
             print("Target position is outside the safe area, X movement cancelled")
 
-    def move_y_usteps(self, usteps):
+    def move_y_usteps_limited(self, usteps):
         target_pos = self.y_pos + CONFIG.STAGE_MOVEMENT_SIGN_Y * usteps
         if self.is_point_in_concave_hull([self.x_pos, target_pos, self.z_pos]):
             self.y_pos = target_pos
@@ -995,7 +1036,7 @@ class Microcontroller_Simulation:
         else:
             print("Target position is outside the safe area, Y movement cancelled")
 
-    def move_y_to_usteps(self, usteps):
+    def move_y_to_usteps_limited(self, usteps):
         target_pos = usteps
         if self.is_point_in_concave_hull([self.x_pos, target_pos, self.z_pos]):
             self.y_pos = target_pos
@@ -1005,7 +1046,7 @@ class Microcontroller_Simulation:
         else:
             print("Target position is outside the safe area, Y movement cancelled")
 
-    def move_z_usteps(self, usteps):
+    def move_z_usteps_limited(self, usteps):
         target_pos = self.z_pos + CONFIG.STAGE_MOVEMENT_SIGN_Z * usteps
         if self.is_point_in_concave_hull([self.x_pos, self.y_pos, target_pos]):
             self.z_pos = target_pos
@@ -1015,7 +1056,7 @@ class Microcontroller_Simulation:
         else:
             print("Target position is outside the safe area, Z movement cancelled")
 
-    def move_z_to_usteps(self, usteps):
+    def move_z_to_usteps_limited(self, usteps):
         target_pos = usteps
         if self.is_point_in_concave_hull([self.x_pos, self.y_pos, target_pos]):
             self.z_pos = target_pos
