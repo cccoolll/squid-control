@@ -504,6 +504,8 @@ class BaseConfig(BaseModel):
     CHANNEL_CONFIGURATIONS_PATH: str = ""
     LAST_COORDS_PATH: str = ""
 
+    # for check if the stage is moved
+    STAGE_MOVED_THRESHOLD: float = 0.005
 
     def read_config(self, config_path):
         cached_config_file_path = None
@@ -692,16 +694,7 @@ class WELLPLATE_FORMAT_6:
     A1_X_MM = 24.55
     A1_Y_MM = 23.01
 
-LIMIT_POINTS_FOR_WELLPLATE = [
-    (20, 4),
-    (10.97, 15.33),
-    (10.97, 76.52),
-    (20, 78.5),
-    (99.32, 78.5),
-    (111.55, 67.52),
-    (111.55, 15.33),
-    (99.32, 4)
-]
+
 
 
     

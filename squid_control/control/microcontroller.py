@@ -109,6 +109,14 @@ class Microcontroller:
 
         print("connecting to controller based on " + version)
 
+        #for software limit
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.edge_positions = []
+        self.edge_positions_file = os.path.join(script_dir,"edge_positions.json")
+        self.load_edge_positions()
+        print("edge positions: ", self.edge_positions)
+        #-------------------        
+
         if version == "Arduino Due":
             controller_ports = [
                 p.device
@@ -171,6 +179,42 @@ class Microcontroller:
         self.send_command(cmd)
         print("initialize the drivers")  # debug
 
+#These are used for software limits
+    def mark_edge_position(self):
+        """Marks the current XYZ position as an edge and saves it to a file"""
+        self.edge_positions.append([self.x_pos, self.y_pos, self.z_pos])
+        self.save_edge_positions()
+
+    def clear_edge_positions(self):
+        """Clears the list of edge positions"""
+        self.edge_positions = []
+        self.save_edge_positions()
+    
+    def load_edge_positions(self):
+        """Loads the list of edge positions from a file"""
+        try:
+            with open(self.edge_positions_file, "r") as f:
+                self.edge_positions = json.load(f)
+        except FileNotFoundError:
+            print("Edge positions file not found!")
+            exit()
+        
+    def save_edge_positions(self):
+        """Saves the list of edge positions to a file"""
+        with open(self.edge_positions_file, "w") as f:
+            json.dump(self.edge_positions, f)
+    
+    def is_point_in_concave_hull(self, point):
+        """Returns True if the point is inside the concave hull of the edge positions"""
+        if len(self.edge_positions) < 4:
+            print("Not enough edge positions to form a concave hull")
+            return False
+        #Compute the Delaunay triangulation of the edge positions
+        points=np.array(self.edge_positions)
+        hull = Delaunay(points)
+        return hull.find_simplex(point) >= 0
+ #-----------------------------------------------
+    
     def turn_on_illumination(self):
         cmd = bytearray(self.tx_buffer_length)
         cmd[1] = CMD_SET.TURN_ON_ILLUMINATION
@@ -268,6 +312,13 @@ class Microcontroller:
         # while self.mcu_cmd_execution_in_progress == True:
         #     time.sleep(self._motion_status_checking_interval)
 
+    def move_x_usteps_limited(self, usteps):
+        target_pos = self.x_pos + CONFIG.STAGE_MOVEMENT_SIGN_X * usteps
+        if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
+            self.move_x_usteps(usteps)
+        else:
+            print("Target position is outside the safe area, X movement cancelled")
+
     def move_x_to_usteps(self, usteps):
         payload = self._int_to_payload(usteps, 4)
         cmd = bytearray(self.tx_buffer_length)
@@ -277,6 +328,13 @@ class Microcontroller:
         cmd[4] = (payload >> 8) & 0xFF
         cmd[5] = payload & 0xFF
         self.send_command(cmd)
+    
+    def move_x_to_usteps_limited(self, usteps):
+        target_pos = usteps
+        if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
+            self.move_x_to_usteps(usteps)
+        else:
+            print("Target position is outside the safe area, X movement cancelled")
 
     """
     def move_y(self,delta):
@@ -323,6 +381,13 @@ class Microcontroller:
         # while self.mcu_cmd_execution_in_progress == True:
         #     time.sleep(self._motion_status_checking_interval)
 
+    def move_y_usteps_limited(self, usteps):
+        target_pos = self.y_pos + CONFIG.STAGE_MOVEMENT_SIGN_Y * usteps
+        if self.is_point_in_concave_hull([self.x_pos, target_pos, self.z_pos]):
+            self.move_y_usteps(usteps)
+        else:
+            print("Target position is outside the safe area, Y movement cancelled")
+
     def move_y_to_usteps(self, usteps):
         payload = self._int_to_payload(usteps, 4)
         cmd = bytearray(self.tx_buffer_length)
@@ -332,6 +397,13 @@ class Microcontroller:
         cmd[4] = (payload >> 8) & 0xFF
         cmd[5] = payload & 0xFF
         self.send_command(cmd)
+    
+    def move_y_to_usteps_limited(self, usteps):
+        target_pos = usteps
+        if self.is_point_in_concave_hull([self.x_pos, target_pos, self.z_pos]):
+            self.move_y_to_usteps(usteps)
+        else:
+            print("Target position is outside the safe area, Y movement cancelled")
 
     """
     def move_z(self,delta):
@@ -377,6 +449,13 @@ class Microcontroller:
         self.send_command(cmd)
         # while self.mcu_cmd_execution_in_progress == True:
         #     time.sleep(self._motion_status_checking_interval)
+    
+    def move_z_usteps_limited(self, usteps):    
+        target_pos = self.z_pos + CONFIG.STAGE_MOVEMENT_SIGN_Z * usteps
+        if self.is_point_in_concave_hull([self.x_pos, self.y_pos, target_pos]):
+            self.move_z_usteps(usteps)
+        else:
+            print("Target position is outside the safe area, Z movement cancelled")
 
     def move_z_to_usteps(self, usteps):
         payload = self._int_to_payload(usteps, 4)
@@ -387,6 +466,13 @@ class Microcontroller:
         cmd[4] = (payload >> 8) & 0xFF
         cmd[5] = payload & 0xFF
         self.send_command(cmd)
+    
+    def move_z_to_usteps_limited(self, usteps):
+        target_pos = usteps
+        if self.is_point_in_concave_hull([self.x_pos, self.y_pos, target_pos]):
+            self.move_z_to_usteps(usteps)
+        else:
+            print("Target position is outside the safe area, Z movement cancelled")
 
 
     def move_theta_usteps(self, usteps):
@@ -913,11 +999,13 @@ class Microcontroller_Simulation:
 
         self.crc_calculator = CrcCalculator(Crc8.CCITT, table_based=True)
 
+        #for software limit
         script_dir = os.path.dirname(os.path.abspath(__file__))
         self.edge_positions = []
         self.edge_positions_file = os.path.join(script_dir,"edge_positions.json")
         self.load_edge_positions()
         print("edge positions: ", self.edge_positions)
+        #-------------------
 
     def close(self):
         self.terminate_reading_received_packet_thread = True

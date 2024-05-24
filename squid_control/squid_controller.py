@@ -254,7 +254,7 @@ class SquidController:
         
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
-        if x_pos == x:
+        if abs(x_pos - x) > CONFIG.STAGE_MOVED_THRESHOLD:
             return False, x_pos_before, y_pos_before, z_pos_before, x
 
         return True, x_pos_before, y_pos_before, z_pos_before, x
@@ -267,8 +267,8 @@ class SquidController:
             time.sleep(0.005)
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
-        if y_pos == y:
-            return False, x_pos_before, y_pos_before, z_pos_before, 
+        if abs(y_pos - y) > CONFIG.STAGE_MOVED_THRESHOLD:
+            return False, x_pos_before, y_pos_before, z_pos_before, y
     
         return True, x_pos_before, y_pos_before, z_pos_before, y
 
@@ -280,7 +280,7 @@ class SquidController:
             time.sleep(0.005)
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
-        if z_pos == z:
+        if abs(z_pos - z) > CONFIG.STAGE_MOVED_THRESHOLD:
             return False, x_pos_before, y_pos_before, z_pos_before, z
 
         return True, x_pos_before, y_pos_before, z_pos_before, z
@@ -301,11 +301,11 @@ class SquidController:
         
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
-        if x_pos == x_pos_before and dx!=0:
+        if abs(x_pos-x_pos_before)<CONFIG.STAGE_MOVED_THRESHOLD and dx!=0:
             return False, x_pos_before, y_pos_before, z_pos_before, x_pos_before+dx, y_pos_before+dy, z_pos_before+dz
-        if y_pos == y_pos_before and dy!=0:
+        if abs(y_pos-y_pos_before)<CONFIG.STAGE_MOVED_THRESHOLD and dy!=0:
             return False, x_pos_before, y_pos_before, z_pos_before, x_pos_before+dx, y_pos_before+dy, z_pos_before+dz
-        if z_pos == z_pos_before and dz!=0:
+        if abs(z_pos-z_pos_before)<CONFIG.STAGE_MOVED_THRESHOLD and dz!=0:
             return False, x_pos_before, y_pos_before, z_pos_before, x_pos_before+dx, y_pos_before+dy, z_pos_before+dz
 
 
