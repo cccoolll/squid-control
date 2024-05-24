@@ -447,7 +447,7 @@ class BaseConfig(BaseModel):
     )
 
     # controller version
-    CONTROLLER_VERSION: str = "Arduino Due"  # 'Teensy'
+    CONTROLLER_VERSION: str = 'Teensy'
 
     # How to read Spinnaker nodemaps, options are INDIVIDUAL or VALUE
     CHOSEN_READ: str = "INDIVIDUAL"
