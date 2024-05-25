@@ -11,7 +11,7 @@ if CONFIG.SUPPORT_LASER_AUTOFOCUS:
     import squid_control.control.core_displacement_measurement as core_displacement_measurement
 
 import time
-
+load_config('C:\\Users\\songtao.cheng\\Documents\\codes-in-KTH\\imaging-farm\\reef-imaging\\squid-control\\configuration_HCS_v2.ini', False)
 class SquidController:
     fps_software_trigger= 100
 

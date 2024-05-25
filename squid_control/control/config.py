@@ -536,9 +536,9 @@ class BaseConfig(BaseModel):
             # exec(open(config_files[0]).read())
             cfp = ConfigParser()
             cfp.read(config_files[0])
-            var_items = list(self.model_fields.keys())
+            var_items = list(locals().keys())
             for var_name in var_items:
-                if type(getattr(self, var_name)) is type:
+                if type(locals()[var_name]) is type:
                     continue
                 varnamelower = var_name.lower()
                 if varnamelower not in cfp.options("GENERAL"):
