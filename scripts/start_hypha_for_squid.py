@@ -9,6 +9,7 @@ from hypha_storage import HyphaDataStore
 import argparse
 import asyncio
 import fractions
+from functools import partial
 
 import numpy as np
 #from av import VideoFrame
@@ -232,8 +233,8 @@ def one_new_frame(context=None):
     return bgr_img
 
 
-def snap(exposure_time, channel, intensity,context=None):
-    """
+def snap(exposure_time, channel, intensity, context=None):
+    """ 
     Get the current frame from the camera, converted to a 3-channel BGR image.
     """
     if not check_permission(context.get("user")):
@@ -243,11 +244,12 @@ def snap(exposure_time, channel, intensity,context=None):
     if channel is None:
         channel = 0
     if intensity is None:
-        intensity = 44
+        intensity = 15
     squidController.camera.set_exposure_time(exposure_time)
     squidController.camera.send_trigger()
-    squidController.liveController.turn_on_illumination()
+
     squidController.liveController.set_illumination(channel,intensity)
+    squidController.liveController.turn_on_illumination()
     if squidController.microcontroller.is_busy():
         time.sleep(0.05)
     gray_img = squidController.camera.read_frame()
@@ -257,6 +259,7 @@ def snap(exposure_time, channel, intensity,context=None):
         time.sleep(0.005)
     squidController.liveController.turn_off_illumination()
     #gray_img=np.resize(gray_img,(512,512))
+    gray_img = cv2.resize(gray_img, (512,512))
     # Rescale the image to span the full 0-255 range
     min_val = np.min(gray_img)
     max_val = np.max(gray_img)
@@ -397,30 +400,21 @@ def navigate_to_well(row,col, wellplate_type, context=None):
     if not check_permission(context.get("user")):
         return "You don't have permission to use the chatbot, please contact us and wait for approval"
     if wellplate_type is None:
-        wellplate_type = '24'
+        wellplate_type = '96'
     squidController.platereader_move_to_well(row,col,wellplate_type)
     print(f'The stage moved to well position ({row},{col})')
 
-async def start_service(service_id, workspace=None, token=None):
-    client_id = service_id + "-client"
-    token = await login({"server_url": "https://ai.imjoy.io",})
 
-    print(f"Starting service...")
-    server = await connect_to_server(
-        {
-            "client_id": client_id,
-            "server_url": "https://ai.imjoy.io",
-            "workspace": workspace,
-            "token": token,
-        }
-    )
-    
+datastore = HyphaDataStore()
+
+async def start_hypha_service(server, service_id):
+
     async def on_init(peer_connection):
         @peer_connection.on("track")
         def on_track(track):
             squidController.camera.send_trigger()
             squidController.liveController.turn_on_illumination()
-            squidController.liveController.set_illumination(0,44)
+            squidController.liveController.set_illumination(0,15)
             if squidController.microcontroller.is_busy():
                 time.sleep(0.05)
             print(f"Track {track.kind} received")
@@ -440,6 +434,7 @@ async def start_service(service_id, workspace=None, token=None):
         # Start the task to send stage position periodically
         asyncio.create_task(send_status(data_channel))
 
+    
     await server.register_service(
         {
             "id": "microscope-control-squid",
@@ -459,7 +454,8 @@ async def start_service(service_id, workspace=None, token=None):
             "move_to_position": move_to_position,      
             "move_to_loading_position": move_to_loading_position,
             "auto_focus": auto_focus,
-        }
+        },
+        overwrite=True
     )
     
     await register_rtc_service(
@@ -470,12 +466,10 @@ async def start_service(service_id, workspace=None, token=None):
             #"on_init": on_init,
         },
     )
-    global datastore
-    datastore = HyphaDataStore()
-    await datastore.setup(server, service_id="data-store")
+
 
     print(
-        f"Service (client_id={client_id}, service_id={service_id}) started successfully, available at https://ai.imjoy.io/{server.config.workspace}/services"
+        f"Service (service_id={service_id}) started successfully, available at https://ai.imjoy.io/{server.config.workspace}/services"
     )
     print(f"You can access the webrtc stream at https://aicell-lab.github.io/squid-control/?service_id={service_id}")
     
@@ -489,62 +483,59 @@ async def start_service(service_id, workspace=None, token=None):
 def get_schema(context=None):
     return {
         "move_by_distance": {
-            "type": "bioimageio-chatbot-extension",
+            "type": "object",
             "title": "move_by_distance",
-            "description": "Move the stage by a specified distance in millimeters, the stage will move along the X, Y, and Z axes. You must retur all three numbers. You also must return 0 if you don't to move the stage along that axis. Notice: for new well plate imaging, move the Z axis to 4.1mm can reach the focus position. And the maximum value of Z axis is 5mm.",
+            "description": "Move the stage by a specified distance in millimeters, the stage will move along the X, Y, and Z axes. You must retur all three numbers. You also must return 0 if you don't to move the stage along that axis. Notice: for new well plate imaging, move the Z axis to 2.79mm can reach the focus position. And the maximum value of Z axis is 4.5mm.",
             "properties": {
-                "x": {"type": "number", "description": "Move the stage along X axis, default is 0."},
-                "y": {"type": "number", "description": "Move the stage along Y axis, default is 0."},
-                "z": {"type": "number", "description": "Move the stage along Z axis,default is 0."},
+                "x": {"type": "number", "description": "Move the stage along X axis", "default":  0 },
+                "y": {"type": "number", "description": "Move the stage along Y axis", "default":  0 },
+                "z": {"type": "number", "description": "Move the stage along Z axis", "default":  0 },
             },
         },
         "move_to_position": {
-            "type": "bioimageio-chatbot-extension",
+            "type": "object",
             "title": "move_to_position",
             "description": "Move the stage to a specified position in millimeters, the stage will move to the specified X, Y, and Z coordinates. You must retur all three numbers. You also must return 0 if you don't to move the stage along that axis.",
             "properties": {
-                "x": {"type": "number", "description": "Move the stage to the X coordinate, default is 0."},
-                "y": {"type": "number", "description": "Move the stage to the Y coordinate, default is 0."},
-                "z": {"type": "number", "description": "Move the stage to the Z coordinate, default is 0."},
+                "x": {"type": "number", "description": "Move the stage to the X coordinate", "default": None},
+                "y": {"type": "number", "description": "Move the stage to the Y coordinate", "default": None},
+                "z": {"type": "number", "description": "Move the stage to the Z coordinate", "default": None},
             },
         },
         "home_stage": {
-            "type": "bioimageio-chatbot-extension",
+            "type": "object",
             "title": "home_stage",
             "description": "The stage will move to the home position and recalibrate, then move to scanning position:(20,20,2)",
-            "properties": {
-                "is_home": {"type": "boolean", "description": "True if the stage is homed, False if the stage is not homed."},
-            },
+            "properties": {},
         },
         "auto_focus": {
-            "type": "bioimageio-chatbot-extension",
+            "type": "object",
             "title": "auto_focus",
             "description": "Autofocus the microscope, the value returned is just 1. If this action is required, it will execute before snapping an image.",
             "properties": {
                 "N": {"type": "number", "description": "Default value:10. This parameter represents the number of discrete focus positions that the autofocus algorithm evaluates to determine the optimal focus."},
                 "delta_Z": {"type": "number", "description": "Default value: 1.524. This parameter defines the step size in the Z-axis between each focus position checked by the autofocus routine, and the unit is in micrometers."},
-            },
+            }
         },
         "snap_image": {
-            "type": "bioimageio-chatbot-extension",
+            "type": "object",
             "title": "snap_image",
             "description": "Snap an image and show it to user. The value returned is the URL of the image.",
             "properties": {
                 "exposure": {"type": "number", "description": "Set the microscope camera's exposure time in milliseconds."},
                 "channel": {"type": "number", "description": "Set light source. Default value is 0. The illumination source and number is: [Bright Field=0, Fluorescence 405 nm=11, Fluorescence 488 nm=12,  Fluorescence 638 nm=13, Fluorescence 561 nm=14, Fluorescence 730 nm=15]."},
-                "intensity": {"type": "number", "description": "Set the intensity of the illumination source. The default value for bright field is 44, for fluorescence is 100."},
-            },  
+                "intensity": {"type": "number", "description": "Set the intensity of the illumination source. The default value for bright field is 15, for fluorescence is 100."},
+            },
+            "required": ["exposure", "channel", "intensity"]
         },
         "move_to_loading_position": {   
-            "type": "bioimageio-chatbot-extension",
+            "type": "object",
             "title": "move_to_loading_position",
             "description": "When sample need to be loaded or unloaded, move the stage to the zero position so that the robotic arm can reach the sample.",
-            "properties": {
-                "is_loading": {"type": "boolean", "description": "True if the sample is being loaded, False if the sample is being unloaded."},
-            },
+            "properties": {},
         },
         "navigate_to_well": {
-            "type": "bioimageio-chatbot-extension",
+            "type": "object",
             "title": "navigate_to_well",
             "description": "Navigate to the specified well position in the well plate.",
             "properties": {
@@ -552,6 +543,7 @@ def get_schema(context=None):
                 "col": {"type": "number", "description": "The column number of the well position."},
                 "wellplate_type": {"type": "string", "description": "The type of the well plate. Default type is '24', can be '6', '12', '24', '96', '384'."},
             },
+            "required": ["row", "col", "wellplate_type"]
         }
     }
 
@@ -593,7 +585,7 @@ def snap_image_schema(config, context=None):
     if config["channel"] is None:
         config["channel"] = 0
     if config["intensity"] is None:
-        config["intensity"] = 44
+        config["intensity"] = 15
     squid_image_url = snap(config["exposure"], config["channel"], config["intensity"],context=context)
     resp = f"![Image]({squid_image_url})"
     return resp
@@ -606,7 +598,7 @@ def navigate_to_well_schema(config, context=None):
     navigate_to_well(config["row"], config["col"], config["wellplate_type"],context=context)
     return {"result": "Moved the stage to the specified well position!"}
 
-async def setup():
+async def setup(service_id):
     
     chatbot_extension = {
         "_rintf": True,
@@ -632,7 +624,10 @@ async def setup():
     server_url = "https://chat.bioimage.io"
     token = await login({"server_url": server_url})
     server = await connect_to_server({"server_url": server_url, "token": token})
-    svc = await server.register_service(chatbot_extension)
+    await datastore.setup(server, service_id="data-store")
+    await start_hypha_service(server, service_id)
+    svc = await server.register_service(chatbot_extension, overwrite=True)
+    
     print(f"Extension service registered with id: {svc.id}, you can visit the service at: https://bioimage.io/chat?server={server_url}&extension={svc.id}")
 
 
@@ -654,18 +649,8 @@ if __name__ == "__main__":
         logging.basicConfig(level=logging.INFO)
 
     loop = asyncio.get_event_loop()
-    tasks = [
-        loop.create_task(start_service(
-            args.service_id,
-            workspace=None,
-            token=None,
-        )),
-        loop.create_task(setup())
-    ]
-
-    # Register a callback for when the asyncio loop closes to handle any cleanup
-    for task in tasks:
-        task.add_done_callback(lambda t: loop.stop() if t.exception() else None)
+    task = loop.create_task(setup(args.service_id))
+    task.add_done_callback(lambda t: loop.stop() if t.exception() else None)
 
     try:
         loop.run_forever()
