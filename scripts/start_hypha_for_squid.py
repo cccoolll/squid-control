@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import fractions
 from functools import partial
+import traceback
 
 import numpy as np
 #from av import VideoFrame
@@ -259,7 +260,7 @@ def snap(exposure_time, channel, intensity, context=None):
         time.sleep(0.005)
     squidController.liveController.turn_off_illumination()
     #gray_img=np.resize(gray_img,(512,512))
-    gray_img = cv2.resize(gray_img, (512,512))
+    #gray_img = cv2.resize(gray_img, (2012,1518))
     # Rescale the image to span the full 0-255 range
     min_val = np.min(gray_img)
     max_val = np.max(gray_img)
@@ -435,7 +436,7 @@ async def start_hypha_service(server, service_id):
         asyncio.create_task(send_status(data_channel))
 
     
-    await server.register_service(
+    svc = await server.register_service(
         {
             "id": "microscope-control-squid",
             "config":{
@@ -457,21 +458,20 @@ async def start_hypha_service(server, service_id):
         },
         overwrite=True
     )
-    
+ 
     await register_rtc_service(
         server,
         service_id=service_id,
         config={
             "visibility": "public",
-            #"on_init": on_init,
+            "on_init": on_init,
         },
     )
-
 
     print(
         f"Service (service_id={service_id}) started successfully, available at https://ai.imjoy.io/{server.config.workspace}/services"
     )
-    print(f"You can access the webrtc stream at https://aicell-lab.github.io/squid-control/?service_id={service_id}")
+    print(f"You can access the webrtc stream at https://aicell-lab.github.io/octopi-research/?service_id={svc['id'].split(':')[0]}:{service_id}")
     
     #await chatbot.connect_server("https://ai.imjoy.io")
 
@@ -499,7 +499,7 @@ def get_schema(context=None):
             "properties": {
                 "x": {"type": "number", "description": "Move the stage to the X coordinate", "default": None},
                 "y": {"type": "number", "description": "Move the stage to the Y coordinate", "default": None},
-                "z": {"type": "number", "description": "Move the stage to the Z coordinate", "default": None},
+                "z": {"type": "number", "description": "Move the stage to the Z coordinate", "default": 2.794},
             },
         },
         "home_stage": {
@@ -628,7 +628,7 @@ async def setup(service_id):
     await start_hypha_service(server, service_id)
     svc = await server.register_service(chatbot_extension, overwrite=True)
     
-    print(f"Extension service registered with id: {svc.id}, you can visit the service at: https://bioimage.io/chat?server={server_url}&extension={svc.id}")
+    print(f"Extension service registered with id: {svc.id}, you can visit the service at: https://bioimage.io/chat?server={server_url}&extension={svc.id}&assistant=Skyler")
 
 
 
@@ -649,19 +649,11 @@ if __name__ == "__main__":
         logging.basicConfig(level=logging.INFO)
 
     loop = asyncio.get_event_loop()
-    task = loop.create_task(setup(args.service_id))
-    task.add_done_callback(lambda t: loop.stop() if t.exception() else None)
-
-    try:
-        loop.run_forever()
-    except KeyboardInterrupt:
-        print("Shutting down gracefully")
-    finally:
-        # Gather all tasks and cancel them to ensure clean exit
-        all_tasks = asyncio.all_tasks(loop)
-        for t in all_tasks:
-            t.cancel()
-        loop.run_until_complete(loop.shutdown_asyncgens())
-        loop.close()
-
+    async def main():
+    	try:
+    	    await setup(args.service_id)
+    	except Exception:
+    	    traceback.print_exc()
+    loop.create_task(main())
+    loop.run_forever()
     

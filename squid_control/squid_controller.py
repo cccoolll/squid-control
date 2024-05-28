@@ -227,6 +227,8 @@ class SquidController:
     def platereader_move_to_well(self,row,column, wellplate_type='96'):
         if wellplate_type == '6':
             wellplate_format = WELLPLATE_FORMAT_6
+        elif wellplate_type == '12':
+            wellplate_format = WELLPLATE_FORMAT_12
         elif wellplate_type == '24':
             wellplate_format = WELLPLATE_FORMAT_24
         elif wellplate_type == '96':
@@ -236,7 +238,7 @@ class SquidController:
         
         if column != 0 and column != None:
             mm_per_ustep_X = SCREW_PITCH_X_MM/(self.navigationController.x_microstepping*FULLSTEPS_PER_REV_X)
-            x_mm = wellplate_format.A1_X_MM + (int(column)-1)*wellplate_format.WELL_SPACING_MM
+            x_mm = wellplate_format.A1_X_MM + (int(column)-1)*wellplate_format.WELL_SPACING_MM 
             x_usteps = STAGE_MOVEMENT_SIGN_X*round(x_mm/mm_per_ustep_X)
             self.microcontroller.move_x_to_usteps(x_usteps)
         if row != 0 and row != None:
