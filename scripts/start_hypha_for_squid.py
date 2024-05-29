@@ -407,33 +407,34 @@ def navigate_to_well(row,col, wellplate_type, context=None):
 
 
 datastore = HyphaDataStore()
+async def on_init(peer_connection):
+    @peer_connection.on("track")
+    def on_track(track):
+        squidController.camera.send_trigger()
+        squidController.liveController.turn_on_illumination()
+        squidController.liveController.set_illumination(0,15)
+        if squidController.microcontroller.is_busy():
+            time.sleep(0.05)
+        print(f"Track {track.kind} received")
 
-async def start_hypha_service(server, service_id):
-
-    async def on_init(peer_connection):
-        @peer_connection.on("track")
-        def on_track(track):
-            squidController.camera.send_trigger()
-            squidController.liveController.turn_on_illumination()
-            squidController.liveController.set_illumination(0,15)
+        peer_connection.addTrack(
+            VideoTransformTrack()
+        )
+        
+        @track.on("ended")
+        async def on_ended():
+            squidController.liveController.turn_off_illumination()
             if squidController.microcontroller.is_busy():
                 time.sleep(0.05)
-            print(f"Track {track.kind} received")
+            print(f"Track {track.kind} ended")
 
-            peer_connection.addTrack(
-                VideoTransformTrack()
-            )
-         
-            @track.on("ended")
-            async def on_ended():
-                squidController.liveController.turn_off_illumination()
-                if squidController.microcontroller.is_busy():
-                    time.sleep(0.05)
-                print(f"Track {track.kind} ended")
+    data_channel = peer_connection.createDataChannel("microscopeStatus")
+    # Start the task to send stage position periodically
+    asyncio.create_task(send_status(data_channel))
     
-        data_channel = peer_connection.createDataChannel("microscopeStatus")
-        # Start the task to send stage position periodically
-        asyncio.create_task(send_status(data_channel))
+async def start_hypha_service(server, service_id):
+
+
 
     
     svc = await server.register_service(
@@ -471,8 +472,8 @@ async def start_hypha_service(server, service_id):
     print(
         f"Service (service_id={service_id}) started successfully, available at https://ai.imjoy.io/{server.config.workspace}/services"
     )
-    print(f"You can access the webrtc stream at https://aicell-lab.github.io/octopi-research/?service_id={svc['id'].split(':')[0]}:{service_id}")
-    
+    #print(f"You can access the webrtc stream at https://aicell-lab.github.io/octopi-research/?service_id={svc['id'].split(':')[0]}:{service_id}")
+    print(f"You can access the webrtc stream at https://aicell-lab.github.io/octopi-research/?service_id={service_id}")
     #await chatbot.connect_server("https://ai.imjoy.io")
 
 
@@ -602,7 +603,7 @@ async def setup(service_id):
     
     chatbot_extension = {
         "_rintf": True,
-        "id": "squid-control",
+        "id": "squid-control-chatbot",
         "type": "bioimageio-chatbot-extension",
         "name": "Squid Microscope Control",
         "description": "Your role: A chatbot controlling a microscope; Your mission: Answering the user's questions, and executing the commands to control the microscope; Definition of microscope: OBJECTIVES: 20x 'NA':0.4, You have one main camera and one autofocus camera. ",
