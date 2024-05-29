@@ -230,6 +230,8 @@ def get_status(context=None):
 
 
 def one_new_frame(context=None):
+    squidController.camera.send_trigger()
+
     gray_img = squidController.camera.read_frame()
     bgr_img = np.stack((gray_img,)*3, axis=-1)  # Duplicate grayscale data across 3 channels to simulate BGR format.
     return bgr_img
