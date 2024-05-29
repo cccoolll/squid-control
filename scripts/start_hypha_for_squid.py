@@ -437,7 +437,7 @@ async def start_hypha_service(server, service_id):
 
 
     
-    svc = await server.register_service(
+    await server.register_service(
         {
             "id": "microscope-control-squid",
             "config":{
@@ -455,7 +455,7 @@ async def start_hypha_service(server, service_id):
             "home_stage": home_stage,
             "move_to_position": move_to_position,      
             "move_to_loading_position": move_to_loading_position,
-            "auto_focus": auto_focus,
+            "auto_focus": auto_focus
         },
         overwrite=True
     )
@@ -622,14 +622,19 @@ async def setup(service_id):
     }
 
 
-    server_url = "https://chat.bioimage.io"
-    token = await login({"server_url": server_url})
-    server = await connect_to_server({"server_url": server_url, "token": token})
-    await datastore.setup(server, service_id="data-store")
-    await start_hypha_service(server, service_id)
-    svc = await server.register_service(chatbot_extension, overwrite=True)
+    chatbot_server_url = "https://chat.bioimage.io"
+    chatbot_token = await login({"server_url": chatbot_server_url})
+    chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token})
+    await datastore.setup(chatbot_server, service_id="data-store")
+    svc = await chatbot_server.register_service(chatbot_extension, overwrite=True)
     
-    print(f"Extension service registered with id: {svc.id}, you can visit the service at: https://bioimage.io/chat?server={server_url}&extension={svc.id}&assistant=Skyler")
+    hypha_server_url = "https://ai.imjoy.io"
+    hypha_token = await login({"server_url": hypha_server_url})
+    hypha_server = await connect_to_server({"server_url": hypha_server_url, "token": hypha_token})
+    await start_hypha_service(hypha_server, service_id)
+
+
+    print(f"Extension service registered with id: {svc.id}, you can visit the service at: https://bioimage.io/chat?server={chatbot_server_url}&extension={svc.id}&assistant=Skyler")
 
 
 
@@ -637,7 +642,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Squid microscope control services for Hypha."
     )
-    parser.add_argument("--simulation", type=bool, default=False, help="The simulation mode")
+    parser.add_argument("--simulation", type=bool, default=True, help="The simulation mode")
     parser.add_argument("--service-id", type=str, default="squid-control", help="The service id")
     parser.add_argument("--verbose", "-v", action="count")
     args = parser.parse_args()
@@ -651,10 +656,10 @@ if __name__ == "__main__":
 
     loop = asyncio.get_event_loop()
     async def main():
-    	try:
-    	    await setup(args.service_id)
-    	except Exception:
-    	    traceback.print_exc()
+        try:
+            await setup(args.service_id)
+        except Exception:
+            traceback.print_exc()
     loop.create_task(main())
     loop.run_forever()
     

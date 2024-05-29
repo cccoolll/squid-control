@@ -205,6 +205,12 @@
         }
 
         let pc;
+        let context = {
+            user: { is_anonymous: false, email: "example@email.com" },
+            login_url: "your_login_url",
+            report_url: "your_report_url",
+            key: "your_key"
+        };
         window.methods = {
             liveRunning: false,
 
@@ -289,7 +295,7 @@
 
             stop: function() {
                 pc.close();
-                //window.microscopeControl.off_illumination({_rkwargs: true});
+                //window.microscopeControl.off_illumination({_rkwargs: true, context: context});
             },
         
             lightOn: false,
@@ -306,13 +312,13 @@
                     button.classList.remove('btn-warning');
                     icon.classList.add('fa-lightbulb-on');
                     icon.classList.remove('fa-lightbulb');
-                    await window.microscopeControl.on_illumination({_rkwargs: true});
+                    await window.microscopeControl.on_illumination({_rkwargs: true, context: context});
                 } else {
                     button.classList.add('btn-warning');
                     button.classList.remove('btn-success');
                     icon.classList.remove('fa-lightbulb-on');
                     icon.classList.add('fa-lightbulb');
-                    await window.microscopeControl.off_illumination({_rkwargs: true});
+                    await window.microscopeControl.off_illumination({_rkwargs: true, context: context});
                 }
 
                 this.lightOn = !this.lightOn;
@@ -335,7 +341,7 @@
                     console.log("Starting 96 well plate scanning...");
                     // Example: Call a function from your microscope control
                 if (window.microscopeControl) {
-                    window.microscopeControl.scan_well_plate({_rkwargs: true});
+                    window.microscopeControl.scan_well_plate({_rkwargs: true, context: context});
                 }
                 } else {
                     // Change button back to initial state
@@ -348,7 +354,7 @@
                     console.log("Stopping 96 well plate scanning...");
                     // Example: Call a function from your microscope control
                     if (window.microscopeControl) {
-                        window.microscopeControl.stop_scan({_rkwargs: true});
+                        window.microscopeControl.stop_scan({_rkwargs: true, context: context});
                     }
                 }
 
@@ -361,27 +367,43 @@
                     console.error("Microscope control is not initialized.");
                     return;
                 }
-                const xMove = parseFloat(document.getElementById('x-move').value);
-                const yMove = parseFloat(document.getElementById('y-move').value);
-                const zMove = parseFloat(document.getElementById('z-move').value); // If Z movement is needed
-                let moveX = 0, moveY = 0, moveZ = 0;
+                else {
+                    console.log("Microscope control is initialized.");
+                }
+                try{
+                    const xMove = parseFloat(document.getElementById('x-move').value);
+                    const yMove = parseFloat(document.getElementById('y-move').value);
+                    const zMove = parseFloat(document.getElementById('z-move').value); // If Z movement is needed
+                    let moveX = 0, moveY = 0, moveZ = 0;
 
-                if (isNaN(xMove) || isNaN(yMove) || isNaN(zMove)) {
-                    console.error("Invalid movement parameters.");
-                    return;
+                    if (isNaN(xMove) || isNaN(yMove) || isNaN(zMove)) {
+                        console.error("Invalid movement parameters.");
+                        return;
+                    }
+
+                    if (direction === 'x') {
+                        moveX = xMove * multiplier;
+                        moveY = 0;
+                        moveZ = 0;
+                    } else if (direction === 'y') {
+                        moveY = yMove * multiplier;
+                        moveX = 0;
+                        moveZ = 0;
+                    }
+                    // Example of handling Z movement
+                    if (direction === 'z') {
+                        moveZ = zMove * multiplier;
+
+                        moveX = 0;
+                        moveY = 0;
+                    }
+                    console.log("Moving by: ", moveX, moveY, moveZ);
+                    
+                    window.microscopeControl.move_by_distance({x: moveX, y: moveY, z: moveZ, _rkwargs: true, context: context});
+                }catch (error) {
+        console.error("Error in moveMicroscope:", error);
                 }
 
-                if (direction === 'x') {
-                    moveX = xMove * multiplier;
-                } else if (direction === 'y') {
-                    moveY = yMove * multiplier;
-                }
-                // Example of handling Z movement
-                // if (direction === 'z') {
-                //     moveZ = zMove * multiplier;
-                // }
-
-                window.microscopeControl.move_by_distance({x: moveX, y: moveY, z: moveZ, _rkwargs: true});
             }
 
         };
