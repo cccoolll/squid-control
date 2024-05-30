@@ -294,8 +294,8 @@
             },
 
             stop: function() {
-                pc.close();
                 window.microscopeControl.off_illumination({_rkwargs: true, context: context});
+                pc.close();
             },
         
             lightOn: false,
