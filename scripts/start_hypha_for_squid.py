@@ -82,13 +82,13 @@ class VideoTransformTrack(MediaStreamTrack):
     async def recv(self):
         # Read frame from squid controller, now correctly formatted as BGR
         bgr_img = one_new_frame()
-        bgr_img = cv2.resize(bgr_img, (503,380))
+        bgr_img = cv2.resize(bgr_img, (2012,1518))
         # Create the video frame
         new_frame = VideoFrame.from_ndarray(bgr_img, format="bgr24")
         new_frame.pts = self.count
         new_frame.time_base = fractions.Fraction(1, 1000)
         self.count += 1
-        await asyncio.sleep(1)  # Simulating frame rate delay
+        await asyncio.sleep(0.3)  # Simulating frame rate delay
         return new_frame
 
 
@@ -233,6 +233,13 @@ def one_new_frame(context=None):
     squidController.camera.send_trigger()
 
     gray_img = squidController.camera.read_frame()
+    min_val = np.min(gray_img)
+    max_val = np.max(gray_img)
+    if max_val > min_val:  # Avoid division by zero if the image is completely uniform
+        gray_img = (gray_img - min_val) * (255 / (max_val - min_val))
+        gray_img = gray_img.astype(np.uint8)  # Convert to 8-bit image
+    else:
+        gray_img = np.zeros((512, 512), dtype=np.uint8)  # If no variation, return a black image
     bgr_img = np.stack((gray_img,)*3, axis=-1)  # Duplicate grayscale data across 3 channels to simulate BGR format.
     return bgr_img
 
@@ -412,7 +419,6 @@ datastore = HyphaDataStore()
 async def on_init(peer_connection):
     @peer_connection.on("track")
     def on_track(track):
-        squidController.camera.send_trigger()
         squidController.liveController.turn_on_illumination()
         squidController.liveController.set_illumination(0,15)
         if squidController.microcontroller.is_busy():
@@ -644,7 +650,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Squid microscope control services for Hypha."
     )
-    parser.add_argument("--simulation", type=bool, default=True, help="The simulation mode")
+    parser.add_argument("--simulation", type=bool, default=False, help="The simulation mode")
     parser.add_argument("--service-id", type=str, default="squid-control", help="The service id")
     parser.add_argument("--verbose", "-v", action="count")
     args = parser.parse_args()
