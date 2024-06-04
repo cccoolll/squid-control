@@ -1,1 +1,1 @@
-/home/weiouyang/workspace/squid-control/squid_control/configurations/configuration_HCS_v2.ini
+C:\\Users\\songtao.cheng\\Documents\\codes-in-KTH\\imaging-farm\\reef-imaging\\squid-control\\configuration_HCS_v2.ini

@@ -15,7 +15,6 @@ from queue import Queue
 from threading import Thread, Lock
 import time
 import numpy as np
-import pyqtgraph as pg
 import scipy
 import scipy.signal
 import cv2

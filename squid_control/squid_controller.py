@@ -1,9 +1,10 @@
 import os 
 # app specific libraries
-import squid_control.control.camera.camera_default as camera
 import squid_control.control.core_reef as core
 import squid_control.control.microcontroller as microcontroller
 from squid_control.control.config import *
+from squid_control.control.camera import get_camera
+
 import logging
 import squid_control.control.serial_peripherals as serial_peripherals
 import matplotlib.path as mpath
@@ -11,6 +12,17 @@ if CONFIG.SUPPORT_LASER_AUTOFOCUS:
     import squid_control.control.core_displacement_measurement as core_displacement_measurement
 
 import time
+
+#using os to set current working directory
+#find the current path
+path=os.path.abspath(__file__)
+#find the .ini file in the directory
+path_ini=os.path.join(os.path.dirname(path),'configuration_HCS_v2.ini')
+
+
+
+
+
 load_config('C:\\Users\\songtao.cheng\\Documents\\codes-in-KTH\\imaging-farm\\reef-imaging\\squid-control\\configuration_HCS_v2.ini', False)
 class SquidController:
     fps_software_trigger= 100
@@ -19,116 +31,168 @@ class SquidController:
         super().__init__(*args,**kwargs)
         self.data_channel = None
         #load objects
+        self.objectiveStore = core.ObjectiveStore()
+        camera, camera_fc = get_camera(CONFIG.CAMERA_TYPE)
+
+        # load objects
         if is_simulation:
             if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL:
                 self.xlight = serial_peripherals.XLight_Simulation()
             if CONFIG.SUPPORT_LASER_AUTOFOCUS:
-                self.camera = camera.Camera_Simulation(rotate_image_angle = CONFIG.ROTATE_IMAGE_ANGLE, flip_image=CONFIG.FLIP_IMAGE)
-                self.camera_focus = camera.Camera_Simulation()
+                self.camera = camera.Camera_Simulation(
+                    rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
+                    flip_image=CONFIG.FLIP_IMAGE,
+                )
+                self.camera_focus = camera_fc.Camera_Simulation()
             else:
-                self.camera = camera.Camera_Simulation(rotate_image_angle = CONFIG.ROTATE_IMAGE_ANGLE, flip_image=CONFIG.FLIP_IMAGE)
+                self.camera = camera.Camera_Simulation(
+                    rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
+                    flip_image=CONFIG.FLIP_IMAGE,
+                )
             self.microcontroller = microcontroller.Microcontroller_Simulation()
         else:
             if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL:
-                self.xlight = serial_peripherals.xlight()
+                self.xlight = serial_peripherals.XLight()
             try:
                 if CONFIG.SUPPORT_LASER_AUTOFOCUS:
                     sn_camera_main = camera.get_sn_by_model(CONFIG.MAIN_CAMERA_MODEL)
-                    sn_camera_focus = camera.get_sn_by_model(CONFIG.FOCUS_CAMERA_MODEL)
-                    self.camera = camera.Camera(sn=sn_camera_main,rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,flip_image=CONFIG.FLIP_IMAGE)
+                    sn_camera_focus = camera_fc.get_sn_by_model(
+                        CONFIG.FOCUS_CAMERA_MODEL
+                    )
+                    self.camera = camera.Camera(
+                        sn=sn_camera_main,
+                        rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
+                        flip_image=CONFIG.FLIP_IMAGE,
+                    )
                     self.camera.open()
-                    self.camera_focus = camera.Camera(sn=sn_camera_focus)
+                    self.camera_focus = camera_fc.Camera(sn=sn_camera_focus)
                     self.camera_focus.open()
                 else:
-                    self.camera = camera.Camera(rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,flip_image=CONFIG.FLIP_IMAGE)
+                    self.camera = camera.Camera(
+                        rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
+                        flip_image=CONFIG.FLIP_IMAGE,
+                    )
                     self.camera.open()
             except:
                 if CONFIG.SUPPORT_LASER_AUTOFOCUS:
-                    self.camera = camera.Camera_Simulation(rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,flip_image=CONFIG.FLIP_IMAGE)
+                    self.camera = camera.Camera_Simulation(
+                        rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
+                        flip_image=CONFIG.FLIP_IMAGE,
+                    )
                     self.camera.open()
                     self.camera_focus = camera.Camera_Simulation()
                     self.camera_focus.open()
                 else:
-                    self.camera = camera.Camera_Simulation(rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,flip_image=CONFIG.FLIP_IMAGE)
+                    self.camera = camera.Camera_Simulation(
+                        rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
+                        flip_image=CONFIG.FLIP_IMAGE,
+                    )
                     self.camera.open()
-                print('! camera not detected, using simulated camera !')
-            self.microcontroller = microcontroller.Microcontroller(version=CONFIG.CONTROLLER_VERSION)
+                print("! camera not detected, using simulated camera !")
+            self.microcontroller = microcontroller.Microcontroller(
+                version=CONFIG.CONTROLLER_VERSION
+            )
 
         # reset the MCU
         self.microcontroller.reset()
+        time.sleep(0.5)
 
-        # reinitialize motor deivers and DAC  (in particular for V2.1 driver board where PG is not functional)
+        # reinitialize motor drivers and DAC (in particular for V2.1 driver board where PG is not functional)
         self.microcontroller.initialize_drivers()
-        
+        time.sleep(0.5)
+
         # configure the actuators
         self.microcontroller.configure_actuators()
 
-        self.configurationManager = core.ConfigurationManager(filename='channel_configurations.xml')
+        self.configurationManager = core.ConfigurationManager(
+            filename="./channel_configurations.xml"
+        )
 
-        self.streamHandler = core.StreamHandler(display_resolution_scaling=CONFIG.DEFAULT_DISPLAY_CROP/100)
-        self.liveController = core.LiveController(self.camera,self.microcontroller,self.configurationManager)
-        self.navigationController = core.NavigationController(self.microcontroller)
-        self.slidePositionController = core.SlidePositionController(self.navigationController,self.liveController,is_for_wellplate=True)
-        self.autofocusController = core.AutoFocusController(self.camera,self.navigationController,self.liveController)
+        self.streamHandler = core.StreamHandler(
+            display_resolution_scaling=CONFIG.DEFAULT_DISPLAY_CROP / 100
+        )
+        self.liveController = core.LiveController(
+            self.camera, self.microcontroller, self.configurationManager
+        )
+        self.navigationController = core.NavigationController(
+            self.microcontroller, parent=self
+        )
+        self.slidePositionController = core.SlidePositionController(
+            self.navigationController, self.liveController, is_for_wellplate=True
+        )
+        self.autofocusController = core.AutoFocusController(
+            self.camera, self.navigationController, self.liveController
+        )
         self.scanCoordinates = core.ScanCoordinates()
-        self.multipointController = core.MultiPointController(self.camera,self.navigationController,self.liveController,self.autofocusController,self.configurationManager,scanCoordinates=self.scanCoordinates,parent=self)
-        #self.plateReaderNavigationController = core.PlateReaderNavigationController(self.microcontroller)
-        # if CONFIG.ENABLE_TRACKING:
-        #     self.trackingController = core.TrackingController(self.camera,self.microcontroller,self.navigationController,self.configurationManager,self.liveController,self.autofocusController,self.imageDisplayWindow)
-        
-        # open the camera
-        # camera start streaming
-        # self.camera.set_reverse_x(CAMERA_REVERSE_X) # these are not implemented for the cameras in use
-        # self.camera.set_reverse_y(CAMERA_REVERSE_Y) # these are not implemented for the cameras in use
-        self.camera.set_software_triggered_acquisition() #self.camera.set_continuous_acquisition()
-        self.camera.set_callback(self.streamHandler.on_new_frame)
-        # self.camera.enable_callback()
-        # # camera
+        self.multipointController = core.MultiPointController(
+            self.camera,
+            self.navigationController,
+            self.liveController,
+            self.autofocusController,
+            self.configurationManager,
+            scanCoordinates=self.scanCoordinates,
+            parent=self,
+        )
+        if CONFIG.ENABLE_TRACKING:
+            self.trackingController = core.TrackingController(
+                self.camera,
+                self.microcontroller,
+                self.navigationController,
+                self.configurationManager,
+                self.liveController,
+                self.autofocusController,
+            )
+        self.imageSaver = core.ImageSaver()
+        self.imageDisplay = core.ImageDisplay()
 
-        self.camera.start_streaming()
-
-        # set the configuration of class liveController (LED mode, expore time, etc.)
-        self.liveController.set_microscope_mode(self.configurationManager.configurations[0])
-
-        # laser autofocus
-        if CONFIG.SUPPORT_LASER_AUTOFOCUS:
-
-            # controllers
-            self.configurationManager_focus_camera = core.ConfigurationManager(filename='./squid_control/focus_camera_configurations.xml')
-            self.streamHandler_focus_camera = core.StreamHandler()
-            self.liveController_focus_camera = core.LiveController(self.camera_focus,self.microcontroller,self.configurationManager_focus_camera,control_illumination=False,for_displacement_measurement=True)
-            self.multipointController = core.MultiPointController(self.camera,self.navigationController,self.liveController,self.autofocusController,self.configurationManager,scanCoordinates=self.scanCoordinates,parent=self)
-            
-            self.displacementMeasurementController = core_displacement_measurement.DisplacementMeasurementController()
-            self.laserAutofocusController = core.LaserAutofocusController(self.microcontroller,self.camera_focus,self.liveController_focus_camera,self.navigationController,has_two_interfaces=CONFIG.HAS_TWO_INTERFACES,use_glass_top=CONFIG.USE_GLASS_TOP)
-
-            # camera
-            self.camera_focus.set_software_triggered_acquisition() #self.camera.set_continuous_acquisition()
-            # self.camera_focus.set_callback(self.streamHandler_focus_camera.on_new_frame)
-            # self.camera_focus.enable_callback()
-            self.camera_focus.start_streaming()
         
 
-        self.illuminate_channels_for_scan = ['BF LED matrix full','Fluorescence 405 nm Ex']
-
-
-        # retract the object
+        # retract the objective
         self.navigationController.home_z()
         # wait for the operation to finish
         t0 = time.time()
         while self.microcontroller.is_busy():
             time.sleep(0.005)
             if time.time() - t0 > 10:
-                print('z homing timeout, the program will exit')
+                print("z homing timeout, the program will exit")
                 exit()
-        print('objective retracted')
-        self.navigationController.set_z_limit_pos_mm(CONFIG.SOFTWARE_POS_LIMIT.Z_POSITIVE)
+        print("objective retracted")
+
+        # set encoder arguments
+        # set axis pid control enable
+        # only CONFIG.ENABLE_PID_X and CONFIG.HAS_ENCODER_X are both enable, can be enable to PID
+        if CONFIG.HAS_ENCODER_X == True:
+            self.navigationController.configure_encoder(
+                0,
+                (CONFIG.SCREW_PITCH_X_MM * 1000) / CONFIG.ENCODER_RESOLUTION_UM_X,
+                CONFIG.ENCODER_FLIP_DIR_X,
+            )
+            self.navigationController.set_pid_control_enable(0, CONFIG.ENABLE_PID_X)
+        if CONFIG.HAS_ENCODER_Y == True:
+            self.navigationController.configure_encoder(
+                1,
+                (CONFIG.SCREW_PITCH_Y_MM * 1000) / CONFIG.ENCODER_RESOLUTION_UM_Y,
+                CONFIG.ENCODER_FLIP_DIR_Y,
+            )
+            self.navigationController.set_pid_control_enable(1, CONFIG.ENABLE_PID_Y)
+        if CONFIG.HAS_ENCODER_Z == True:
+            self.navigationController.configure_encoder(
+                2,
+                (CONFIG.SCREW_PITCH_Z_MM * 1000) / CONFIG.ENCODER_RESOLUTION_UM_Z,
+                CONFIG.ENCODER_FLIP_DIR_Z,
+            )
+            self.navigationController.set_pid_control_enable(2, CONFIG.ENABLE_PID_Z)
+        time.sleep(0.5)
+
+        self.navigationController.set_z_limit_pos_mm(
+            CONFIG.SOFTWARE_POS_LIMIT.Z_POSITIVE
+        )
 
         # home XY, set zero and set software limit
-        print('home xy')
+        print("home xy")
         timestamp_start = time.time()
         # x needs to be at > + 20 mm when homing y
-        self.navigationController.move_x(20) # to-do: add blocking code
+        self.navigationController.move_x(20)  # to-do: add blocking code
         while self.microcontroller.is_busy():
             time.sleep(0.005)
         # home y
@@ -137,7 +201,7 @@ class SquidController:
         while self.microcontroller.is_busy():
             time.sleep(0.005)
             if time.time() - t0 > 10:
-                print('y homing timeout, the program will exit')
+                print("y homing timeout, the program will exit")
                 exit()
         self.navigationController.zero_y()
         # home x
@@ -146,10 +210,11 @@ class SquidController:
         while self.microcontroller.is_busy():
             time.sleep(0.005)
             if time.time() - t0 > 10:
-                print('y homing timeout, the program will exit')
+                print("y homing timeout, the program will exit")
                 exit()
         self.navigationController.zero_x()
         self.slidePositionController.homing_done = True
+        print("home xy done")
 
         # move to scanning position
         self.navigationController.move_x(20)
@@ -162,12 +227,40 @@ class SquidController:
         # move z
         self.navigationController.move_z_to(CONFIG.DEFAULT_Z_POS_MM)
         # wait for the operation to finish
-        t0 = time.time() 
-        while self.microcontroller.is_busy():
-            time.sleep(0.005)
-            if time.time() - t0 > 5:
-                print('z return timeout, the program will exit')
-                exit()
+        
+        # FIXME: This is failing right now, z return timeout
+        # t0 = time.time()
+        # while self.microcontroller.is_busy():
+        #     time.sleep(0.005)
+        #     if time.time() - t0 > 5:
+        #         print("z return timeout, the program will exit")
+        #         exit()
+
+        # set output's gains
+        div = 1 if CONFIG.OUTPUT_GAINS.REFDIV is True else 0
+        gains = CONFIG.OUTPUT_GAINS.CHANNEL0_GAIN << 0
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL1_GAIN << 1
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL2_GAIN << 2
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL3_GAIN << 3
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL4_GAIN << 4
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL5_GAIN << 5
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL6_GAIN << 6
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL7_GAIN << 7
+        self.microcontroller.configure_dac80508_refdiv_and_gain(div, gains)
+
+        # set illumination intensity factor
+        self.microcontroller.set_dac80508_scaling_factor_for_illumination(
+            CONFIG.ILLUMINATION_INTENSITY_FACTOR
+        )
+
+        # open the camera
+        # camera start streaming
+        # self.camera.set_reverse_x(CAMERA_REVERSE_X) # these are not implemented for the cameras in use
+        # self.camera.set_reverse_y(CAMERA_REVERSE_Y) # these are not implemented for the cameras in use
+        self.camera.set_software_triggered_acquisition()  # self.camera.set_continuous_acquisition()
+        self.camera.set_callback(self.streamHandler.on_new_frame)
+        self.camera.enable_callback()
+
 
         # set software limits        
         self.navigationController.set_x_limit_pos_mm(CONFIG.SOFTWARE_POS_LIMIT.X_POSITIVE)
