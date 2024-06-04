@@ -23,7 +23,7 @@ path_ini=os.path.join(os.path.dirname(path),'configuration_HCS_v2.ini')
 
 
 
-load_config('C:\\Users\\songtao.cheng\\Documents\\codes-in-KTH\\imaging-farm\\reef-imaging\\squid-control\\configuration_HCS_v2.ini', False)
+load_config(path_ini, False)
 class SquidController:
     fps_software_trigger= 100
 
