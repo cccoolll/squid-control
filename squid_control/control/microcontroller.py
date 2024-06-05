@@ -725,35 +725,35 @@ class Microcontroller:
         self.configure_motor_driver(
             AXIS.X,
             CONFIG.MICROSTEPPING_DEFAULT_X,
-            CONFIG.X_MOTOR_RMS_CURRENT_mA,
+            CONFIG.X_MOTOR_RMS_CURRENT_MA,
             CONFIG.X_MOTOR_I_HOLD,
         )
         self.wait_till_operation_is_completed()
         self.configure_motor_driver(
             AXIS.Y,
             CONFIG.MICROSTEPPING_DEFAULT_Y,
-            CONFIG.Y_MOTOR_RMS_CURRENT_mA,
+            CONFIG.Y_MOTOR_RMS_CURRENT_MA,
             CONFIG.Y_MOTOR_I_HOLD,
         )
         self.wait_till_operation_is_completed()
         self.configure_motor_driver(
             AXIS.Z,
             CONFIG.MICROSTEPPING_DEFAULT_Z,
-            CONFIG.Z_MOTOR_RMS_CURRENT_mA,
+            CONFIG.Z_MOTOR_RMS_CURRENT_MA,
             CONFIG.Z_MOTOR_I_HOLD,
         )
         self.wait_till_operation_is_completed()
         # max velocity and acceleration
         self.set_max_velocity_acceleration(
-            AXIS.X, CONFIG.MAX_VELOCITY_X_mm, CONFIG.MAX_ACCELERATION_X_mm
+            AXIS.X, CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_ACCELERATION_X_MM
         )
         self.wait_till_operation_is_completed()
         self.set_max_velocity_acceleration(
-            AXIS.Y, CONFIG.MAX_VELOCITY_Y_mm, CONFIG.MAX_ACCELERATION_Y_mm
+            AXIS.Y, CONFIG.MAX_VELOCITY_Y_MM, CONFIG.MAX_ACCELERATION_Y_MM
         )
         self.wait_till_operation_is_completed()
         self.set_max_velocity_acceleration(
-            AXIS.Z, CONFIG.MAX_VELOCITY_Z_mm, CONFIG.MAX_ACCELERATION_Z_mm
+            AXIS.Z, CONFIG.MAX_VELOCITY_Z_MM, CONFIG.MAX_ACCELERATION_Z_MM
         )
         self.wait_till_operation_is_completed()
         # home switch
@@ -1299,35 +1299,35 @@ class Microcontroller_Simulation:
         self.configure_motor_driver(
             AXIS.X,
             CONFIG.MICROSTEPPING_DEFAULT_X,
-            CONFIG.X_MOTOR_RMS_CURRENT_mA,
+            CONFIG.X_MOTOR_RMS_CURRENT_MA,
             CONFIG.X_MOTOR_I_HOLD,
         )
         self.wait_till_operation_is_completed()
         self.configure_motor_driver(
             AXIS.Y,
             CONFIG.MICROSTEPPING_DEFAULT_Y,
-            CONFIG.Y_MOTOR_RMS_CURRENT_mA,
+            CONFIG.Y_MOTOR_RMS_CURRENT_MA,
             CONFIG.Y_MOTOR_I_HOLD,
         )
         self.wait_till_operation_is_completed()
         self.configure_motor_driver(
             AXIS.Z,
             CONFIG.MICROSTEPPING_DEFAULT_Z,
-            CONFIG.Z_MOTOR_RMS_CURRENT_mA,
+            CONFIG.Z_MOTOR_RMS_CURRENT_MA,
             CONFIG.Z_MOTOR_I_HOLD,
         )
         self.wait_till_operation_is_completed()
         # max velocity and acceleration
         self.set_max_velocity_acceleration(
-            AXIS.X, CONFIG.MAX_VELOCITY_X_mm, CONFIG.MAX_ACCELERATION_X_mm
+            AXIS.X, CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_ACCELERATION_X_MM
         )
         self.wait_till_operation_is_completed()
         self.set_max_velocity_acceleration(
-            AXIS.Y, CONFIG.MAX_VELOCITY_Y_mm, CONFIG.MAX_ACCELERATION_Y_mm
+            AXIS.Y, CONFIG.MAX_VELOCITY_Y_MM, CONFIG.MAX_ACCELERATION_Y_MM
         )
         self.wait_till_operation_is_completed()
         self.set_max_velocity_acceleration(
-            AXIS.Z, CONFIG.MAX_VELOCITY_Z_mm, CONFIG.MAX_ACCELERATION_Z_mm
+            AXIS.Z, CONFIG.MAX_VELOCITY_Z_MM, CONFIG.MAX_ACCELERATION_Z_MM
         )
         self.wait_till_operation_is_completed()
         # home switch

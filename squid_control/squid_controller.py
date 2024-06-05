@@ -18,6 +18,7 @@ import time
 path=os.path.abspath(__file__)
 #find the .ini file in the directory
 path_ini=os.path.join(os.path.dirname(path),'configuration_HCS_v2.ini')
+path_ini=Path(path_ini)
 
 
 

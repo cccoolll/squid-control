@@ -212,8 +212,10 @@ class FlipImageSetting(Enum):
     Vertical = "Vertical"
     Both = "Both"
 
-
 class BaseConfig(BaseModel):
+    class Config:
+        extra = "allow"  # Allow extra fields that are not defined in the model
+
     MicrocontrollerDef: MicrocontrollerDefSetting = MicrocontrollerDefSetting()
     VOLUMETRIC_IMAGING: VolumetricImagingSetting = VolumetricImagingSetting()
     CMD_EXECUTION_STATUS: CmdExecutionStatus = CmdExecutionStatus()
@@ -290,21 +292,21 @@ class BaseConfig(BaseModel):
     MICROSTEPPING_DEFAULT_Z: float = 8
     MICROSTEPPING_DEFAULT_THETA: float = 8  # not used, to be removed
 
-    X_MOTOR_RMS_CURRENT_mA: float = 490
-    Y_MOTOR_RMS_CURRENT_mA: float = 490
-    Z_MOTOR_RMS_CURRENT_mA: float = 490
+    X_MOTOR_RMS_CURRENT_MA: float = 490  # Corrected casing
+    Y_MOTOR_RMS_CURRENT_MA: float = 490
+    Z_MOTOR_RMS_CURRENT_MA: float = 490
 
     X_MOTOR_I_HOLD: float = 0.5
     Y_MOTOR_I_HOLD: float = 0.5
     Z_MOTOR_I_HOLD: float = 0.5
 
-    MAX_VELOCITY_X_mm: float = 25
-    MAX_VELOCITY_Y_mm: float = 25
-    MAX_VELOCITY_Z_mm: float = 2
+    MAX_VELOCITY_X_MM: float = 25
+    MAX_VELOCITY_Y_MM: float = 25
+    MAX_VELOCITY_Z_MM: float = 2
 
-    MAX_ACCELERATION_X_mm: float = 500
-    MAX_ACCELERATION_Y_mm: float = 500
-    MAX_ACCELERATION_Z_mm: float = 20
+    MAX_ACCELERATION_X_MM: float = 500
+    MAX_ACCELERATION_Y_MM: float = 500
+    MAX_ACCELERATION_Z_MM: float = 20
 
     # config encoder arguments
     HAS_ENCODER_X: bool = False
@@ -507,6 +509,9 @@ class BaseConfig(BaseModel):
     # for check if the stage is moved
     STAGE_MOVED_THRESHOLD: float = 0.005
 
+    # Additional field to store options
+    OPTIONS: dict = {}
+
     def read_config(self, config_path):
         cached_config_file_path = None
 
@@ -533,24 +538,32 @@ class BaseConfig(BaseModel):
                     )
                     exit()
             print("load machine-specific configuration")
-            # exec(open(config_files[0]).read())
             cfp = ConfigParser()
             cfp.read(config_files[0])
             for section in cfp.sections():
                 for key, value in cfp.items(section):
                     actualvalue = conf_attribute_reader(value)
-                    section_upper = section.upper()
-                    if hasattr(self, section_upper):
-                        class_instance = getattr(self, section_upper)
-                        if isinstance(class_instance, BaseModel):
-                            setattr(class_instance, key.upper(), actualvalue)
-                        else:
-                            setattr(self, section_upper, actualvalue)
+                    if key.startswith("_") and key.endswith("_options"):
+                        if "OPTIONS" not in self.__fields__:
+                            self.__fields__["OPTIONS"] = {}
+                        self.OPTIONS[key] = actualvalue
                     else:
-                        setattr(self, key.upper(), actualvalue)
-            with open(self.CACHE_CONFIG_FILE_PATH, "w") as file:
-                file.write(str(config_files[0]))
-            cached_config_file_path = config_files[0]
+                        section_upper = section.upper()
+                        if hasattr(self, section_upper):
+                            class_instance = getattr(self, section_upper)
+                            if isinstance(class_instance, BaseModel):
+                                setattr(class_instance, key.upper(), actualvalue)
+                            else:
+                                setattr(self, section_upper, actualvalue)
+                        else:
+                            # Add dynamic field if it doesn't exist
+                            setattr(self, key.upper(), actualvalue)
+            try:
+                with open(self.CACHE_CONFIG_FILE_PATH, "w") as file:
+                    file.write(str(config_files[0]))
+                cached_config_file_path = config_files[0]
+            except:
+                pass
         else:
             print("configuration*.ini file not found, defaulting to legacy configuration")
             config_files = glob.glob("." + "/" + "configuration*.txt")
@@ -573,11 +586,9 @@ CONFIG = BaseConfig()
 
 def load_config(config_path, multipoint_function):
     global CONFIG
-    home_dir = Path.home()
-    config_dir = home_dir / '.squid-control'
-
-    # Ensure the .squid-control directory exists
-    config_dir.mkdir(exist_ok=True)
+    
+    config_dir = os.path.abspath(__file__)
+    config_dir = Path(config_dir)
 
     current_dir = Path(__file__).parent
     if not str(config_path).endswith(".ini"):
@@ -642,9 +653,10 @@ def load_config(config_path, multipoint_function):
         CONFIG.A1_X_MM = 24.55
         CONFIG.A1_Y_MM = 23.01
 
-    if os.path.exists(cached_config_file_path):
-        cf_editor_parser.read(cached_config_file_path)
-    else:
+    try:
+        if os.path.exists(cached_config_file_path):
+            cf_editor_parser.read(cached_config_file_path)
+    except:
         return False
 
 
