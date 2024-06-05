@@ -180,7 +180,7 @@ class TrackingSetting(BaseModel):
     DEFAULT_INIT_METHOD: str = "roi"
 
 
-class SlidPoisitonSetting(BaseModel):
+class SlidePositionSetting(BaseModel):
     LOADING_X_MM: int = 30
     LOADING_Y_MM: int = 55
     SCANNING_X_MM: int = 3
@@ -221,7 +221,7 @@ class BaseConfig(BaseModel):
     PLATE_READER: PlateReaderSetting = PlateReaderSetting()
     AF: AFSetting = AFSetting()
     Tracking: TrackingSetting = TrackingSetting()
-    SLIDE_POSITION: SlidPoisitonSetting = SlidPoisitonSetting()
+    SLIDE_POSITION: SlidePositionSetting = SlidePositionSetting()
     OUTPUT_GAINS: OutputGainSetting = OutputGainSetting()
     SOFTWARE_POS_LIMIT: SoftwarePosLimitSetting = SoftwarePosLimitSetting()
     Acquisition: AcquisitionSetting = AcquisitionSetting()
@@ -511,7 +511,7 @@ class BaseConfig(BaseModel):
         cached_config_file_path = None
 
         try:
-            with open(CONFIG.CACHE_CONFIG_FILE_PATH, "r") as file:
+            with open(self.CACHE_CONFIG_FILE_PATH, "r") as file:
                 for line in file:
                     cached_config_file_path = line
                     break
@@ -536,29 +536,19 @@ class BaseConfig(BaseModel):
             # exec(open(config_files[0]).read())
             cfp = ConfigParser()
             cfp.read(config_files[0])
-            var_items = list(locals().keys())
-            for var_name in var_items:
-                if type(locals()[var_name]) is type:
-                    continue
-                varnamelower = var_name.lower()
-                if varnamelower not in cfp.options("GENERAL"):
-                    continue
-                value = cfp.get("GENERAL", varnamelower)
-                actualvalue = conf_attribute_reader(value)
-                setattr(self, var_name, actualvalue)
-            for classkey in var_items:
-                myclass = None
-                classkeyupper = classkey.upper()
-                pop_items = None
-                try:
-                    pop_items = cfp.items(classkeyupper)
-                except:
-                    continue
-                if type(getattr(self, classkey)) is not type:
-                    continue
-                myclass = getattr(self, classkey)
-                populate_class_from_dict(myclass, pop_items)
-            with open(CONFIG.CACHE_CONFIG_FILE_PATH, "w") as file:
+            for section in cfp.sections():
+                for key, value in cfp.items(section):
+                    actualvalue = conf_attribute_reader(value)
+                    section_upper = section.upper()
+                    if hasattr(self, section_upper):
+                        class_instance = getattr(self, section_upper)
+                        if isinstance(class_instance, BaseModel):
+                            setattr(class_instance, key.upper(), actualvalue)
+                        else:
+                            setattr(self, section_upper, actualvalue)
+                    else:
+                        setattr(self, key.upper(), actualvalue)
+            with open(self.CACHE_CONFIG_FILE_PATH, "w") as file:
                 file.write(str(config_files[0]))
             cached_config_file_path = config_files[0]
         else:
@@ -658,10 +648,7 @@ def load_config(config_path, multipoint_function):
         return False
 
 
-
-
-
-# For flexable plate format:
+# For flexible plate format:
 class WELLPLATE_FORMAT_384:
     WELL_SIZE_MM = 3.3
     WELL_SPACING_MM = 4.5
@@ -669,32 +656,34 @@ class WELLPLATE_FORMAT_384:
     A1_X_MM = 12.05
     A1_Y_MM = 9.05
 
+
 class WELLPLATE_FORMAT_96:
     NUMBER_OF_SKIP = 0
     WELL_SIZE_MM = 6.21
     WELL_SPACING_MM = 9
     A1_X_MM = 14.3
     A1_Y_MM = 11.36
+
+
 class WELLPLATE_FORMAT_24:
     NUMBER_OF_SKIP = 0
     WELL_SIZE_MM = 15.54
     WELL_SPACING_MM = 19.3
     A1_X_MM = 17.05
     A1_Y_MM = 13.67
+
+
 class WELLPLATE_FORMAT_12:
     NUMBER_OF_SKIP = 0
     WELL_SIZE_MM = 22.05
     WELL_SPACING_MM = 26
     A1_X_MM = 24.75
     A1_Y_MM = 16.86
+
+
 class WELLPLATE_FORMAT_6:
     NUMBER_OF_SKIP = 0
     WELL_SIZE_MM = 34.94
     WELL_SPACING_MM = 39.2
     A1_X_MM = 24.55
     A1_Y_MM = 23.01
-
-
-
-
-    
