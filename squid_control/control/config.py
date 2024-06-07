@@ -512,13 +512,25 @@ class BaseConfig(BaseModel):
     # Additional field to store options
     OPTIONS: dict = {}
 
+
+    def write_config_to_txt(self, output_path):
+        with open(output_path, 'w') as file:
+            for attribute, value in self.__dict__.items():
+                if isinstance(value, BaseModel):
+                    file.write(f"[{attribute}]\n")
+                    for sub_attribute, sub_value in value.dict().items():
+                        file.write(f"{sub_attribute.lower()} = {sub_value}\n")
+                else:
+                    file.write(f"{attribute.lower()} = {value}\n")
+                file.write("\n")
+
     def read_config(self, config_path):
         cached_config_file_path = None
 
         try:
             with open(self.CACHE_CONFIG_FILE_PATH, "r") as file:
                 for line in file:
-                    cached_config_file_path = line
+                    cached_config_file_path = line.strip()
                     break
         except FileNotFoundError:
             cached_config_file_path = None
@@ -527,15 +539,10 @@ class BaseConfig(BaseModel):
         if config_files:
             if len(config_files) > 1:
                 if cached_config_file_path in config_files:
-                    print(
-                        "defaulting to last cached config file at "
-                        + cached_config_file_path
-                    )
+                    print("defaulting to last cached config file at " + cached_config_file_path)
                     config_files = [cached_config_file_path]
                 else:
-                    print(
-                        "multiple machine configuration files found, the program will exit"
-                    )
+                    print("multiple machine configuration files found, the program will exit")
                     exit()
             print("load machine-specific configuration")
             cfp = ConfigParser()
@@ -544,34 +551,32 @@ class BaseConfig(BaseModel):
                 for key, value in cfp.items(section):
                     actualvalue = conf_attribute_reader(value)
                     if key.startswith("_") and key.endswith("_options"):
-                        if "OPTIONS" not in self.__fields__:
-                            self.__fields__["OPTIONS"] = {}
                         self.OPTIONS[key] = actualvalue
                     else:
                         section_upper = section.upper()
                         if hasattr(self, section_upper):
                             class_instance = getattr(self, section_upper)
                             if isinstance(class_instance, BaseModel):
-                                setattr(class_instance, key.upper(), actualvalue)
+                                if key.upper() in class_instance.__fields__:
+                                    setattr(class_instance, key.upper(), actualvalue)
+                                else:
+                                    setattr(class_instance, key.upper(), actualvalue)
                             else:
                                 setattr(self, section_upper, actualvalue)
                         else:
-                            # Add dynamic field if it doesn't exist
                             setattr(self, key.upper(), actualvalue)
             try:
                 with open(self.CACHE_CONFIG_FILE_PATH, "w") as file:
                     file.write(str(config_files[0]))
                 cached_config_file_path = config_files[0]
-            except:
-                pass
+            except Exception as e:
+                print(f"Error caching config file path: {e}")
         else:
             print("configuration*.ini file not found, defaulting to legacy configuration")
             config_files = glob.glob("." + "/" + "configuration*.txt")
             if config_files:
                 if len(config_files) > 1:
-                    print(
-                        "multiple machine configuration files found, the program will exit"
-                    )
+                    print("multiple machine configuration files found, the program will exit")
                     exit()
                 print("load machine-specific configuration")
                 exec(open(config_files[0]).read())
@@ -586,14 +591,13 @@ CONFIG = BaseConfig()
 
 def load_config(config_path, multipoint_function):
     global CONFIG
-    
+
     config_dir = os.path.abspath(__file__)
     config_dir = Path(config_dir)
 
     current_dir = Path(__file__).parent
     if not str(config_path).endswith(".ini"):
         config_path = current_dir / ("../configurations/configuration_" + str(config_path) + ".ini")
-
 
     CONFIG.CACHE_CONFIG_FILE_PATH = str(config_dir / 'cache_config_file_path.txt')
     CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / 'channel_configurations.xml')
@@ -603,7 +607,6 @@ def load_config(config_path, multipoint_function):
         raise FileNotFoundError(f"Configuration file {config_path} not found.")
 
     cf_editor_parser = ConfigParser()
-    # Read the config
     cached_config_file_path = CONFIG.read_config(config_path)
     CONFIG.STAGE_POS_SIGN_X = CONFIG.STAGE_MOVEMENT_SIGN_X
     CONFIG.STAGE_POS_SIGN_Y = CONFIG.STAGE_MOVEMENT_SIGN_Y
@@ -613,11 +616,8 @@ def load_config(config_path, multipoint_function):
         CONFIG.RUN_CUSTOM_MULTIPOINT = True
         CONFIG.CUSTOM_MULTIPOINT_FUNCTION = multipoint_function
 
-    # saving path
     if not (CONFIG.DEFAULT_SAVING_PATH.startswith(str(Path.home()))):
-        CONFIG.DEFAULT_SAVING_PATH = (
-            str(Path.home()) + "/" + CONFIG.DEFAULT_SAVING_PATH.strip("/")
-        )
+        CONFIG.DEFAULT_SAVING_PATH = str(Path.home()) + "/" + CONFIG.DEFAULT_SAVING_PATH.strip("/")
 
     if CONFIG.ENABLE_TRACKING:
         CONFIG.DEFAULT_DISPLAY_CROP = CONFIG.Tracking.DEFAULT_DISPLAY_CROP
@@ -653,11 +653,17 @@ def load_config(config_path, multipoint_function):
         CONFIG.A1_X_MM = 24.55
         CONFIG.A1_Y_MM = 23.01
 
+
+    # Write configuration to txt file after reading
+    CONFIG.write_config_to_txt('config_parameters.txt')
+
     try:
         if os.path.exists(cached_config_file_path):
             cf_editor_parser.read(cached_config_file_path)
     except:
         return False
+
+
 
 
 # For flexible plate format:

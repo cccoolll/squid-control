@@ -170,3 +170,4 @@ cython_debug/
 
 cache_config_file_path.txt
 configuration_HCS_v2.ini
+squid_control/control/config2.py
