@@ -230,9 +230,16 @@ def get_status(context=None):
 
 
 def one_new_frame(context=None):
+    squidController.liveController.turn_on_illumination()
+    squidController.liveController.set_illumination(0,5)
+    if squidController.microcontroller.is_busy():
+        time.sleep(0.05)
     squidController.camera.send_trigger()
 
     gray_img = squidController.camera.read_frame()
+
+    squidController.liveController.turn_off_illumination()
+
     min_val = np.min(gray_img)
     max_val = np.max(gray_img)
     if max_val > min_val:  # Avoid division by zero if the image is completely uniform
@@ -255,7 +262,7 @@ def snap(exposure_time, channel, intensity, context=None):
     if channel is None:
         channel = 0
     if intensity is None:
-        intensity = 15
+        intensity = 5
     squidController.camera.set_exposure_time(exposure_time)
     squidController.camera.send_trigger()
 
@@ -419,10 +426,7 @@ datastore = HyphaDataStore()
 async def on_init(peer_connection):
     @peer_connection.on("track")
     def on_track(track):
-        squidController.liveController.turn_on_illumination()
-        squidController.liveController.set_illumination(0,15)
-        if squidController.microcontroller.is_busy():
-            time.sleep(0.05)
+
         print(f"Track {track.kind} received")
 
         peer_connection.addTrack(
@@ -508,7 +512,7 @@ def get_schema(context=None):
             "properties": {
                 "x": {"type": "number", "description": "Move the stage to the X coordinate", "default": None},
                 "y": {"type": "number", "description": "Move the stage to the Y coordinate", "default": None},
-                "z": {"type": "number", "description": "Move the stage to the Z coordinate", "default": 2.794},
+                "z": {"type": "number", "description": "Move the stage to the Z coordinate", "default": 3.35},
             },
         },
         "home_stage": {
@@ -533,7 +537,7 @@ def get_schema(context=None):
             "properties": {
                 "exposure": {"type": "number", "description": "Set the microscope camera's exposure time in milliseconds."},
                 "channel": {"type": "number", "description": "Set light source. Default value is 0. The illumination source and number is: [Bright Field=0, Fluorescence 405 nm=11, Fluorescence 488 nm=12,  Fluorescence 638 nm=13, Fluorescence 561 nm=14, Fluorescence 730 nm=15]."},
-                "intensity": {"type": "number", "description": "Set the intensity of the illumination source. The default value for bright field is 15, for fluorescence is 100."},
+                "intensity": {"type": "number", "description": "Set the intensity of the illumination source. The default value for bright field is 5, for fluorescence is 100."},
             },
             "required": ["exposure", "channel", "intensity"]
         },
@@ -594,7 +598,7 @@ def snap_image_schema(config, context=None):
     if config["channel"] is None:
         config["channel"] = 0
     if config["intensity"] is None:
-        config["intensity"] = 15
+        config["intensity"] = 5
     squid_image_url = snap(config["exposure"], config["channel"], config["intensity"],context=context)
     resp = f"![Image]({squid_image_url})"
     return resp
