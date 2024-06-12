@@ -290,8 +290,9 @@ def snap(exposure_time, channel, intensity, context=None):
     _, png_image = cv2.imencode('.png', bgr_img)
     # Store the PNG image
     file_id = datastore.put('file', png_image.tobytes(), 'snapshot.png', "Captured microscope image in PNG format")
-    print(f'The image is snapped and saved as {datastore.get_url(file_id)}')
-    return datastore.get_url(file_id)
+    data_url= datastore.get_url(file_id)
+    print(f'The image is snapped and saved as {data_url}')
+    return data_url
 
 
 def open_illumination(context=None):
@@ -600,7 +601,7 @@ def snap_image_schema(config, context=None):
     if config["intensity"] is None:
         config["intensity"] = 5
     squid_image_url = snap(config["exposure"], config["channel"], config["intensity"],context=context)
-    resp = f"![Image]({squid_image_url})"
+    resp = f"![**Chatbot must display this Microscope Image**]({squid_image_url})"
     return resp
 
 def move_to_loading_position_schema(config, context=None):
@@ -611,11 +612,11 @@ def navigate_to_well_schema(config, context=None):
     navigate_to_well(config["row"], config["col"], config["wellplate_type"],context=context)
     return {"result": "Moved the stage to the specified well position!"}
 
-async def setup(service_id):
+async def setup(service_id, simulation=True):
     
     chatbot_extension = {
         "_rintf": True,
-        "id": "squid-control-chatbot",
+        "id": "squid-control-chatbot" if not simulation else "squid-control-chatbot-simulation",
         "type": "bioimageio-chatbot-extension",
         "name": "Squid Microscope Control",
         "description": "Your role: A chatbot controlling a microscope; Your mission: Answering the user's questions, and executing the commands to control the microscope; Definition of microscope: OBJECTIVES: 20x 'NA':0.4, You have one main camera and one autofocus camera. ",
@@ -669,7 +670,7 @@ if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     async def main():
         try:
-            await setup(args.service_id)
+            await setup(args.service_id,simulation= args.simulation)
         except Exception:
             traceback.print_exc()
     loop.create_task(main())

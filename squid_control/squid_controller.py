@@ -153,10 +153,10 @@ class SquidController:
         self.slidePositionController.homing_done = True
 
         # move to scanning position
-        self.navigationController.move_x(20)
+        self.navigationController.move_x(50.2)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
-        self.navigationController.move_y(20)
+        self.navigationController.move_y(34.8)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
 
@@ -169,12 +169,16 @@ class SquidController:
             if time.time() - t0 > 5:
                 print('z return timeout, the program will exit')
                 exit()
-
-        # set software limits        
+        self.navigationController.move_z_to(3.39)
+        while self.microcontroller.is_busy():
+            time.sleep(0.05)
+        # set software limits  
+              
         self.navigationController.set_x_limit_pos_mm(SOFTWARE_POS_LIMIT.X_POSITIVE)
         self.navigationController.set_x_limit_neg_mm(SOFTWARE_POS_LIMIT.X_NEGATIVE)
         self.navigationController.set_y_limit_pos_mm(SOFTWARE_POS_LIMIT.Y_POSITIVE)
         self.navigationController.set_y_limit_neg_mm(SOFTWARE_POS_LIMIT.Y_NEGATIVE)
+
             
     def move_to_scaning_position(self):
         # move to scanning position
