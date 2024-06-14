@@ -82,7 +82,7 @@ class VideoTransformTrack(MediaStreamTrack):
     async def recv(self):
         # Read frame from squid controller, now correctly formatted as BGR
         bgr_img = one_new_frame()
-        bgr_img = cv2.resize(bgr_img, (2012,1518))
+        bgr_img = cv2.resize(bgr_img, (1006, 759))
         # Create the video frame
         new_frame = VideoFrame.from_ndarray(bgr_img, format="bgr24")
         new_frame.pts = self.count
@@ -285,7 +285,7 @@ def snap(exposure_time, channel, intensity, context=None):
     else:
         gray_img = np.zeros((512, 512), dtype=np.uint8)  # If no variation, return a black image
     # Resize the image to a standard size
-    resized_img = cv2.resize(gray_img, (2012,1518))
+    resized_img = cv2.resize(gray_img, (1006,759))
     bgr_img = np.stack((resized_img,)*3, axis=-1)  # Duplicate grayscale data across 3 channels to simulate BGR format.
     _, png_image = cv2.imencode('.png', bgr_img)
     # Store the PNG image

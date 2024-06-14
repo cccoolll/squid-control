@@ -26,6 +26,17 @@ import webbrowser
 from squid_control.squid_controller import SquidController
 #import squid_control.squid_chatbot as chatbot
 import cv2
+
+# Initialize chatpt vision
+from openai import AsyncOpenAI
+import base64
+from pydantic import Field, BaseModel
+from typing import Optional, List
+import httpx
+from PIL import Image
+from io import BytesIO
+import matplotlib.pyplot as plt
+
 login_required=True
 current_x, current_y = 0,0
 
@@ -82,7 +93,7 @@ class VideoTransformTrack(MediaStreamTrack):
     async def recv(self):
         # Read frame from squid controller, now correctly formatted as BGR
         bgr_img = one_new_frame()
-        bgr_img = cv2.resize(bgr_img, (2012,1518))
+        bgr_img = cv2.resize(bgr_img, (1006,759))
         # Create the video frame
         new_frame = VideoFrame.from_ndarray(bgr_img, format="bgr24")
         new_frame.pts = self.count
@@ -285,7 +296,7 @@ def snap(exposure_time, channel, intensity, context=None):
     else:
         gray_img = np.zeros((512, 512), dtype=np.uint8)  # If no variation, return a black image
     # Resize the image to a standard size
-    resized_img = cv2.resize(gray_img, (2012,1518))
+    resized_img = cv2.resize(gray_img, (1006,759))
     bgr_img = np.stack((resized_img,)*3, axis=-1)  # Duplicate grayscale data across 3 channels to simulate BGR format.
     _, png_image = cv2.imencode('.png', bgr_img)
     # Store the PNG image
@@ -491,15 +502,6 @@ async def start_hypha_service(server, service_id):
 
 
 
-from bioimageio_chatbot.utils import ChatbotExtension
-from openai import AsyncOpenAI
-import base64
-from pydantic import Field, BaseModel
-from typing import Optional, List
-import httpx
-from PIL import Image
-from io import BytesIO
-import matplotlib.pyplot as plt
 # make sure matplotlib is operating headless (no GUI)
 plt.switch_backend("agg")
 
