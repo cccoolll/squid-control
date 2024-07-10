@@ -316,6 +316,7 @@ class Microcontroller:
         target_pos = self.x_pos + CONFIG.STAGE_MOVEMENT_SIGN_X * usteps
         if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
             self.move_x_usteps(usteps)
+            self.x_pos = target_pos
         else:
             print("Target position is outside the safe area, X movement cancelled")
 
@@ -333,6 +334,8 @@ class Microcontroller:
         target_pos = usteps
         if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
             self.move_x_to_usteps(usteps)
+            self.x_pos = target_pos
+
         else:
             print("Target position is outside the safe area, X movement cancelled")
 
@@ -385,6 +388,8 @@ class Microcontroller:
         target_pos = self.y_pos + CONFIG.STAGE_MOVEMENT_SIGN_Y * usteps
         if self.is_point_in_concave_hull([self.x_pos, target_pos, self.z_pos]):
             self.move_y_usteps(usteps)
+            self.y_pos = target_pos
+
         else:
             print("Target position is outside the safe area, Y movement cancelled")
 
@@ -402,6 +407,7 @@ class Microcontroller:
         target_pos = usteps
         if self.is_point_in_concave_hull([self.x_pos, target_pos, self.z_pos]):
             self.move_y_to_usteps(usteps)
+            self.y_pos = target_pos
         else:
             print("Target position is outside the safe area, Y movement cancelled")
 
@@ -454,6 +460,7 @@ class Microcontroller:
         target_pos = self.z_pos + CONFIG.STAGE_MOVEMENT_SIGN_Z * usteps
         if self.is_point_in_concave_hull([self.x_pos, self.y_pos, target_pos]):
             self.move_z_usteps(usteps)
+            self.z_pos = target_pos
         else:
             print("Target position is outside the safe area, Z movement cancelled")
 
@@ -471,6 +478,7 @@ class Microcontroller:
         target_pos = usteps
         if self.is_point_in_concave_hull([self.x_pos, self.y_pos, target_pos]):
             self.move_z_to_usteps(usteps)
+            self.z_pos = target_pos
         else:
             print("Target position is outside the safe area, Z movement cancelled")
 

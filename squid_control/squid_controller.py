@@ -22,8 +22,6 @@ path_ini=Path(path_ini)
 
 
 
-
-
 load_config(path_ini, False)
 class SquidController:
     fps_software_trigger= 100
@@ -292,14 +290,17 @@ class SquidController:
     
     def plate_scan(self,well_plate_type='test', illuminate_channels=['BF LED matrix full'], do_autofocus=True, action_ID='testPlateScan'):
         # start the acquisition loop
-        self.move_to_scaning_position()
-        location_list = self.multipointController.get_location_list()
-        self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)
-        self.multipointController.set_selected_configurations(illuminate_channels)
-        self.multipointController.do_autofocus = do_autofocus
-        self.autofocusController.set_deltaZ(1.524)
-        self.multipointController.start_new_experiment(action_ID)
-        self.multipointController.run_acquisition_reef(location_list=location_list)
+        
+        #@TODO: finish the plate scan feature.
+        pass
+        # self.move_to_scaning_position()
+        # location_list = self.multipointController.get_location_list()
+        # self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)
+        # self.multipointController.set_selected_configurations(illuminate_channels)
+        # self.multipointController.do_autofocus = do_autofocus
+        # self.autofocusController.set_deltaZ(1.524)
+        # self.multipointController.start_new_experiment(action_ID)
+        # self.multipointController.run_acquisition_reef(location_list=location_list)
     
     def do_autofocus(self):
         self.autofocusController.set_deltaZ(1.524)
@@ -348,7 +349,7 @@ class SquidController:
         
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
-        if abs(x_pos - x) > CONFIG.STAGE_MOVED_THRESHOLD:
+        if abs(x_pos - x) < CONFIG.STAGE_MOVED_THRESHOLD:
             return False, x_pos_before, y_pos_before, z_pos_before, x
 
         return True, x_pos_before, y_pos_before, z_pos_before, x
@@ -361,7 +362,7 @@ class SquidController:
             time.sleep(0.005)
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
-        if abs(y_pos - y) > CONFIG.STAGE_MOVED_THRESHOLD:
+        if abs(y_pos - y) < CONFIG.STAGE_MOVED_THRESHOLD:
             return False, x_pos_before, y_pos_before, z_pos_before, y
     
         return True, x_pos_before, y_pos_before, z_pos_before, y
@@ -374,7 +375,7 @@ class SquidController:
             time.sleep(0.005)
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
-        if abs(z_pos - z) > CONFIG.STAGE_MOVED_THRESHOLD:
+        if abs(z_pos - z) < CONFIG.STAGE_MOVED_THRESHOLD:
             return False, x_pos_before, y_pos_before, z_pos_before, z
 
         return True, x_pos_before, y_pos_before, z_pos_before, z
