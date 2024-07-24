@@ -162,7 +162,7 @@
                 app.addMenuItem({
                     label: "Squid Control Chatbot",
                     async callback() {
-                        //const chatbot = await api.createWindow({src: "https://ai.imjoy.io/2hDGvySiiyHU3fuGNeLmU3/apps/bioimageio-chatbot-client/index"})
+                        //const chatbot = await api.createWindow({src: "https://reef.aicell.io/2hDGvySiiyHU3fuGNeLmU3/apps/bioimageio-chatbot-client/index"})
                         // Prompt the user to input the src URL
                         const userSrc = prompt("Please enter the URL for the microscope control chatbot:", "https://raw.githubusercontent.com/aicell-lab/squid-control/dorna-squid/imjoy_plugin/squid-microscope-chatbot.imjoy.html");
                         // Create the window with the provided src URL
@@ -240,7 +240,7 @@
             start: async function() {
                 const hostCanvas = document.createElement('canvas');
                 const service_id = document.getElementById('service-id').value;
-                const server = await hyphaWebsocketClient.connectToServer({ "name": "js-client", "server_url": "https://ai.imjoy.io", "method_timeout": 10 })
+                const server = await hyphaWebsocketClient.connectToServer({ "name": "js-client", "server_url": "https://reef.aicell.io", "method_timeout": 10 })
                 async function on_init(peerConnection){
                     // connect audio / video
                     peerConnection.addEventListener('track', function (evt) {
