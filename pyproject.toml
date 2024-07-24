@@ -15,7 +15,9 @@ dependencies = [
     "tifffile",
     "opencv-python",
     "lxml",
-    "scikit-image"
+    "scikit-image",
+    "aiortc",
+    "pydantic"
 ]
 [project.optional-dependencies]
 all = [
