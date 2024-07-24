@@ -260,12 +260,30 @@ class SquidController:
         self.camera.set_callback(self.streamHandler.on_new_frame)
         self.camera.enable_callback()
 
+        if CONFIG.SUPPORT_LASER_AUTOFOCUS:
+
+            # controllers
+            self.configurationManager_focus_camera = core.ConfigurationManager(filename='./squid_control/focus_camera_configurations.xml')
+            self.streamHandler_focus_camera = core.StreamHandler()
+            self.liveController_focus_camera = core.LiveController(self.camera_focus,self.microcontroller,self.configurationManager_focus_camera,control_illumination=False,for_displacement_measurement=True)
+            self.multipointController = core.MultiPointController(self.camera,self.navigationController,self.liveController,self.autofocusController,self.configurationManager,scanCoordinates=self.scanCoordinates,parent=self)
+            self.displacementMeasurementController = core_displacement_measurement.DisplacementMeasurementController()
+            self.laserAutofocusController = core.LaserAutofocusController(self.microcontroller,self.camera_focus,self.liveController_focus_camera,self.navigationController,has_two_interfaces=HAS_TWO_INTERFACES,use_glass_top=USE_GLASS_TOP)
+
+            # camera
+            self.camera_focus.set_software_triggered_acquisition() #self.camera.set_continuous_acquisition()
+            self.camera_focus.set_callback(self.streamHandler_focus_camera.on_new_frame)
+            self.camera_focus.enable_callback()
+            self.camera_focus.start_streaming()
+
 
         # set software limits        
         self.navigationController.set_x_limit_pos_mm(CONFIG.SOFTWARE_POS_LIMIT.X_POSITIVE)
         self.navigationController.set_x_limit_neg_mm(CONFIG.SOFTWARE_POS_LIMIT.X_NEGATIVE)
         self.navigationController.set_y_limit_pos_mm(CONFIG.SOFTWARE_POS_LIMIT.Y_POSITIVE)
         self.navigationController.set_y_limit_neg_mm(CONFIG.SOFTWARE_POS_LIMIT.Y_NEGATIVE)
+
+
             
     def move_to_scaning_position(self):
         # move to scanning position
@@ -308,15 +326,24 @@ class SquidController:
         self.autofocusController.autofocus()
         self.autofocusController.wait_till_autofocus_has_completed()
 
+    def init_laser_autofocus(self):
+        self.laserAutofocusController.initialize_auto()
+    
+    def measure_displacement(self):
+        self.laserAutofocusController.measure_displacement()
         
     def scan_well_plate(self, action_ID='01'):
+        # generate location list
+        # do focus , reflection focus/contrast autofocus
         # start the acquisition loop
         location_list = self.multipointController.get_location_list(rows=3,cols=3)
         self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)
         self.multipointController.set_selected_configurations(self.illuminate_channels_for_scan)
         self.multipointController.do_autofocus = True
+        self.multipointController.do_reflection_af = True
         self.multipointController.start_new_experiment(action_ID)
-        self.multipointController.run_acquisition_reef(location_list=location_list)
+        self.multipointController.run_acquisition(location_list=location_list)
+
         
     def platereader_move_to_well(self,row,column, wellplate_type='24'):
         if wellplate_type == '6':
