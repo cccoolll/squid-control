@@ -2,7 +2,7 @@ import os
 import logging
 
 
-import pyqtgraph.dockarea as dock
+#import pyqtgraph.dockarea as dock
 import time
 from scripts.tools.hypha_storage import HyphaDataStore
 import argparse
@@ -642,7 +642,7 @@ async def setup(simulation=True):
     # svc = await chatbot_server.register_service(chatbot_extension, overwrite=True)
     #print(f"Extension service registered with id: {svc.id}, you can visit the service at: https://bioimage.io/chat?server={chatbot_server_url}&extension={svc.id}&assistant=Skyler")
 
-    hypha_server_url = "http://127.0.0.1:9520"
+    hypha_server_url = "http://reef.aicell.io:9520"
     hypha_server = await connect_to_server({"server_url": hypha_server_url})
     service_id = "squid-control-service-simulation" if simulation else "squid-control-service"
     await start_hypha_service(hypha_server, service_id)
