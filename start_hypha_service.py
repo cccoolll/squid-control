@@ -482,7 +482,7 @@ async def start_hypha_service(server, service_id):
     )
 
     print(
-        f"Service (service_id={service_id}) started successfully, available at https://reef.aicell.io/{server.config.workspace}/services"
+        f"Service (service_id={service_id}) started successfully, available at https://ai.imjoy.io/{server.config.workspace}/services"
     )
     #print(f"You can access the webrtc stream at https://aicell-lab.github.io/octopi-research/?service_id={svc['id'].split(':')[0]}:{service_id}")
     print(f"You can access the webrtc stream at https://cccoolll.github.io/squid-control/?service_id={service_id}")
@@ -642,7 +642,7 @@ async def setup(simulation=True):
     # svc = await chatbot_server.register_service(chatbot_extension, overwrite=True)
     #print(f"Extension service registered with id: {svc.id}, you can visit the service at: https://bioimage.io/chat?server={chatbot_server_url}&extension={svc.id}&assistant=Skyler")
 
-    hypha_server_url = "http://localhost:9520"
+    hypha_server_url = "https://ai.imjoy.io"
     hypha_server = await connect_to_server({"server_url": hypha_server_url})
     service_id = "squid-control-service-simulation" if simulation else "squid-control-service"
     await start_hypha_service(hypha_server, service_id)
