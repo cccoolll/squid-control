@@ -1,12 +1,10 @@
 version: '3.8'
-
 services:
   squid-control:
     build: .
-    image: squid-control  # Explicitly set the image name
+    image: squid-control
+    network_mode: "host"
     volumes:
       - .:/usr/src/app
-    ports:
-      - "5000:5000"
     environment:
       - PYTHONUNBUFFERED=1
