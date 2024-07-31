@@ -27,6 +27,8 @@ from squid_control.squid_controller import SquidController
 import cv2
 login_required=True
 current_x, current_y = 0,0
+current_illumination_channel=None
+current_intensity=None
 
 global squidController
 #squidController= SquidController(is_simulation=args.simulation)
@@ -228,16 +230,16 @@ def get_status(context=None):
     return current_x, current_y, current_z, current_theta, is_illumination_on,scan_channel
 
 
+def set_illumination(illumination_channel,intensity, context=None):
+    current_illumination_channel = illumination_channel
+    current_intensity = intensity
+    squidController.liveController.set_illumination(illumination_channel,intensity)
+    print(f'The intensity of the {illumination_channel} illumination is set to {intensity}.')
+    
+    
 def one_new_frame(context=None):
-    squidController.liveController.turn_on_illumination()
-    squidController.liveController.set_illumination(0,5)
-    if squidController.microcontroller.is_busy():
-        time.sleep(0.05)
-    squidController.camera.send_trigger()
-
-    gray_img = squidController.camera.read_frame()
-
-    squidController.liveController.turn_off_illumination()
+    gray_img=squidController.snap_image(0,50,100)
+    print('The image is snapped')
 
     min_val = np.min(gray_img)
     max_val = np.max(gray_img)
@@ -256,25 +258,7 @@ def snap(exposure_time, channel, intensity, context=None):
     """
     if not check_permission(context.get("user")):
         return "You don't have permission to use the chatbot, please contact us and wait for approval"
-    if exposure_time is None:
-        exposure_time = 100
-    if channel is None:
-        channel = 0
-    if intensity is None:
-        intensity = 5
-    squidController.camera.set_exposure_time(exposure_time)
-    squidController.camera.send_trigger()
-
-    squidController.liveController.set_illumination(channel,intensity)
-    squidController.liveController.turn_on_illumination()
-    if squidController.microcontroller.is_busy():
-        time.sleep(0.05)
-    gray_img = squidController.camera.read_frame()
-    time.sleep(0.05)
-    #squidController.liveController.set_illumination(0,0)
-    if squidController.microcontroller.is_busy():
-        time.sleep(0.005)
-    squidController.liveController.turn_off_illumination()
+    gray_img=squidController.snap_image(channel,intensity,exposure_time)
     # Rescale the image to span the full 0-255 range
     min_val = np.min(gray_img)
     max_val = np.max(gray_img)
@@ -644,7 +628,7 @@ async def setup(simulation=True):
 
     hypha_server_url = "https://ai.imjoy.io"
     hypha_server = await connect_to_server({"server_url": hypha_server_url})
-    service_id = "squid-control-service-simulation" if simulation else "squid-control-service"
+    service_id = "squid-control-service-simulation-2" if simulation else "squid-control-service"
     await start_hypha_service(hypha_server, service_id)
 
 

@@ -29,12 +29,16 @@ class SquidController:
     def __init__(self,is_simulation, *args, **kwargs):
         super().__init__(*args,**kwargs)
         self.data_channel = None
+        #parameters for the camera simulation
+        self.previous_x = 0
+        self.previous_y = 0
+        self.first_snap = True 
         #load objects
         self.objectiveStore = core.ObjectiveStore()
         camera, camera_fc = get_camera(CONFIG.CAMERA_TYPE)
-
+        self.is_simulation = is_simulation
         # load objects
-        if is_simulation:
+        if self.is_simulation:
             if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL:
                 self.xlight = serial_peripherals.XLight_Simulation()
             if CONFIG.SUPPORT_LASER_AUTOFOCUS:
@@ -490,6 +494,43 @@ class SquidController:
             if time.time() - t0 > 5:
                 print('z return timeout, the program will exit')
                 exit()
+
+    def snap_image(self, channel,intensity, exposure_time):
+        self.camera.set_exposure_time(exposure_time)
+        self.liveController.set_illumination(channel,intensity)
+        self.liveController.turn_on_illumination()
+        while self.microcontroller.is_busy():
+            time.sleep(0.05)
+        self.camera.send_trigger()
+        while self.microcontroller.is_busy():
+            time.sleep(0.05)
+        
+        if self.is_simulation:
+            # Read current position
+            current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+            # Calculate dx and dy
+            if self.first_snap:
+                dx = 0
+                dy = 0
+                self.first_snap = False
+            else:
+                dx = current_x - self.previous_x
+                dy = current_y - self.previous_y
+            
+            # Update previous position
+            self.previous_x = current_x
+            self.previous_y = current_y
+            gray_img = self.camera.read_frame(dx,dy,current_z,channel,intensity,exposure_time)
+        else:
+            gray_img = self.camera.read_frame()
+        time.sleep(0.05)
+        #self.liveController.set_illumination(0,0)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        self.liveController.turn_off_illumination()
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        return gray_img
 
     def close(self):
 
