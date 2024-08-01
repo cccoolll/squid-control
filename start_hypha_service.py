@@ -70,27 +70,29 @@ async def ping(context=None):
     return "pong"
 
 class VideoTransformTrack(MediaStreamTrack):
-    """
-    A video stream track that transforms frames from another track.
-    """
-
     kind = "video"
 
     def __init__(self):
         super().__init__()  # don't forget this!
         self.count = 0
+        print("VideoTransformTrack initialized")
 
     async def recv(self):
-        # Read frame from squid controller, now correctly formatted as BGR
-        bgr_img = one_new_frame()
-        bgr_img = cv2.resize(bgr_img, (1006, 759))
-        # Create the video frame
-        new_frame = VideoFrame.from_ndarray(bgr_img, format="bgr24")
-        new_frame.pts = self.count
-        new_frame.time_base = fractions.Fraction(1, 1000)
-        self.count += 1
-        await asyncio.sleep(0.3)  # Simulating frame rate delay
-        return new_frame
+        print(f"Entering recv method (count: {self.count})")
+        try:
+            bgr_img = one_new_frame()
+            print("Image received from one_new_frame")
+            bgr_img = cv2.resize(bgr_img, (1006, 759))
+            new_frame = VideoFrame.from_ndarray(bgr_img, format="bgr24")
+            new_frame.pts = self.count
+            new_frame.time_base = fractions.Fraction(1, 1000)
+            self.count += 1
+            print(f"Frame {self.count} created")
+            await asyncio.sleep(0.3)  # Simulating frame rate delay
+            return new_frame
+        except Exception as e:
+            print(f"Error in recv method: {str(e)}")
+            raise
 
 
 
@@ -238,6 +240,7 @@ def set_illumination(illumination_channel,intensity, context=None):
     
     
 def one_new_frame(context=None):
+    print("Start snapping an image")
     gray_img=squidController.snap_image(0,50,100)
     print('The image is snapped')
 
@@ -410,18 +413,17 @@ datastore = HyphaDataStore()
 async def on_init(peer_connection):
     @peer_connection.on("track")
     def on_track(track):
-
         print(f"Track {track.kind} received")
-
-        peer_connection.addTrack(
-            VideoTransformTrack()
-        )
+        if track.kind == "video":
+            video_sender = next(sender for sender in peer_connection.getSenders() if sender.track and sender.track.kind == "video")
+            if video_sender:
+                video_sender.replaceTrack(VideoTransformTrack())
+                print("VideoTransformTrack added to peer connection")
+            else:
+                print("No video sender found")
         
         @track.on("ended")
         async def on_ended():
-            squidController.liveController.turn_off_illumination()
-            if squidController.microcontroller.is_busy():
-                time.sleep(0.05)
             print(f"Track {track.kind} ended")
 
     data_channel = peer_connection.createDataChannel("microscopeStatus")
@@ -469,7 +471,7 @@ async def start_hypha_service(server, service_id):
         f"Service (service_id={service_id}) started successfully, available at https://ai.imjoy.io/{server.config.workspace}/services"
     )
     #print(f"You can access the webrtc stream at https://aicell-lab.github.io/octopi-research/?service_id={svc['id'].split(':')[0]}:{service_id}")
-    print(f"You can access the webrtc stream at https://cccoolll.github.io/squid-control/?service_id={service_id}")
+    print(f"You can access the webrtc stream at https://cccoolll.github.io/reef-imaging/?service_id={service_id}")
     #await chatbot.connect_server("https://ai.imjoy.io")
 
 
