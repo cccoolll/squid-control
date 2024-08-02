@@ -13,7 +13,7 @@ import traceback
 
 import numpy as np
 #from av import VideoFrame
-from imjoy_rpc.hypha import login, connect_to_server, register_rtc_service
+from hypha_rpc import login, connect_to_server, register_rtc_service
 from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription, RTCConfiguration
 
 from aiortc.contrib.media import MediaPlayer, MediaRelay, MediaStreamTrack
@@ -142,7 +142,7 @@ def move_by_distance(x,y,z, context=None):
     """
     if not check_permission(context.get("user")):
         return "You don't have permission to use the chatbot, please contact us and wait for approval"
-    is_success, x_pos, y_pos,z_pos, x_des, y_des, z_des =squidController.move_by_distance_safely(x,y,z)
+    is_success, x_pos, y_pos,z_pos, x_des, y_des, z_des =squidController.move_by_distance_limited(x,y,z)
     if is_success:
         result = f'The stage moved ({x},{y},{z})mm through x,y,z axis, from ({x_pos},{y_pos},{z_pos})mm to ({x_des},{y_des},{z_des})mm'
         print(result)
@@ -175,21 +175,21 @@ def move_to_position(x,y,z, context=None):
     if not check_permission(context.get("user")):
         return "You don't have permission to use the chatbot, please contact us and wait for approval"
     if x != 0:
-        is_success, x_pos, y_pos,z_pos, x_des = squidController.move_x_to_safely(x)
+        is_success, x_pos, y_pos,z_pos, x_des = squidController.move_x_to_limited(x)
         if not is_success:
             result = f'The stage can not move to position ({x},{y},{z})mm from ({x_pos},{y_pos},{z_pos})mm because out of the limit of X axis.'
             print(result)
             return(result)
             
     if y != 0:        
-        is_success, x_pos, y_pos, z_pos, y_des = squidController.move_y_to_safely(y)
+        is_success, x_pos, y_pos, z_pos, y_des = squidController.move_y_to_limited(y)
         if not is_success:
             result = f'X axis moved successfully, the stage is now at ({x_pos},{y_pos},{z_pos})mm. But aimed position is out of the limit of Y axis and the stage can not move to position ({x},{y},{z})mm.'
             print(result)
             return(result)
             
     if z != 0:    
-        is_success, x_pos, y_pos, z_pos, z_des = squidController.move_z_to_safely(z)
+        is_success, x_pos, y_pos, z_pos, z_des = squidController.move_z_to_limited(z)
         if not is_success:
             result = f'X and Y axis moved successfully, the stage is now at ({x_pos},{y_pos},{z_pos})mm. But aimed position is out of the limit of Z axis and stage can not move to position ({x},{y},{z})mm.'
             print(result)
@@ -231,13 +231,6 @@ def get_status(context=None):
     scan_channel = squidController.multipointController.selected_configurations
     return current_x, current_y, current_z, current_theta, is_illumination_on,scan_channel
 
-
-def set_illumination(illumination_channel,intensity, context=None):
-    current_illumination_channel = illumination_channel
-    current_intensity = intensity
-    squidController.liveController.set_illumination(illumination_channel,intensity)
-    print(f'The intensity of the {illumination_channel} illumination is set to {intensity}.')
-    
     
 def one_new_frame(context=None):
     print("Start snapping an image")
@@ -333,7 +326,7 @@ def scan_well_plate(context=None):
     print("Start scanning well plate")
     squidController.scan_well_plate(action_ID='Test')
 
-def set_illumination(illumination_source,intensity, context=None):
+def set_illumination(channel,intensity, context=None):
     """
     Set the intensity of the bright field illumination.
     illumination_source : int
@@ -342,10 +335,18 @@ def set_illumination(illumination_source,intensity, context=None):
     """
     if not check_permission(context.get("user")):
         return "You don't have permission to use the chatbot, please contact us and wait for approval"
-    squidController.liveController.set_illumination(illumination_source,intensity)
-    print(f'The intensity of the {illumination_source} illumination is set to {intensity}.')
+    squidController.liveController.set_illumination(channel,intensity)
+    print(f'The intensity of the {channel} illumination is set to {intensity}.')
 
-
+def set_camera_exposure(exposure_time, context=None):
+    """
+    Set the exposure time of the camera.
+    exposure_time : float
+    """
+    if not check_permission(context.get("user")):
+        return "You don't have permission to use the chatbot, please contact us and wait for approval"
+    squidController.camera.set_exposure_time(exposure_time)
+    print(f'The exposure time of the camera is set to {exposure_time}.')
 
 def stop_scan(context=None):
     """
@@ -437,17 +438,19 @@ async def start_hypha_service(server, service_id):
     
     await server.register_service(
         {
-            "id": "microscope-control-squid",
+            "name": "Microscope Control Service",
+            "id": "microscope-control-squid-2",
             "config":{
                 "visibility": "public",
-                "run_in_executor": True,
-                "require_context": True,   
+                #"run_in_executor": True
             },
-            "type": "echo",
+            #"type": "echo",
             "move_by_distance": move_by_distance,
             "snap": snap,
             "off_illumination": close_illumination,
             "on_illumination": open_illumination,
+            "set_illumination": set_illumination,
+            "set_camera_exposure": set_camera_exposure,
             "scan_well_plate": scan_well_plate,
             "stop_scan": stop_scan,
             "home_stage": home_stage,
@@ -468,167 +471,17 @@ async def start_hypha_service(server, service_id):
     )
 
     print(
-        f"Service (service_id={service_id}) started successfully, available at https://ai.imjoy.io/{server.config.workspace}/services"
+        f"Service (service_id={service_id}) started successfully, available at http://localhost:9527/{server.config.workspace}/services"
     )
     #print(f"You can access the webrtc stream at https://aicell-lab.github.io/octopi-research/?service_id={svc['id'].split(':')[0]}:{service_id}")
     print(f"You can access the webrtc stream at https://cccoolll.github.io/reef-imaging/?service_id={service_id}")
-    #await chatbot.connect_server("https://ai.imjoy.io")
+    #await chatbot.connect_server("http://localhost:9527")
 
 
-
-# Now define chatbot services
-
-
-def get_schema(context=None):
-    return {
-        "move_by_distance": {
-            "type": "object",
-            "title": "move_by_distance",
-            "description": "Move the stage by a specified distance in millimeters, the stage will move along the X, Y, and Z axes. You must retur all three numbers. You also must return 0 if you don't to move the stage along that axis. Notice: for new well plate imaging, move the Z axis to 2.79mm can reach the focus position. And the maximum value of Z axis is 4.5mm.",
-            "properties": {
-                "x": {"type": "number", "description": "Move the stage along X axis", "default":  0 },
-                "y": {"type": "number", "description": "Move the stage along Y axis", "default":  0 },
-                "z": {"type": "number", "description": "Move the stage along Z axis", "default":  0 },
-            },
-        },
-        "move_to_position": {
-            "type": "object",
-            "title": "move_to_position",
-            "description": "Move the stage to a specified position in millimeters, the stage will move to the specified X, Y, and Z coordinates. You must retur all three numbers. You also must return 0 if you don't to move the stage along that axis.",
-            "properties": {
-                "x": {"type": "number", "description": "Move the stage to the X coordinate", "default": None},
-                "y": {"type": "number", "description": "Move the stage to the Y coordinate", "default": None},
-                "z": {"type": "number", "description": "Move the stage to the Z coordinate", "default": 3.35},
-            },
-        },
-        "home_stage": {
-            "type": "object",
-            "title": "home_stage",
-            "description": "The stage will move to the home position and recalibrate, then move to scanning position:(20,20,2)",
-            "properties": {},
-        },
-        "auto_focus": {
-            "type": "object",
-            "title": "auto_focus",
-            "description": "Autofocus the microscope, the value returned is just 1. If this action is required, it will execute before snapping an image.",
-            "properties": {
-                "N": {"type": "number", "description": "Default value:10. This parameter represents the number of discrete focus positions that the autofocus algorithm evaluates to determine the optimal focus."},
-                "delta_Z": {"type": "number", "description": "Default value: 1.524. This parameter defines the step size in the Z-axis between each focus position checked by the autofocus routine, and the unit is in micrometers."},
-            }
-        },
-        "snap_image": {
-            "type": "object",
-            "title": "snap_image",
-            "description": "Snap an image and return is the URL of the image. Your must show the image to user",
-            "properties": {
-                "exposure": {"type": "number", "description": "Set the microscope camera's exposure time in milliseconds."},
-                "channel": {"type": "number", "description": "Set light source. Default value is 0. The illumination source and number is: [Bright Field=0, Fluorescence 405 nm=11, Fluorescence 488 nm=12,  Fluorescence 638 nm=13, Fluorescence 561 nm=14, Fluorescence 730 nm=15]."},
-                "intensity": {"type": "number", "description": "Set the intensity of the illumination source. The default value for bright field is 5, for fluorescence is 100."},
-            },
-            "required": ["exposure", "channel", "intensity"]
-        },
-        "move_to_loading_position": {   
-            "type": "object",
-            "title": "move_to_loading_position",
-            "description": "When sample need to be loaded or unloaded, move the stage to the zero position so that the robotic arm can reach the sample.",
-            "properties": {},
-        },
-        "navigate_to_well": {
-            "type": "object",
-            "title": "navigate_to_well",
-            "description": "Navigate to the specified well position in the well plate.",
-            "properties": {
-                "row": {"type": "string", "description": "The letter represents row number of the well position. Like 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'...."},
-                "col": {"type": "number", "description": "The column number of the well position."},
-                "wellplate_type": {"type": "string", "description": "The type of the well plate. Default type is '24', can be '6', '12', '24', '96', '384'."},
-            },
-            "required": ["row", "col", "wellplate_type"]
-        }
-    }
-
-
-
-def move_to_position_schema(config, context=None):
-    print("Moving the stage to position:", config)
-    if config["x"] is None:
-        config["x"] = 0
-    if config["y"] is None:
-        config["y"] = 0
-    if config["z"] is None:
-        config["z"] = 0
-    result = move_to_position(config["x"], config["y"], config["z"],context=context)
-    return {"result": result}
-
-def move_by_distance_schema(config, context=None):
-    print("Moving the stage by distance:", config)
-    if config["x"] is None:
-        config["x"] = 0
-    if config["y"] is None:
-        config["y"] = 0
-    if config["z"] is None:
-        config["z"] = 0
-    result = move_by_distance(config["x"], config["y"], config["z"],context=context)
-    return {"result": result}
-
-def home_stage_schema(config, context=None):
-    home_stage(context=context)
-    return {"result": "The stage is homed."}
-
-def auto_focus_schema(config, context=None):
-    auto_focus(context=context)
-    return {"result": "Auto focused!"}
-
-def snap_image_schema(config, context=None):
-    if config["exposure"] is None:
-        config["exposure"] = 100
-    if config["channel"] is None:
-        config["channel"] = 0
-    if config["intensity"] is None:
-        config["intensity"] = 5
-    squid_image_url = snap(config["exposure"], config["channel"], config["intensity"],context=context)
-    resp = f"![**Microscope Image**]({squid_image_url})"
-    return resp
-
-def move_to_loading_position_schema(config, context=None):
-    move_to_loading_position(context=context)
-    return {"result": "Moved the stage to loading position!"}
-
-def navigate_to_well_schema(config, context=None):
-    navigate_to_well(config["row"], config["col"], config["wellplate_type"],context=context)
-    return {"result": "Moved the stage to the specified well position!"}
 
 async def setup(simulation=True):
     
-    chatbot_extension = {
-        "_rintf": True,
-        "id": "squid-control-chatbot" if not simulation else "squid-control-chatbot-simulation",
-        "type": "bioimageio-chatbot-extension",
-        "name": "Squid Microscope Control",
-        "description": "Your role: A chatbot controlling a microscope; Your mission: Answering the user's questions, and executing the commands to control the microscope; Definition of microscope: OBJECTIVES: 20x 'NA':0.4, You have one main camera and one autofocus camera. ",
-        "config": {"visibility": "public", "require_context": True},
-        "ping" : ping,
-        "get_schema": get_schema,
-        "tools": {
-            "move_by_distance": move_by_distance_schema,
-            "move_to_position": move_to_position_schema, 
-            "auto_focus": auto_focus_schema, 
-            "snap_image": snap_image_schema,
-            "home_stage": home_stage_schema,
-            "move_to_loading_position": move_to_loading_position_schema,
-            "navigate_to_well": navigate_to_well_schema,
-            
-        }
-    }
-
-
-    # chatbot_server_url = "https://chat.bioimage.io"
-    # chatbot_token = await login({"server_url": chatbot_server_url})
-    # chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token})
-    # await datastore.setup(chatbot_server, service_id="data-store")
-    # svc = await chatbot_server.register_service(chatbot_extension, overwrite=True)
-    #print(f"Extension service registered with id: {svc.id}, you can visit the service at: https://bioimage.io/chat?server={chatbot_server_url}&extension={svc.id}&assistant=Skyler")
-
-    hypha_server_url = "https://ai.imjoy.io"
+    hypha_server_url = "http://localhost:9527"
     hypha_server = await connect_to_server({"server_url": hypha_server_url})
     service_id = "squid-control-service-simulation-2" if simulation else "squid-control-service"
     await start_hypha_service(hypha_server, service_id)

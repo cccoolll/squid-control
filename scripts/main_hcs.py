@@ -22,7 +22,6 @@ from squid_control.control.widgets import (
     ConfigEditorForAcquisitions,
 )
 
-from squid_control.control._def import CACHED_CONFIG_FILE_PATH
 
 import glob
 
@@ -46,8 +45,7 @@ def show_acq_config(cfm):
 if __name__ == "__main__":
     cf_editor_parser = ConfigParser()
     config_files = glob.glob("." + "/" + "configuration*.ini")
-    if config_files:
-        cf_editor_parser.read(CACHED_CONFIG_FILE_PATH)
+
     app = QApplication([])
     app.setStyle("Fusion")
     if args.simulation:

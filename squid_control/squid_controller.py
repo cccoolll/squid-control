@@ -415,7 +415,7 @@ class SquidController:
     def move_by_distance_limited(self, dx, dy, dz):
         x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
-        self.navigationController.move_x_to_limited(dx)
+        self.navigationController.move_x_limited(dx)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
         self.navigationController.move_y_limited(dy)
@@ -495,7 +495,7 @@ class SquidController:
                 print('z return timeout, the program will exit')
                 exit()
 
-    def snap_image(self, channel,intensity, exposure_time):
+    def snap_image(self, channel=0,intensity=100, exposure_time=100):
         self.camera.set_exposure_time(exposure_time)
         self.liveController.set_illumination(channel,intensity)
         self.liveController.turn_on_illumination()
