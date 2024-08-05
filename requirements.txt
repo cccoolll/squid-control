@@ -21,3 +21,4 @@ aicsimageio
 basicpy
 imjoy-rpc
 av
+openai
