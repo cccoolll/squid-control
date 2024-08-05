@@ -11,6 +11,11 @@ from squid_control.control.camera import TriggerModeSetting
 from scipy.ndimage import gaussian_filter
 from PIL import Image
 import os
+<<<<<<< HEAD
+=======
+script_dir = os.path.dirname(__file__)
+
+>>>>>>> d96f891 (🛠️refactor(camera) update image paths and add script directory handling)
 def get_sn_by_model(model_name):
     try:
         device_manager = gx.DeviceManager()
@@ -588,12 +593,18 @@ class Camera_Simulation(object):
         self.frame_ID += 1
         self.timestamp = time.time()
 
+<<<<<<< HEAD
         script_dir = os.path.dirname(__file__)
         
         # Construct the full path to the image file
         image_path = os.path.join(script_dir, 'simulated_microscope_images', self.image_paths[channel])
+=======
+        
+        # Construct the full path to the image file
+>>>>>>> d96f891 (🛠️refactor(camera) update image paths and add script directory handling)
         # Load image based on channel or generate random image
         if channel in self.channels:
+            image_path = os.path.join(script_dir, 'simulated_microscope_images', self.image_paths[channel])
             # Load 8-bit BMP image
             with Image.open(image_path) as img:
                 self.image = np.array(img)

@@ -501,12 +501,10 @@ class SquidController:
         self.liveController.turn_on_illumination()
         while self.microcontroller.is_busy():
             time.sleep(0.05)
-        self.camera.send_trigger()
-        while self.microcontroller.is_busy():
-            time.sleep(0.05)
         
         if self.is_simulation:
             # Read current position
+            print('Getting simulated image')
             current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
             # Calculate dx and dy
             if self.first_snap:
@@ -520,16 +518,20 @@ class SquidController:
             # Update previous position
             self.previous_x = current_x
             self.previous_y = current_y
-            gray_img = self.camera.read_frame(dx,dy,current_z,channel,intensity,exposure_time)
+            print("In simulation mode, dx, dy, current_z, channel, intensity, exposure_time: ", dx, dy, current_z, channel, intensity, exposure_time)
+            self.camera.send_trigger(dx,dy,current_z,channel,intensity,exposure_time)
         else:
-            gray_img = self.camera.read_frame()
+            self.camera.send_trigger()
         time.sleep(0.05)
+        
         #self.liveController.set_illumination(0,0)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
+        gray_img=self.camera.read_frame()
         self.liveController.turn_off_illumination()
         while self.microcontroller.is_busy():
             time.sleep(0.005)
+
         return gray_img
 
     def close(self):
