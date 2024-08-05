@@ -32,7 +32,7 @@ import glob
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "--simulation", help="Run the GUI with simulated hardware.", action="store_true"
+    "--nosimulation", help="Run the GUI with simulated hardware.", action="store_true"
 )
 args = parser.parse_args()
 
@@ -53,10 +53,10 @@ if __name__ == "__main__":
 
     app = QApplication([])
     app.setStyle("Fusion")
-    if args.simulation:
-        win = gui.OctopiGUI(is_simulation=True)
+    if args.nosimulation:
+        win = gui.OctopiGUI(is_simulation=False)
     else:
-        win = gui.OctopiGUI()
+        win = gui.OctopiGUI(is_simulation=True)
 
     acq_config_action = QAction("Acquisition Settings", win)
     acq_config_action.triggered.connect(

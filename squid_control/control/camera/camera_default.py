@@ -10,7 +10,7 @@ from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting
 from scipy.ndimage import gaussian_filter
 from PIL import Image
-
+import os
 def get_sn_by_model(model_name):
     try:
         device_manager = gx.DeviceManager()
@@ -522,15 +522,14 @@ class Camera_Simulation(object):
         self.simulated_focus = 3.3
         self.channels = [0, 11, 12, 14, 13, 15]
         self.image_paths = {
-            0: 'simulated_microscope_images/LED.bmp',
-            11: 'simulated_microscope_images/405nm.bmp',
-            12: 'simulated_microscope_images/488nm.bmp',
-            14: 'simulated_microscope_images/561nm.bmp',
-            13: 'simulated_microscope_images/638nm.bmp',
-            15: 'simulated_microscope_images/730nm.bmp'
+            0: 'LED.bmp',
+            11: '405nm.bmp',
+            12: '488nm.bmp',
+            14: '561nm.bmp',
+            13: '638nm.bmp',
+            15: '730nm.bmp'
         }
         self.image_size= (2000,2000)
-
 
     def open(self, index=0):
         pass
@@ -585,14 +584,18 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    def send_trigger(self, dx=0, dy=0, z=3.3, channel='LED', intensity=100, exposure_time=100):
+    def send_trigger(self, dx=0, dy=0, z=3.3, channel=0, intensity=100, exposure_time=100):
         self.frame_ID += 1
         self.timestamp = time.time()
 
+        script_dir = os.path.dirname(__file__)
+        
+        # Construct the full path to the image file
+        image_path = os.path.join(script_dir, 'simulated_microscope_images', self.image_paths[channel])
         # Load image based on channel or generate random image
         if channel in self.channels:
             # Load 8-bit BMP image
-            with Image.open(self.image_paths[channel]) as img:
+            with Image.open(image_path) as img:
                 self.image = np.array(img)
         else:
             # Generate random 8-bit image
