@@ -32,9 +32,9 @@ class SquidController:
         #load objects
         self.objectiveStore = core.ObjectiveStore()
         camera, camera_fc = get_camera(CONFIG.CAMERA_TYPE)
-
+        self.is_simulation = is_simulation
         # load objects
-        if is_simulation:
+        if self.is_simulation:
             if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL:
                 self.xlight = serial_peripherals.XLight_Simulation()
             if CONFIG.SUPPORT_LASER_AUTOFOCUS:
@@ -411,7 +411,7 @@ class SquidController:
     def move_by_distance_limited(self, dx, dy, dz):
         x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
-        self.navigationController.move_x_to_limited(dx)
+        self.navigationController.move_x_limited(dx)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
         self.navigationController.move_y_limited(dy)
@@ -490,6 +490,38 @@ class SquidController:
             if time.time() - t0 > 5:
                 print('z return timeout, the program will exit')
                 exit()
+
+    def snap_image(self, channel=0,intensity=100, exposure_time=100):
+        self.camera.set_exposure_time(exposure_time)
+        self.liveController.set_illumination(channel,intensity)
+        self.liveController.turn_on_illumination()
+        while self.microcontroller.is_busy():
+            time.sleep(0.05)
+        
+        if self.is_simulation:
+            # Read current position
+            print('Getting simulated image')
+            current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+            # Calculate dx, dy, and dz
+            dx = current_x - SIMULATED_CAMERA.ORIN_X
+            dy = current_y - SIMULATED_CAMERA.ORIN_Y
+            dz = current_z - SIMULATED_CAMERA.ORIN_Z
+            magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
+            self.camera.send_trigger(dx,dy,dz,channel,intensity,exposure_time,magnification_factor)
+            print(f'For simulated camera, dx={dx}, dy={dy}, dz={dz},exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}')
+        else:
+            self.camera.send_trigger()
+        time.sleep(0.05)
+        
+        #self.liveController.set_illumination(0,0)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        gray_img=self.camera.read_frame()
+        self.liveController.turn_off_illumination()
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+
+        return gray_img
 
     def close(self):
 

@@ -705,3 +705,13 @@ class WELLPLATE_FORMAT_6:
     WELL_SPACING_MM = 39.2
     A1_X_MM = 24.55
     A1_Y_MM = 23.01
+
+
+
+#For simulated camera
+class SIMULATED_CAMERA:
+    ORIN_X = 20
+    ORIN_Y = 20
+    ORIN_Z = 3.354
+    MAGNIFICATION_FACTOR = 80
+    
