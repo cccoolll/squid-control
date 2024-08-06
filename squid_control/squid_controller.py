@@ -29,10 +29,6 @@ class SquidController:
     def __init__(self,is_simulation, *args, **kwargs):
         super().__init__(*args,**kwargs)
         self.data_channel = None
-        #parameters for the camera simulation
-        self.previous_x = 0
-        self.previous_y = 0
-        self.first_snap = True 
         #load objects
         self.objectiveStore = core.ObjectiveStore()
         camera, camera_fc = get_camera(CONFIG.CAMERA_TYPE)
@@ -495,7 +491,7 @@ class SquidController:
                 print('z return timeout, the program will exit')
                 exit()
 
-    def snap_image(self, channel=0,intensity=100, exposure_time=100):
+    def snap_image(self, channel=0,intensity=100, exposure_time=100,magnification=20):
         self.camera.set_exposure_time(exposure_time)
         self.liveController.set_illumination(channel,intensity)
         self.liveController.turn_on_illumination()
@@ -506,20 +502,12 @@ class SquidController:
             # Read current position
             print('Getting simulated image')
             current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
-            # Calculate dx and dy
-            if self.first_snap:
-                dx = 0
-                dy = 0
-                self.first_snap = False
-            else:
-                dx = current_x - self.previous_x
-                dy = current_y - self.previous_y
-            
-            # Update previous position
-            self.previous_x = current_x
-            self.previous_y = current_y
-            print("In simulation mode, dx, dy, current_z, channel, intensity, exposure_time: ", dx, dy, current_z, channel, intensity, exposure_time)
-            self.camera.send_trigger(dx,dy,current_z,channel,intensity,exposure_time)
+            # Calculate dx, dy, and dz
+            dx = current_x - SIMULATED_CAMERA.ORIN_X
+            dy = current_y - SIMULATED_CAMERA.ORIN_Y
+            dz = current_z - SIMULATED_CAMERA.ORIN_Z
+            self.camera.send_trigger(dx,dy,dz,channel,intensity,exposure_time,magnification)
+            print(f'For simulated camera, dx={dx}, dy={dy}, dz={dz},exposure_time={exposure_time}, intensity={intensity}, magnification={magnification}')
         else:
             self.camera.send_trigger()
         time.sleep(0.05)

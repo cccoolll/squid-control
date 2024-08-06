@@ -586,9 +586,10 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    def send_trigger(self, dx=0, dy=0, z=3.3, channel=0, intensity=100, exposure_time=100):
+    def send_trigger(self, dx=0, dy=0, dz=0, channel=0, intensity=100, exposure_time=100,magnification=20):
         self.frame_ID += 1
         self.timestamp = time.time()
+        blur_intensity = 6
 
         
         # Construct the full path to the image file
@@ -604,7 +605,7 @@ class Camera_Simulation(object):
 
         # Simulate intensity and exposure time
         exposure_factor = exposure_time / 100  # Normalize to 100ms
-        intensity_factor = intensity / 100  # Normalize to 0-1 range
+        intensity_factor = intensity / 60  # Normalize to 0-1 range
         self.image = np.clip(self.image * exposure_factor * intensity_factor, 0, 255).astype(np.uint8)
 
         # Process the image based on pixel format
@@ -615,16 +616,23 @@ class Camera_Simulation(object):
         elif self.pixel_format == "MONO16":
             self.current_frame = (self.image.astype(np.uint16) * 256).astype(np.uint16)
 
+
+        dx = dx * magnification
+        dy = dy * magnification    
+        # Convert dx and dy to integers
+        dx_int = int(round(dx))
+        dy_int = int(round(dy))
+
         # Apply stage movement
-        if dx != 0:
-            self.current_frame = np.roll(self.current_frame, dx, axis=1)
-        if dy != 0:
-            self.current_frame = np.roll(self.current_frame, dy, axis=0)
+        if dx_int != 0:
+            self.current_frame = np.roll(self.current_frame, dx_int, axis=1)
+        if dy_int != 0:
+            self.current_frame = np.roll(self.current_frame, dy_int, axis=0)
 
         # Apply focus effect
-        focus_distance = abs(self.simulated_focus - z)
+        focus_distance = abs(dz)
         if focus_distance > 0:
-            sigma = focus_distance * 5  # Adjust this factor to control blur intensity
+            sigma = focus_distance * blur_intensity  # Adjust this factor to control blur intensity
             self.current_frame = gaussian_filter(self.current_frame, sigma=sigma)
 
         if self.new_image_callback_external is not None and self.callback_is_enabled:
