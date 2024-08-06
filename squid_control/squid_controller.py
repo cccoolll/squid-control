@@ -491,7 +491,7 @@ class SquidController:
                 print('z return timeout, the program will exit')
                 exit()
 
-    def snap_image(self, channel=0,intensity=100, exposure_time=100,magnification=20):
+    def snap_image(self, channel=0,intensity=100, exposure_time=100):
         self.camera.set_exposure_time(exposure_time)
         self.liveController.set_illumination(channel,intensity)
         self.liveController.turn_on_illumination()
@@ -506,8 +506,9 @@ class SquidController:
             dx = current_x - SIMULATED_CAMERA.ORIN_X
             dy = current_y - SIMULATED_CAMERA.ORIN_Y
             dz = current_z - SIMULATED_CAMERA.ORIN_Z
-            self.camera.send_trigger(dx,dy,dz,channel,intensity,exposure_time,magnification)
-            print(f'For simulated camera, dx={dx}, dy={dy}, dz={dz},exposure_time={exposure_time}, intensity={intensity}, magnification={magnification}')
+            magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
+            self.camera.send_trigger(dx,dy,dz,channel,intensity,exposure_time,magnification_factor)
+            print(f'For simulated camera, dx={dx}, dy={dy}, dz={dz},exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}')
         else:
             self.camera.send_trigger()
         time.sleep(0.05)

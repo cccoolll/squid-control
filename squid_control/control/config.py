@@ -713,4 +713,5 @@ class SIMULATED_CAMERA:
     ORIN_X = 20
     ORIN_Y = 20
     ORIN_Z = 3.354
+    MAGNIFICATION_FACTOR = 80
     

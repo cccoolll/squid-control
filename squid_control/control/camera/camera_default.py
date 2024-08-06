@@ -522,14 +522,13 @@ class Camera_Simulation(object):
         
         # simulated camera values
         self.simulated_focus = 3.3
-        self.channels = [0, 11, 12, 14, 13, 15]
+        self.channels = [0, 11, 12, 14, 13]
         self.image_paths = {
             0: 'LED.bmp',
             11: '405nm.bmp',
             12: '488nm.bmp',
             14: '561nm.bmp',
             13: '638nm.bmp',
-            15: '730nm.bmp'
         }
         self.image_size= (2000,2000)
 
@@ -586,7 +585,7 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    def send_trigger(self, dx=0, dy=0, dz=0, channel=0, intensity=100, exposure_time=100,magnification=20):
+    def send_trigger(self, dx=0, dy=0, dz=0, channel=0, intensity=100, exposure_time=100,magnification_factor=20):
         self.frame_ID += 1
         self.timestamp = time.time()
         blur_intensity = 6
@@ -617,8 +616,8 @@ class Camera_Simulation(object):
             self.current_frame = (self.image.astype(np.uint16) * 256).astype(np.uint16)
 
 
-        dx = dx * magnification
-        dy = dy * magnification    
+        dx = dx * magnification_factor
+        dy = dy * magnification_factor    
         # Convert dx and dy to integers
         dx_int = int(round(dx))
         dy_int = int(round(dy))
