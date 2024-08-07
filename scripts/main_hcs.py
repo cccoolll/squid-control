@@ -21,7 +21,7 @@ sys.path.insert(0, parent_dir)
 # app specific libraries
 import squid_control.control.gui_hcs as gui
 
-from configparser import ConfigParser
+from configparser import ConfigParsers
 from squid_control.control.widgets import (
     ConfigEditorBackwardsCompatible,
     ConfigEditorForAcquisitions,
@@ -32,7 +32,7 @@ import glob
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "--nosimulation", help="Run the GUI with simulated hardware.", action="store_true"
+    "--simulation", help="Run the GUI with simulated hardware.", action="store_true"
 )
 args = parser.parse_args()
 
@@ -53,10 +53,10 @@ if __name__ == "__main__":
 
     app = QApplication([])
     app.setStyle("Fusion")
-    if args.nosimulation:
-        win = gui.OctopiGUI(is_simulation=False)
-    else:
+    if args.simulation:
         win = gui.OctopiGUI(is_simulation=True)
+    else:
+        win = gui.OctopiGUI(is_simulation=False)
 
     acq_config_action = QAction("Acquisition Settings", win)
     acq_config_action.triggered.connect(
