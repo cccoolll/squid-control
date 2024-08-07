@@ -592,8 +592,8 @@ CONFIG = BaseConfig()
 def load_config(config_path, multipoint_function):
     global CONFIG
 
-    config_dir = os.path.abspath(__file__)
-    config_dir = Path(config_dir)
+    config_dir = Path(os.path.abspath(__file__))
+
 
     current_dir = Path(__file__).parent
     if not str(config_path).endswith(".ini"):
