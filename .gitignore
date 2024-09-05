@@ -168,7 +168,6 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-cache_config_file_path.txt
 configuration_HCS_v2.ini
 squid_control/control/config2.py
 
