@@ -525,10 +525,10 @@ class Camera_Simulation(object):
         self.channels = [0, 11, 12, 14, 13]
         self.image_paths = {
             0: 'LED.bmp',
-            11: '405nm.bmp',
-            12: '488nm.bmp',
-            14: '561nm.bmp',
-            13: '638nm.bmp',
+            11: '405nm.png',
+            12: '488nm.png',
+            14: '561nm.png',
+            13: '638nm.png',
         }
         self.image_size= (2000,2000)
 
@@ -595,9 +595,11 @@ class Camera_Simulation(object):
         # Load image based on channel or generate random image
         if channel in self.channels:
             image_path = os.path.join(script_dir, 'simulated_microscope_images', self.image_paths[channel])
-            # Load 8-bit BMP image
+            # Load 8-bit image
             with Image.open(image_path) as img:
                 self.image = np.array(img)
+            #normalize to 8-bit
+            self.image = (self.image - self.image.min()) / (self.image.max() - self.image.min()) * 255
         else:
             # Generate random 8-bit image
             self.image = np.random.randint(0, 256, self.image_size, dtype=np.uint8)

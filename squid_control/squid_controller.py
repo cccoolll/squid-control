@@ -283,7 +283,13 @@ class SquidController:
         self.navigationController.set_y_limit_pos_mm(CONFIG.SOFTWARE_POS_LIMIT.Y_POSITIVE)
         self.navigationController.set_y_limit_neg_mm(CONFIG.SOFTWARE_POS_LIMIT.Y_NEGATIVE)
 
-
+        # set the default infomation, this will be used for the simulated camera
+        self.dx = 0
+        self.dy = 0
+        self.dz = 0
+        self.current_channel = 0
+        self.current_expousre_time = 100
+        self.current_intensity = 100
             
     def move_to_scaning_position(self):
         # move to scanning position
@@ -319,13 +325,38 @@ class SquidController:
         # self.autofocusController.set_deltaZ(1.524)
         # self.multipointController.start_new_experiment(action_ID)
         # self.multipointController.run_acquisition_reef(location_list=location_list)
-    
+        
+    def send_trigger_simulation(self, channel=0,intensity=100, exposure_time=100):
+            # Read current position
+            print('Getting simulated image')
+            current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+            # Calculate dx, dy, and dz
+            self.dx = current_x - SIMULATED_CAMERA.ORIN_X
+            self.dy = current_y - SIMULATED_CAMERA.ORIN_Y
+            self.dz = current_z - SIMULATED_CAMERA.ORIN_Z
+            self.current_channel = channel
+            magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
+            self.current_expousre_time = exposure_time
+            self.current_intensity = intensity
+            self.camera.send_trigger(self.dx,self.dy,self.dz,channel,intensity,exposure_time,magnification_factor)
+            print(f'For simulated camera, dx={self.dx}, dy={self.dy}, dz={self.dz},exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}')
+            
     def do_autofocus(self):
-        self.autofocusController.set_deltaZ(1.524)
-        self.autofocusController.set_N(15)
-        self.autofocusController.autofocus()
-        self.autofocusController.wait_till_autofocus_has_completed()
+        
+        if self.is_simulation:
+            self.do_autofocus_simulation()
+        else:
+            self.autofocusController.set_deltaZ(1.524)
+            self.autofocusController.set_N(15)
+            self.autofocusController.autofocus()
+            self.autofocusController.wait_till_autofocus_has_completed()
 
+    def do_autofocus_simulation(self):
+        
+        random_z = 3.1+ np.random.normal(0,0.1)
+        self.navigationController.move_z_to(random_z)
+        self.send_trigger_simulation(self.current_channel, self.current_intensity, self.current_expousre_time)
+        
     def init_laser_autofocus(self):
         self.laserAutofocusController.initialize_auto()
     
@@ -499,16 +530,7 @@ class SquidController:
             time.sleep(0.05)
         
         if self.is_simulation:
-            # Read current position
-            print('Getting simulated image')
-            current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
-            # Calculate dx, dy, and dz
-            dx = current_x - SIMULATED_CAMERA.ORIN_X
-            dy = current_y - SIMULATED_CAMERA.ORIN_Y
-            dz = current_z - SIMULATED_CAMERA.ORIN_Z
-            magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
-            self.camera.send_trigger(dx,dy,dz,channel,intensity,exposure_time,magnification_factor)
-            print(f'For simulated camera, dx={dx}, dy={dy}, dz={dz},exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}')
+            self.send_trigger_simulation(channel,intensity,exposure_time)
         else:
             self.camera.send_trigger()
         time.sleep(0.05)
