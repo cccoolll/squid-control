@@ -290,6 +290,8 @@ class SquidController:
         self.current_channel = 0
         self.current_expousre_time = 100
         self.current_intensity = 100
+        self.recorded_x, self.recorded_y, self.recorded_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+
             
     def move_to_scaning_position(self):
         # move to scanning position
@@ -331,9 +333,10 @@ class SquidController:
             print('Getting simulated image')
             current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
             # Calculate dx, dy, and dz
-            self.dx = current_x - SIMULATED_CAMERA.ORIN_X
-            self.dy = current_y - SIMULATED_CAMERA.ORIN_Y
+            self.dx = current_x - self.recorded_x
+            self.dy = current_y - self.recorded_y
             self.dz = current_z - SIMULATED_CAMERA.ORIN_Z
+            self.recorded_x,self.recorded_y,self.recorded_z = current_x, current_y, current_z
             self.current_channel = channel
             magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
             self.current_expousre_time = exposure_time
