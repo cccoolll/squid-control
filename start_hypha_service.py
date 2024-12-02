@@ -12,12 +12,6 @@ import json
 import cv2
 
 import sys
-# Get the absolute path to the directory where squid_control is located
-workspace_path = os.path.abspath('reef_imaging')
-sys.path.append(workspace_path)
-squid_control_path = os.path.abspath('reef_imaging/control/squid_microscope/squid-control')
-sys.path.append(squid_control_path)
-print(f"Added {squid_control_path} to sys.path")
 # Now you can import squid_control
 from squid_control.squid_controller import SquidController
 from pydantic import Field, BaseModel
