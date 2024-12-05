@@ -14,6 +14,7 @@ import base64
 import io
 from PIL import Image
 import threading
+from image_stitching import compute_overlap_percent, rotate_flip_image, load_imaging_parameters, get_image_positions
 # Global variable to hold the latest canvas
 latest_canvas = None
 
@@ -44,56 +45,6 @@ def start_websocket_server():
     print("WebSocket server started on ws://0.0.0.0:8765")
     asyncio.get_event_loop().run_forever()
     
-def compute_overlap_percent(deltaX, deltaY, image_width, image_height, pixel_size_xy, min_overlap=0):
-    """Helper function to calculate percent overlap between images in a grid."""
-    shift_x = deltaX / pixel_size_xy
-    shift_y = deltaY / pixel_size_xy
-    overlap_x = max(0, image_width - shift_x)
-    overlap_y = max(0, image_height - shift_y)
-    overlap_x = overlap_x * 100.0 / image_width
-    overlap_y = overlap_y * 100.0 / image_height
-    overlap = max(min_overlap, overlap_x, overlap_y)
-    return overlap
-
-def get_pixel_size(parameters, default_pixel_size=1.85, default_tube_lens_mm=50.0, default_objective_tube_lens_mm=180.0, default_magnification=40.0):
-    """Calculate pixel size based on imaging parameters."""
-    try:
-        tube_lens_mm = float(parameters.get('tube_lens_mm', default_tube_lens_mm))
-        pixel_size_um = float(parameters.get('sensor_pixel_size_um', default_pixel_size))
-        objective_tube_lens_mm = float(parameters['objective'].get('tube_lens_f_mm', default_objective_tube_lens_mm))
-        magnification = float(parameters['objective'].get('magnification', default_magnification))
-    except KeyError:
-        raise ValueError("Missing required parameters for pixel size calculation.")
-
-    pixel_size_xy = pixel_size_um / (magnification / (objective_tube_lens_mm / tube_lens_mm))
-    return pixel_size_xy
-
-def rotate_flip_image(image, angle, flip=False):
-    """Rotate an image by a specified angle."""
-    (h, w) = image.shape[:2]
-    center = (w // 2, h // 2)
-
-    # Get the rotation matrix
-    rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-
-    # Perform the rotation
-    rotated = cv2.warpAffine(image, rotation_matrix, (w, h))
-    if flip:
-        rotated = cv2.flip(rotated, 1)
-    return rotated
-
-def load_imaging_parameters(parameter_file):
-    with open(parameter_file, "r") as f:
-        parameters = json.load(f)
-    return parameters
-
-def get_image_positions(parameters):
-    dx = parameters["dx(mm)"] * 1000  # Convert mm to µm
-    dy = parameters["dy(mm)"] * 1000  # Convert mm to µm
-    Nx = parameters["Nx"]
-    Ny = parameters["Ny"]
-    pixel_size_xy = get_pixel_size(parameters)
-    return dx, dy, Nx, Ny, pixel_size_xy
 
 def parse_image_filenames(image_folder):
     image_files = glob(os.path.join(image_folder, "*.bmp"))
