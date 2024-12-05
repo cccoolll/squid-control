@@ -1,171 +1,104 @@
-import os
-import cv2
-import numpy as np
-from glob import glob
-import json
-from tqdm import tqdm
-import zarr
-from skimage.transform import downscale_local_mean
-from ome_zarr.io import parse_url
-from ome_zarr.writer import write_multiscale
-import asyncio
-import websockets
-import base64
-import io
-from PIL import Image
-import threading
-from image_stitching import compute_overlap_percent, rotate_flip_image, load_imaging_parameters, get_image_positions
-# Global variable to hold the latest canvas
-latest_canvas = None
+import os  
+import math  
+import numpy as np  
+import zarr  
+from flask import Flask, send_file, request, abort, jsonify  
+from io import BytesIO  
+from PIL import Image  
 
-async def websocket_server(websocket, path):
-    """WebSocket server to stream stitched image data."""
-    global latest_canvas
-    while True:
-        if latest_canvas is not None:
-            # Convert the canvas to a PNG image
-            pil_image = Image.fromarray(latest_canvas)
-            buffer = io.BytesIO()
-            pil_image.save(buffer, format="PNG")
-            buffer.seek(0)
+app = Flask(__name__)  
 
-            # Encode the image as base64
-            image_data = base64.b64encode(buffer.read()).decode('utf-8')
+# Path to the folder containing Zarr files  
+ZARR_FOLDER = "/media/reef/harddisk/test_stitching/ome_ngff_output"  
 
-            # Send the base64-encoded image to the client
-            await websocket.send(image_data)
+def get_tile_from_zarr(zarr_path, z, x, y):  
+    """  
+    Fetch a tile from the Zarr file based on the z, x, y parameters.  
 
-        # Wait for a short interval before sending the next update
-        await asyncio.sleep(0.5)
+    Parameters:  
+        zarr_path (str): Path to the Zarr file.  
+        z (int): Zoom level.  
+        x (int): Tile x-coordinate.  
+        y (int): Tile y-coordinate.  
 
-def start_websocket_server():
-    """Start the WebSocket server."""
-    server = websockets.serve(websocket_server, "0.0.0.0", 8765)
-    asyncio.get_event_loop().run_until_complete(server)
-    print("WebSocket server started on ws://0.0.0.0:8765")
-    asyncio.get_event_loop().run_forever()
-    
+    Returns:  
+        BytesIO: The image tile as a PNG in memory.  
+    """  
+    # Open the Zarr file  
+    zarr_group = zarr.open_group(zarr_path, mode="r")  
 
-def parse_image_filenames(image_folder):
-    image_files = glob(os.path.join(image_folder, "*.bmp"))
-    image_info = []
-    channels = set()
+    # Check if the requested zoom level exists  
+    scale_key = f"scale{z}"  
+    if scale_key not in zarr_group:  
+        raise ValueError(f"Zoom level {z} not found in Zarr file.")  
 
-    for image_file in image_files:
-        filename = os.path.basename(image_file)
-        parts = filename.split('_')
-        if len(parts) >= 6:
-            R, x_idx, y_idx, z_idx, channel_name = parts[0], parts[1], parts[2], parts[3], '_'.join(parts[4:-1])
-            extension = parts[-1]
-            channels.add(channel_name)
-            image_info.append({
-                "filepath": image_file,
-                "x_idx": int(x_idx),
-                "y_idx": int(y_idx),
-                "z_idx": int(z_idx),
-                "channel_name": channel_name,
-                "extension": extension
-            })
-    return image_info, list(channels)
+    # Get the dataset for the requested zoom level  
+    dataset = zarr_group[scale_key]  
 
-def initialize_ome_ngff(output_folder, channel_name, canvas_height, canvas_width):
-    """Initialize an OME-NGFF dataset for multiscale tiled data."""
-    zarr_path = os.path.join(output_folder, f"stitched_{channel_name}.zarr")
-    store = parse_url(zarr_path, mode="w").store
-    return store
+    # Calculate the tile size (assuming 256x256 tiles)  
+    tile_size = 256  
 
-def stream_images_to_ome_ngff(channel_name, image_info, parameters, store, rotation_angle=0):
-    """Stream images into the OME-NGFF dataset dynamically."""
-    dx, dy, Nx, Ny, pixel_size_xy = get_image_positions(parameters)
+    # Calculate the pixel range for the requested tile  
+    x_start = x * tile_size  
+    x_end = (x + 1) * tile_size  
+    y_start = y * tile_size  
+    y_end = (y + 1) * tile_size  
 
-    # Filter images for current channel
-    channel_images = [info for info in image_info if info["channel_name"] == channel_name]
+    # Check if the requested tile is within the dataset bounds  
+    if x_start >= dataset.shape[1] or y_start >= dataset.shape[0]:  
+        raise ValueError("Requested tile is out of bounds.")  
 
-    if not channel_images:
-        return
+    # Clip the tile to the dataset bounds  
+    x_end = min(x_end, dataset.shape[1])  
+    y_end = min(y_end, dataset.shape[0])  
 
-    # Get image dimensions from first image
-    sample_image = cv2.imread(channel_images[0]["filepath"], cv2.IMREAD_GRAYSCALE)
-    img_height, img_width = sample_image.shape
-    overlap_percent = min(100, compute_overlap_percent(dx, dy, img_width, img_height, pixel_size_xy))
+    # Extract the tile data  
+    tile_data = dataset[y_start:y_end, x_start:x_end]  
 
-    # Calculate effective step size (accounting for overlap)
-    x_step = img_width * (1 - overlap_percent / 100)
-    y_step = img_height * (1 - overlap_percent / 100)
+    # Convert the tile data to an image  
+    image = Image.fromarray(tile_data)  
+    image = image.convert("L")  # Convert to grayscale  
 
-    # Initialize full-resolution canvas
-    canvas = np.zeros((Ny * img_height, Nx * img_width), dtype=np.uint16)
+    # Save the image to a BytesIO object as PNG  
+    buffer = BytesIO()  
+    image.save(buffer, format="PNG")  
+    buffer.seek(0)  
 
-    # Update the global canvas for the WebSocket server
-    global latest_canvas
-    latest_canvas = canvas.copy()  # Copy the canvas to avoid threading issues
+    return buffer  
 
-    print(f"OME-NGFF dataset written for channel {channel_name}")
 
-    # Stream images into the canvas
-    for info in tqdm(channel_images, desc=f"Streaming {channel_name}"):
-        x_idx = info["x_idx"]
-        y_idx = info["y_idx"]
+@app.route("/")  
+def index():  
+    """  
+    Serve the main webpage with OpenLayers.  
+    """  
+    return send_file("index.html")  
 
-        # Calculate position on canvas
-        x_pos = round(x_idx * x_step)
-        y_pos = round((Ny - y_idx - 1) * y_step)  # Flip y-axis for canvas
 
-        # Read image and convert to grayscale if it's not already
-        image = cv2.imread(info["filepath"], cv2.IMREAD_GRAYSCALE)
+@app.route("/tile/<channel>/<int:z>/<int:x>/<int:y>.png")  
+def get_tile(channel, z, x, y):  
+    """  
+    Serve a tile for the given channel and z, x, y parameters.  
+    """  
+    try:  
+        # Path to the Zarr file for the requested channel  
+        zarr_path = os.path.join(ZARR_FOLDER, f"{channel}.zarr")  
 
-        # Rotate the image if a rotation angle is specified
-        if rotation_angle != 0:
-            image = rotate_flip_image(image, rotation_angle, flip=True)
+        # Check if the Zarr file exists  
+        if not os.path.exists(zarr_path):  
+            abort(404, description=f"Channel '{channel}' not found.")  
 
-        # Write the image into the canvas
-        canvas[y_pos:y_pos + img_height, x_pos:x_pos + img_width] = image
+        # Fetch the tile from the Zarr file  
+        tile = get_tile_from_zarr(zarr_path, z, x, y)  
 
-    # Generate multiscale data
-    multiscale = [canvas]
-    for scale in [2, 4, 8]:  # Downsample by factors of 2, 4, 8
-        downsampled = downscale_local_mean(canvas, (scale, scale)).astype(np.uint16)
-        multiscale.append(downsampled)
+        # Return the tile as a PNG image  
+        return send_file(tile, mimetype="image/png")  
 
-    # Write multiscale data to OME-NGFF
-    write_multiscale(multiscale, store, axes=["y", "x"])
-    print(f"OME-NGFF dataset written for channel {channel_name}")
+    except ValueError as e:  
+        abort(400, description=str(e))  
+    except Exception as e:  
+        abort(500, description=str(e))  
 
-def main():
-    websocket_thread = threading.Thread(target=start_websocket_server, daemon=True)
-    websocket_thread.start()
 
-    # Paths and parameters
-    image_folder = "/path/to/your/images"
-    parameter_file = os.path.join(image_folder, "acquisition parameters.json")
-    output_folder = "/path/to/output"
-    os.makedirs(output_folder, exist_ok=True)
-
-    # Load imaging parameters
-    parameters = load_imaging_parameters(parameter_file)
-
-    # Parse image filenames and get unique channels
-    image_info, channels = parse_image_filenames(image_folder)
-
-    print(f"Found {len(channels)} channels: {channels}")
-    print(f"Total images: {len(image_info)}")
-
-    # Process each channel separately
-    for channel in channels:
-        try:
-            dx, dy, Nx, Ny, pixel_size_xy = get_image_positions(parameters)
-            img_height, img_width = cv2.imread(image_info[0]["filepath"], cv2.IMREAD_GRAYSCALE).shape
-            canvas_width = int(img_width + (Nx - 1) * img_width * (1 - compute_overlap_percent(dx, dy, img_width, img_height, pixel_size_xy) / 100))
-            canvas_height = int(img_height + (Ny - 1) * img_height * (1 - compute_overlap_percent(dx, dy, img_width, img_height, pixel_size_xy) / 100))
-
-            # Initialize OME-NGFF dataset
-            store = initialize_ome_ngff(output_folder, channel, canvas_height, canvas_width)
-
-            # Stream images into OME-NGFF
-            stream_images_to_ome_ngff(channel, image_info, parameters, store, rotation_angle=90)
-
-        except Exception as e:
-            print(f"Error processing channel {channel}: {str(e)}")
-
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__":  
+    app.run(host="0.0.0.0", port=5000, debug=True)  
