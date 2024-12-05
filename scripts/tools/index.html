@@ -1,0 +1,48 @@
+<!DOCTYPE html>  
+<html lang="en">  
+<head>  
+    <meta charset="UTF-8">  
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">  
+    <title>Map Streaming with OpenLayers</title>  
+    <!-- Correct OpenLayers stylesheet -->  
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">  
+    <!-- Correct OpenLayers script -->  
+    <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>  
+    <style>  
+        #map {  
+            width: 100%;  
+            height: 100vh;  
+        }  
+    </style>  
+</head>  
+<body>  
+    <div id="map"></div>  
+    <script>  
+        // Define the tile source  
+        const tileSource = new ol.source.XYZ({  
+            url: 'http://localhost:5000/tile/{layer}/{z}/{x}/{y}.png',  
+            attributions: 'Map data © OpenLayers',  
+            tileSize: 256,  
+        });  
+
+        // Define the tile layer  
+        const tileLayer = new ol.layer.Tile({  
+            source: tileSource,  
+        });  
+
+        // Create the map  
+        const map = new ol.Map({  
+            target: 'map',  
+            layers: [tileLayer],  
+            view: new ol.View({  
+                center: ol.proj.fromLonLat([0, 0]), // Center the map at [longitude, latitude]  
+                zoom: 0, // Initial zoom level  
+            }),  
+        });  
+
+        // Set the layer name dynamically (e.g., "channel1")  
+        const layerName = "Fluorescence_405_nm"; // Replace with your channel name  
+        tileSource.setUrl(`http://localhost:5000/tile/${layerName}/{z}/{x}/{y}.png`);  
+    </script>  
+</body>  
+</html>  
