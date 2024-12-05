@@ -16,8 +16,8 @@ import sys
 from squid_control.squid_controller import SquidController
 from pydantic import Field, BaseModel
 from typing import List, Optional
-from tools.hypha_storage import HyphaDataStore
-from tools.chatbot.aask import aask
+from hypha_tools.hypha_storage import HyphaDataStore
+from hypha_tools.chatbot.aask import aask
 
 class Microscope:
     def __init__(self, is_simulation=True):
@@ -498,7 +498,7 @@ class Microscope:
     async def setup(self):
         token = await login({"server_url": self.server_url})
         server = await connect_to_server(
-            {"server_url": self.server_url, "token": token}
+            {"server_url": self.server_url, "token": token, "workspace": "agent-lens"}
         )
         await self.start_hypha_service(server, service_id="microscope-control-squid-test")
 
