@@ -24,11 +24,34 @@
     <div id="map"></div>  
 
     <script>  
-        // Define the tile source  
+        // Define the resolutions for each scale (adjust based on your Zarr data)  
+        const resolutions = [  
+            1,       // Scale 0 (most detailed)  
+            1 / 2,   // Scale 1  
+            1 / 4,   // Scale 2  
+            1 / 8,   // Scale 3  
+            1 / 16,  // Scale 4  
+            1 / 32,  // Scale 5  
+            1 / 64,  // Scale 6 (most zoomed-out)  
+        ];  
+
+        // Define the extent of the image (adjust based on the size of scale 0)  
+        const imageWidth = 500; // Width of scale 6  
+        const imageHeight = 500; // Height of scale 6  
+        const extent = [0, 0, imageWidth, imageHeight];  
+
+        // Create a custom tile grid  
+        const tileGrid = new ol.tilegrid.TileGrid({  
+            extent: extent,  
+            resolutions: resolutions, // Resolutions must be in descending order  
+            tileSize: 256, // Tile size (256x256 pixels)  
+        });  
+
+        // Define the tile source with the custom tile grid  
         const tileSource = new ol.source.XYZ({  
-            url: 'http://localhost:5000/tile/{z}/{x}/{y}.png', // Fixed channel URL  
+            url: 'http://localhost:5000/tile/{z}/{x}/{y}.png',  
+            tileGrid: tileGrid,  
             attributions: 'Microscopy Data Viewer',  
-            tileSize: 256,  
         });  
 
         // Define the tile layer  
@@ -38,10 +61,11 @@
 
         // Create the map view  
         const view = new ol.View({  
-            center: [0, 0], // Center the map (adjust as needed)  
-            zoom: 0, // Initial zoom level (most zoomed-out, corresponds to Zarr scale 6)  
-            maxZoom: 6, // Maximum zoom level (corresponds to Zarr scale 0)  
-            minZoom: 0, // Minimum zoom level (corresponds to Zarr scale 6)  
+            center: [imageWidth / 2, imageHeight / 2], // Center the map  
+            zoom: 0, // Initial zoom level (most zoomed-out)  
+            maxZoom: resolutions.length - 1, // Maximum zoom level  
+            minZoom: 0, // Minimum zoom level  
+            resolutions: resolutions, // Use the custom resolutions  
         });  
 
         // Create the map  
