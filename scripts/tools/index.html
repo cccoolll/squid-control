@@ -39,7 +39,9 @@
         // Create the map view  
         const view = new ol.View({  
             center: [0, 0], // Center the map (adjust as needed)  
-            zoom: 0, // Initial zoom level (most zoomed-out)  
+            zoom: 0, // Initial zoom level (most zoomed-out, corresponds to Zarr scale 6)  
+            maxZoom: 6, // Maximum zoom level (corresponds to Zarr scale 0)  
+            minZoom: 0, // Minimum zoom level (corresponds to Zarr scale 6)  
         });  
 
         // Create the map  
