@@ -26,50 +26,67 @@ def get_tile_from_zarr(zarr_path, z, x, y):
     """  
     # Open the Zarr file  
     zarr_group = zarr.open_group(zarr_path, mode="r")  
-  
+
     # Map OpenLayers zoom levels to Zarr scale levels  
     zarr_scales = [key for key in zarr_group.keys() if key.startswith("scale")]  
     zarr_scales.sort(key=lambda s: int(s.replace("scale", "")))  # Sort by scale level  
-  
-    # Ensure the requested zoom level is within bounds  
-    if z < 0 or z >= len(zarr_scales):  
-        return create_blank_tile()  
-  
+
     # Map OpenLayers zoom level to Zarr scale  
-    scale_key = zarr_scales[z]  
-  
+    # Adjust this mapping as needed to match your data  
+    zarr_zoom_mapping = {  
+        0: 6,  # OpenLayers zoom 0 -> Zarr scale 6 (most zoomed-out)  
+        1: 5,  
+        2: 4,  
+        3: 3,  
+        4: 2,  
+        5: 1,  
+        6: 0,  # OpenLayers zoom 6 -> Zarr scale 0 (most detailed)  
+    }  
+
+    # Ensure the requested zoom level is within bounds  
+    if z not in zarr_zoom_mapping:  
+        return create_blank_tile()  
+
+    # Get the corresponding Zarr scale  
+    zarr_scale_index = zarr_zoom_mapping[z]  
+    scale_key = f"scale{zarr_scale_index}"  
+
+    # Ensure the scale exists in the Zarr file  
+    if scale_key not in zarr_group:  
+        return create_blank_tile()  
+
     # Get the dataset for the requested zoom level  
     dataset = zarr_group[scale_key]  
-  
+
     # Calculate the tile size (assuming 256x256 tiles)  
     tile_size = 256  
-  
+
     # Calculate the pixel range for the requested tile  
     x_start = x * tile_size  
     x_end = (x + 1) * tile_size  
     y_start = y * tile_size  
     y_end = (y + 1) * tile_size  
-  
+
     # Check if the requested tile is within the dataset bounds  
     if x_start >= dataset.shape[1] or y_start >= dataset.shape[0]:  
         return create_blank_tile()  
-  
+
     # Clip the tile to the dataset bounds  
     x_end = min(x_end, dataset.shape[1])  
     y_end = min(y_end, dataset.shape[0])  
-  
+
     # Extract the tile data  
     tile_data = dataset[y_start:y_end, x_start:x_end]  
-  
+
     # Convert the tile data to an image  
     image = Image.fromarray(tile_data)  
     image = image.convert("L")  # Convert to grayscale  
-  
+
     # Save the image to a BytesIO object as PNG  
     buffer = BytesIO()  
     image.save(buffer, format="PNG")  
     buffer.seek(0)  
-  
+
     return buffer  
   
 @app.route("/")  
