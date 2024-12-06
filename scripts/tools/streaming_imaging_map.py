@@ -1,5 +1,6 @@
 import os  
-import zarr  
+import zarr
+import numpy as np  
 from flask import Flask, send_file, abort  
 from io import BytesIO  
 from PIL import Image  
@@ -8,7 +9,7 @@ app = Flask(__name__)
   
 # Path to the folder containing Zarr files  
 ZARR_FOLDER = "/media/reef/harddisk/test_stitching/ome_ngff_output/"  
-CHANNEL_NAME = "Fluorescence_405_nm"  # Fixed channel name  
+CHANNEL_NAME = "Fluorescence_561_nm"  # Fixed channel name  
   
 def create_blank_tile(tile_size=256):  
     """  
@@ -27,21 +28,12 @@ def get_tile_from_zarr(zarr_path, z, x, y):
     # Open the Zarr file  
     zarr_group = zarr.open_group(zarr_path, mode="r")  
 
-    # Map OpenLayers zoom levels to Zarr scale levels  
+    # Dynamically determine the number of scales  
     zarr_scales = [key for key in zarr_group.keys() if key.startswith("scale")]  
-    zarr_scales.sort(key=lambda s: int(s.replace("scale", "")))  # Sort by scale level  
+    zarr_scales.sort(key=lambda s: int(s.replace("scale", "")))  
 
-    # Map OpenLayers zoom level to Zarr scale  
-    # Adjust this mapping as needed to match your data  
-    zarr_zoom_mapping = {  
-        0: 6,  # OpenLayers zoom 0 -> Zarr scale 6 (most zoomed-out)  
-        1: 5,  
-        2: 4,  
-        3: 3,  
-        4: 2,  
-        5: 1,  
-        6: 0,  # OpenLayers zoom 6 -> Zarr scale 0 (most detailed)  
-    }  
+    # Map OpenLayers zoom levels to Zarr scales  
+    zarr_zoom_mapping = {i: len(zarr_scales) - 1 - i for i in range(len(zarr_scales))}  
 
     # Ensure the requested zoom level is within bounds  
     if z not in zarr_zoom_mapping:  
@@ -76,7 +68,7 @@ def get_tile_from_zarr(zarr_path, z, x, y):
     y_end = min(y_end, dataset.shape[0])  
 
     # Extract the tile data  
-    tile_data = dataset[y_start:y_end, x_start:x_end]  
+    tile_data = dataset[y_start:y_end, x_start:x_end]
 
     # Convert the tile data to an image  
     image = Image.fromarray(tile_data)  
