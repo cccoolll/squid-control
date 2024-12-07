@@ -16,6 +16,7 @@ dependencies = [
     "opencv-python",
     "lxml",
     "scikit-image",
+    "hypha-rpc",
     "aiortc",
     "pydantic"
 ]
