@@ -169,13 +169,3 @@ cython_debug/
 #.idea/
 
 configuration_HCS_v2.ini
-squid_control/control/config2.py
-
-#webpage files
-node_modules/
-package-lock.json
-package.json
-server.js
-
-#docker files
-Dockerfile
