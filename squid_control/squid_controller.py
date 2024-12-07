@@ -1,0 +1,575 @@
+import os 
+# app specific libraries
+import squid_control.control.core_reef as core
+import squid_control.control.microcontroller as microcontroller
+from squid_control.control.config import *
+from squid_control.control.camera import get_camera
+
+import logging
+import squid_control.control.serial_peripherals as serial_peripherals
+import matplotlib.path as mpath
+if CONFIG.SUPPORT_LASER_AUTOFOCUS:
+    import squid_control.control.core_displacement_measurement as core_displacement_measurement
+
+import time
+
+#using os to set current working directory
+#find the current path
+# path=os.path.abspath(__file__)
+# #find the .ini file in the directory
+# path_ini=os.path.join(os.path.dirname(path),'configuration_HCS_v2.ini')
+# path_ini=Path(path_ini)
+
+
+
+# load_config(path_ini, False)
+class SquidController:
+    fps_software_trigger= 100
+
+    def __init__(self,is_simulation, *args, **kwargs):
+        super().__init__(*args,**kwargs)
+        self.data_channel = None
+        #load objects
+        self.objectiveStore = core.ObjectiveStore()
+        camera, camera_fc = get_camera(CONFIG.CAMERA_TYPE)
+        self.is_simulation = is_simulation
+        # load objects
+        if self.is_simulation:
+            if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL:
+                self.xlight = serial_peripherals.XLight_Simulation()
+            if CONFIG.SUPPORT_LASER_AUTOFOCUS:
+                self.camera = camera.Camera_Simulation(
+                    rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
+                    flip_image=CONFIG.FLIP_IMAGE,
+                )
+                self.camera_focus = camera_fc.Camera_Simulation()
+            else:
+                self.camera = camera.Camera_Simulation(
+                    rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
+                    flip_image=CONFIG.FLIP_IMAGE,
+                )
+            self.microcontroller = microcontroller.Microcontroller_Simulation()
+        else:
+            if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL:
+                self.xlight = serial_peripherals.XLight()
+            try:
+                if CONFIG.SUPPORT_LASER_AUTOFOCUS:
+                    sn_camera_main = camera.get_sn_by_model(CONFIG.MAIN_CAMERA_MODEL)
+                    sn_camera_focus = camera_fc.get_sn_by_model(
+                        CONFIG.FOCUS_CAMERA_MODEL
+                    )
+                    self.camera = camera.Camera(
+                        sn=sn_camera_main,
+                        rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
+                        flip_image=CONFIG.FLIP_IMAGE,
+                    )
+                    self.camera.open()
+                    self.camera_focus = camera_fc.Camera(sn=sn_camera_focus)
+                    self.camera_focus.open()
+                else:
+                    self.camera = camera.Camera(
+                        rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
+                        flip_image=CONFIG.FLIP_IMAGE,
+                    )
+                    self.camera.open()
+            except:
+                if CONFIG.SUPPORT_LASER_AUTOFOCUS:
+                    self.camera = camera.Camera_Simulation(
+                        rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
+                        flip_image=CONFIG.FLIP_IMAGE,
+                    )
+                    self.camera.open()
+                    self.camera_focus = camera.Camera_Simulation()
+                    self.camera_focus.open()
+                else:
+                    self.camera = camera.Camera_Simulation(
+                        rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
+                        flip_image=CONFIG.FLIP_IMAGE,
+                    )
+                    self.camera.open()
+                print("! camera not detected, using simulated camera !")
+            self.microcontroller = microcontroller.Microcontroller(
+                version=CONFIG.CONTROLLER_VERSION
+            )
+
+        # reset the MCU
+        self.microcontroller.reset()
+        time.sleep(0.5)
+
+        # reinitialize motor drivers and DAC (in particular for V2.1 driver board where PG is not functional)
+        self.microcontroller.initialize_drivers()
+        time.sleep(0.5)
+
+        # configure the actuators
+        self.microcontroller.configure_actuators()
+
+        self.configurationManager = core.ConfigurationManager(
+            filename="./channel_configurations.xml"
+        )
+
+        self.streamHandler = core.StreamHandler(
+            display_resolution_scaling=CONFIG.DEFAULT_DISPLAY_CROP / 100
+        )
+        self.liveController = core.LiveController(
+            self.camera, self.microcontroller, self.configurationManager
+        )
+        self.navigationController = core.NavigationController(
+            self.microcontroller, parent=self
+        )
+        self.slidePositionController = core.SlidePositionController(
+            self.navigationController, self.liveController, is_for_wellplate=True
+        )
+        self.autofocusController = core.AutoFocusController(
+            self.camera, self.navigationController, self.liveController
+        )
+        self.scanCoordinates = core.ScanCoordinates()
+        self.multipointController = core.MultiPointController(
+            self.camera,
+            self.navigationController,
+            self.liveController,
+            self.autofocusController,
+            self.configurationManager,
+            scanCoordinates=self.scanCoordinates,
+            parent=self,
+        )
+        if CONFIG.ENABLE_TRACKING:
+            self.trackingController = core.TrackingController(
+                self.camera,
+                self.microcontroller,
+                self.navigationController,
+                self.configurationManager,
+                self.liveController,
+                self.autofocusController,
+            )
+        self.imageSaver = core.ImageSaver()
+        self.imageDisplay = core.ImageDisplay()
+
+        
+
+        # retract the objective
+        self.navigationController.home_z()
+        # wait for the operation to finish
+        t0 = time.time()
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+            if time.time() - t0 > 10:
+                print("z homing timeout, the program will exit")
+                exit()
+        print("objective retracted")
+
+        # set encoder arguments
+        # set axis pid control enable
+        # only CONFIG.ENABLE_PID_X and CONFIG.HAS_ENCODER_X are both enable, can be enable to PID
+        if CONFIG.HAS_ENCODER_X == True:
+            self.navigationController.configure_encoder(
+                0,
+                (CONFIG.SCREW_PITCH_X_MM * 1000) / CONFIG.ENCODER_RESOLUTION_UM_X,
+                CONFIG.ENCODER_FLIP_DIR_X,
+            )
+            self.navigationController.set_pid_control_enable(0, CONFIG.ENABLE_PID_X)
+        if CONFIG.HAS_ENCODER_Y == True:
+            self.navigationController.configure_encoder(
+                1,
+                (CONFIG.SCREW_PITCH_Y_MM * 1000) / CONFIG.ENCODER_RESOLUTION_UM_Y,
+                CONFIG.ENCODER_FLIP_DIR_Y,
+            )
+            self.navigationController.set_pid_control_enable(1, CONFIG.ENABLE_PID_Y)
+        if CONFIG.HAS_ENCODER_Z == True:
+            self.navigationController.configure_encoder(
+                2,
+                (CONFIG.SCREW_PITCH_Z_MM * 1000) / CONFIG.ENCODER_RESOLUTION_UM_Z,
+                CONFIG.ENCODER_FLIP_DIR_Z,
+            )
+            self.navigationController.set_pid_control_enable(2, CONFIG.ENABLE_PID_Z)
+        time.sleep(0.5)
+
+        self.navigationController.set_z_limit_pos_mm(
+            CONFIG.SOFTWARE_POS_LIMIT.Z_POSITIVE
+        )
+
+        # home XY, set zero and set software limit
+        print("home xy")
+        timestamp_start = time.time()
+        # x needs to be at > + 20 mm when homing y
+        self.navigationController.move_x(20)  # to-do: add blocking code
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        # home y
+        self.navigationController.home_y()
+        t0 = time.time()
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+            if time.time() - t0 > 10:
+                print("y homing timeout, the program will exit")
+                exit()
+        self.navigationController.zero_y()
+        # home x
+        self.navigationController.home_x()
+        t0 = time.time()
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+            if time.time() - t0 > 10:
+                print("y homing timeout, the program will exit")
+                exit()
+        self.navigationController.zero_x()
+        self.slidePositionController.homing_done = True
+        print("home xy done")
+
+        # move to scanning position
+        self.navigationController.move_x(20)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        self.navigationController.move_y(20)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+
+        # move z
+        self.navigationController.move_z_to(CONFIG.DEFAULT_Z_POS_MM)
+        # wait for the operation to finish
+        
+        # FIXME: This is failing right now, z return timeout
+        # t0 = time.time()
+        # while self.microcontroller.is_busy():
+        #     time.sleep(0.005)
+        #     if time.time() - t0 > 5:
+        #         print("z return timeout, the program will exit")
+        #         exit()
+
+        # set output's gains
+        div = 1 if CONFIG.OUTPUT_GAINS.REFDIV is True else 0
+        gains = CONFIG.OUTPUT_GAINS.CHANNEL0_GAIN << 0
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL1_GAIN << 1
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL2_GAIN << 2
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL3_GAIN << 3
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL4_GAIN << 4
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL5_GAIN << 5
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL6_GAIN << 6
+        gains += CONFIG.OUTPUT_GAINS.CHANNEL7_GAIN << 7
+        self.microcontroller.configure_dac80508_refdiv_and_gain(div, gains)
+
+        # set illumination intensity factor
+        self.microcontroller.set_dac80508_scaling_factor_for_illumination(
+            CONFIG.ILLUMINATION_INTENSITY_FACTOR
+        )
+
+        # open the camera
+        # camera start streaming
+        # self.camera.set_reverse_x(CAMERA_REVERSE_X) # these are not implemented for the cameras in use
+        # self.camera.set_reverse_y(CAMERA_REVERSE_Y) # these are not implemented for the cameras in use
+        self.camera.set_software_triggered_acquisition()  # self.camera.set_continuous_acquisition()
+        self.camera.set_callback(self.streamHandler.on_new_frame)
+        self.camera.enable_callback()
+
+        if CONFIG.SUPPORT_LASER_AUTOFOCUS:
+
+            # controllers
+            self.configurationManager_focus_camera = core.ConfigurationManager(filename='./squid_control/focus_camera_configurations.xml')
+            self.streamHandler_focus_camera = core.StreamHandler()
+            self.liveController_focus_camera = core.LiveController(self.camera_focus,self.microcontroller,self.configurationManager_focus_camera,control_illumination=False,for_displacement_measurement=True)
+            self.multipointController = core.MultiPointController(self.camera,self.navigationController,self.liveController,self.autofocusController,self.configurationManager,scanCoordinates=self.scanCoordinates,parent=self)
+            self.displacementMeasurementController = core_displacement_measurement.DisplacementMeasurementController()
+            self.laserAutofocusController = core.LaserAutofocusController(self.microcontroller,self.camera_focus,self.liveController_focus_camera,self.navigationController,has_two_interfaces=HAS_TWO_INTERFACES,use_glass_top=USE_GLASS_TOP)
+
+            # camera
+            self.camera_focus.set_software_triggered_acquisition() #self.camera.set_continuous_acquisition()
+            self.camera_focus.set_callback(self.streamHandler_focus_camera.on_new_frame)
+            self.camera_focus.enable_callback()
+            self.camera_focus.start_streaming()
+
+
+        # set software limits        
+        self.navigationController.set_x_limit_pos_mm(CONFIG.SOFTWARE_POS_LIMIT.X_POSITIVE)
+        self.navigationController.set_x_limit_neg_mm(CONFIG.SOFTWARE_POS_LIMIT.X_NEGATIVE)
+        self.navigationController.set_y_limit_pos_mm(CONFIG.SOFTWARE_POS_LIMIT.Y_POSITIVE)
+        self.navigationController.set_y_limit_neg_mm(CONFIG.SOFTWARE_POS_LIMIT.Y_NEGATIVE)
+
+        # set the default infomation, this will be used for the simulated camera
+        self.dx = 0
+        self.dy = 0
+        self.dz = 0
+        self.current_channel = 0
+        self.current_expousre_time = 100
+        self.current_intensity = 100
+        self.recorded_x, self.recorded_y, self.recorded_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+
+            
+    def move_to_scaning_position(self):
+        # move to scanning position
+        self.navigationController.move_z_to(0.4)
+        self.navigationController.move_x(20)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        self.navigationController.move_y(20)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+
+        # move z
+        self.navigationController.move_z_to(CONFIG.DEFAULT_Z_POS_MM)
+        # wait for the operation to finish
+        t0 = time.time() 
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+            if time.time() - t0 > 5:
+                print('z return timeout, the program will exit')
+                exit()
+    
+    
+    def plate_scan(self,well_plate_type='test', illuminate_channels=['BF LED matrix full'], do_autofocus=True, action_ID='testPlateScan'):
+        # start the acquisition loop
+        
+        #@TODO: finish the plate scan feature.
+        pass
+        # self.move_to_scaning_position()
+        # location_list = self.multipointController.get_location_list()
+        # self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)
+        # self.multipointController.set_selected_configurations(illuminate_channels)
+        # self.multipointController.do_autofocus = do_autofocus
+        # self.autofocusController.set_deltaZ(1.524)
+        # self.multipointController.start_new_experiment(action_ID)
+        # self.multipointController.run_acquisition_reef(location_list=location_list)
+        
+    def send_trigger_simulation(self, channel=0,intensity=100, exposure_time=100):
+            # Read current position
+            print('Getting simulated image')
+            current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+            # Calculate dx, dy, and dz
+            self.dx = current_x - self.recorded_x
+            self.dy = current_y - self.recorded_y
+            self.dz = current_z - SIMULATED_CAMERA.ORIN_Z
+            self.recorded_x,self.recorded_y,self.recorded_z = current_x, current_y, current_z
+            self.current_channel = channel
+            magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
+            self.current_expousre_time = exposure_time
+            self.current_intensity = intensity
+            self.camera.send_trigger(self.dx,self.dy,self.dz,channel,intensity,exposure_time,magnification_factor)
+            print(f'For simulated camera, dx={self.dx}, dy={self.dy}, dz={self.dz},exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}')
+            
+    def do_autofocus(self):
+        
+        if self.is_simulation:
+            self.do_autofocus_simulation()
+        else:
+            self.autofocusController.set_deltaZ(1.524)
+            self.autofocusController.set_N(15)
+            self.autofocusController.autofocus()
+            self.autofocusController.wait_till_autofocus_has_completed()
+
+    def do_autofocus_simulation(self):
+        
+        random_z = 3.1+ np.random.normal(0,0.1)
+        self.navigationController.move_z_to(random_z)
+        self.send_trigger_simulation(self.current_channel, self.current_intensity, self.current_expousre_time)
+        
+    def init_laser_autofocus(self):
+        self.laserAutofocusController.initialize_auto()
+    
+    def measure_displacement(self):
+        self.laserAutofocusController.measure_displacement()
+        
+    def scan_well_plate(self, action_ID='01'):
+        # generate location list
+        # do focus , reflection focus/contrast autofocus
+        # start the acquisition loop
+        location_list = self.multipointController.get_location_list(rows=3,cols=3)
+        self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)
+        self.multipointController.set_selected_configurations(self.illuminate_channels_for_scan)
+        self.multipointController.do_autofocus = True
+        self.multipointController.do_reflection_af = True
+        self.multipointController.start_new_experiment(action_ID)
+        self.multipointController.run_acquisition(location_list=location_list)
+
+        
+    def platereader_move_to_well(self,row,column, wellplate_type='24'):
+        if wellplate_type == '6':
+            wellplate_format = WELLPLATE_FORMAT_6
+        elif wellplate_type == '24':
+            wellplate_format = WELLPLATE_FORMAT_24
+        elif wellplate_type == '96':
+            wellplate_format = WELLPLATE_FORMAT_96
+        elif wellplate_type == '384':
+            wellplate_format = WELLPLATE_FORMAT_384 
+        
+        if column != 0 and column != None:
+            mm_per_ustep_X = CONFIG.SCREW_PITCH_X_MM/(self.navigationController.x_microstepping*CONFIG.FULLSTEPS_PER_REV_X)
+            x_mm = wellplate_format.A1_X_MM + (int(column)-1)*wellplate_format.WELL_SPACING_MM
+            x_usteps = CONFIG.STAGE_MOVEMENT_SIGN_X*round(x_mm/mm_per_ustep_X)
+            self.microcontroller.move_x_to_usteps(x_usteps)
+        if row != 0 and row != None:
+            mm_per_ustep_Y = CONFIG.SCREW_PITCH_Y_MM/(self.navigationController.y_microstepping*CONFIG.FULLSTEPS_PER_REV_Y)
+            y_mm = wellplate_format.A1_Y_MM + (ord(row) - ord('A'))*wellplate_format.WELL_SPACING_MM
+            y_usteps = CONFIG.STAGE_MOVEMENT_SIGN_Y*round(y_mm/mm_per_ustep_Y)
+            self.microcontroller.move_y_to_usteps(y_usteps)
+ 
+    def move_x_to_limited(self, x):
+        
+        x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+
+        self.navigationController.move_x_to_limited(x)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005) 
+        
+        x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+
+        if abs(x_pos - x) < CONFIG.STAGE_MOVED_THRESHOLD:
+            return False, x_pos_before, y_pos_before, z_pos_before, x
+
+        return True, x_pos_before, y_pos_before, z_pos_before, x
+    
+    def move_y_to_limited(self, y):
+        x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+        self.navigationController.move_y_to_limited(y)
+
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+
+        if abs(y_pos - y) < CONFIG.STAGE_MOVED_THRESHOLD:
+            return False, x_pos_before, y_pos_before, z_pos_before, y
+    
+        return True, x_pos_before, y_pos_before, z_pos_before, y
+
+    def move_z_to_limited(self, z):
+        x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+        self.navigationController.move_z_to_limited(z)
+
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+
+        if abs(z_pos - z) < CONFIG.STAGE_MOVED_THRESHOLD:
+            return False, x_pos_before, y_pos_before, z_pos_before, z
+
+        return True, x_pos_before, y_pos_before, z_pos_before, z
+
+
+    def move_by_distance_limited(self, dx, dy, dz):
+        x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+
+        self.navigationController.move_x_limited(dx)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        self.navigationController.move_y_limited(dy)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        self.navigationController.move_z_limited(dz)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        
+        x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+
+        if abs(x_pos-x_pos_before)<CONFIG.STAGE_MOVED_THRESHOLD and dx!=0:
+            return False, x_pos_before, y_pos_before, z_pos_before, x_pos_before+dx, y_pos_before+dy, z_pos_before+dz
+        if abs(y_pos-y_pos_before)<CONFIG.STAGE_MOVED_THRESHOLD and dy!=0:
+            return False, x_pos_before, y_pos_before, z_pos_before, x_pos_before+dx, y_pos_before+dy, z_pos_before+dz
+        if abs(z_pos-z_pos_before)<CONFIG.STAGE_MOVED_THRESHOLD and dz!=0:
+            return False, x_pos_before, y_pos_before, z_pos_before, x_pos_before+dx, y_pos_before+dy, z_pos_before+dz
+
+
+        return True, x_pos_before, y_pos_before, z_pos_before, x_pos, y_pos, z_pos
+    
+    def home_stage(self):
+        # retract the object
+        self.navigationController.home_z()
+        # wait for the operation to finish
+        t0 = time.time()
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+            if time.time() - t0 > 10:
+                print('z homing timeout, the program will exit')
+                exit()
+        print('objective retracted')
+        self.navigationController.set_z_limit_pos_mm(CONFIG.SOFTWARE_POS_LIMIT.Z_POSITIVE)
+
+        # home XY, set zero and set software limit
+        print('home xy')
+        timestamp_start = time.time()
+        # x needs to be at > + 20 mm when homing y
+        self.navigationController.move_x(20) # to-do: add blocking code
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        # home y
+        self.navigationController.home_y()
+        t0 = time.time()
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+            if time.time() - t0 > 10:
+                print('y homing timeout, the program will exit')
+                exit()
+        self.navigationController.zero_y()
+        # home x
+        self.navigationController.home_x()
+        t0 = time.time()
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+            if time.time() - t0 > 10:
+                print('y homing timeout, the program will exit')
+                exit()
+        self.navigationController.zero_x()
+        self.slidePositionController.homing_done = True
+
+        # move to scanning position
+        self.navigationController.move_x(20)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        self.navigationController.move_y(20)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+
+        # move z
+        self.navigationController.move_z_to(CONFIG.DEFAULT_Z_POS_MM)
+        # wait for the operation to finish
+        t0 = time.time() 
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+            if time.time() - t0 > 5:
+                print('z return timeout, the program will exit')
+                exit()
+
+    def snap_image(self, channel=0,intensity=100, exposure_time=100):
+        self.camera.set_exposure_time(exposure_time)
+        self.liveController.set_illumination(channel,intensity)
+        self.liveController.turn_on_illumination()
+        while self.microcontroller.is_busy():
+            time.sleep(0.05)
+        
+        if self.is_simulation:
+            self.send_trigger_simulation(channel,intensity,exposure_time)
+        else:
+            self.camera.send_trigger()
+        time.sleep(0.05)
+        
+        #self.liveController.set_illumination(0,0)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        gray_img=self.camera.read_frame()
+        self.liveController.turn_off_illumination()
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+
+        return gray_img
+
+    def close(self):
+
+        # move the objective to a defined position upon exit
+        self.navigationController.move_x(0.1) # temporary bug fix - move_x needs to be called before move_x_to if the stage has been moved by the joystick
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        self.navigationController.move_x_to(30)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        self.navigationController.move_y(0.1) # temporary bug fix - move_y needs to be called before move_y_to if the stage has been moved by the joystick
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+        self.navigationController.move_y_to(30)
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+
+        self.liveController.stop_live()
+        self.camera.close()
+        self.imageSaver.close()
+        self.imageDisplay.close()
+        if CONFIG.SUPPORT_LASER_AUTOFOCUS:
+            self.camera_focus.close()
+            #self.imageDisplayWindow_focus.close()
+        self.microcontroller.close()
+

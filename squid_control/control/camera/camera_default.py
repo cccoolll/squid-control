@@ -1,8 +1,8 @@
-import argparse
-import cv2
+import os
+import glob
 import time
 import numpy as np
-
+from PIL import Image
 try:
     import squid_control.control.gxipy as gx
 except:
@@ -10,7 +10,9 @@ except:
 
 from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting
+from scipy.ndimage import gaussian_filter
 
+script_dir = os.path.dirname(__file__)
 
 def get_sn_by_model(model_name):
     try:
@@ -457,6 +459,8 @@ class Camera(object):
 
 class Camera_Simulation(object):
 
+
+
     def __init__(
         self, sn=None, is_global_shutter=False, rotate_image_angle=None, flip_image=None
     ):
@@ -516,7 +520,45 @@ class Camera_Simulation(object):
         self.HeightMax = 3000
         self.OffsetX = 0
         self.OffsetY = 0
+        
+        # simulated camera values
+        self.simulated_focus = 3.3
+        self.channels = [0, 11, 12, 14, 13]
+        self.image_paths = {
+            0: 'LED.bmp',
+            11: '405nm.png',
+            12: '488nm.png',
+            14: '561nm.png',
+            13: '638nm.png',
+        }
+        self.image_size= (2000,2000)
+        
+        self.image_folder = os.getenv('IMAGE_DATA_FOR_SIMULATED_MICROSCOPE')
+        if not self.image_folder:
+            raise EnvironmentError("Please set IMAGE_DATA_FOR_SIMULATED_MICROSCOPE to the folder path.")
 
+        # Initialize fields of view and channels
+        self.fields_of_view = {}
+        self.current_fov = None
+
+        # Load available fields of view and channels
+        for filepath in glob.glob(os.path.join(self.image_folder, '*.bmp')):
+            filename = os.path.basename(filepath)
+            parts = filename.split('_')
+            if len(parts) >= 5:
+                fov_id = '_'.join(parts[:4])  # Capture the full FOV ID, e.g., "A3_1_0_0"
+                channel_name = '_'.join(parts[4:])  # Capture the full channel name, e.g., "BF_LED_matrix_full"
+                
+                if fov_id not in self.fields_of_view:
+                    self.fields_of_view[fov_id] = {}
+                self.fields_of_view[fov_id][channel_name] = filepath
+
+
+        # Choose a random initial FOV
+        self.current_fov = np.random.choice(list(self.fields_of_view.keys()))
+        print("Number of fields of view", len(self.fields_of_view))
+        print("current_fov", self.current_fov)
+        
     def open(self, index=0):
         pass
 
@@ -570,33 +612,56 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    def send_trigger(self):
-        self.frame_ID = self.frame_ID + 1
+    def send_trigger(self, dx=0, dy=0, dz=0, channel=0, intensity=100, exposure_time=100, magnification_factor=20):
+        self.frame_ID += 1
         self.timestamp = time.time()
-        if self.frame_ID == 1:
-            if self.pixel_format == "MONO8":
-                self.current_frame = np.random.randint(
-                    255, size=(2000, 2000), dtype=np.uint8
-                )
-                self.current_frame[901:1100, 901:1100] = 200
-            elif self.pixel_format == "MONO12":
-                self.current_frame = np.random.randint(
-                    4095, size=(2000, 2000), dtype=np.uint16
-                )
-                self.current_frame[901:1100, 901:1100] = 200 * 16
-                self.current_frame = self.current_frame << 4
-            elif self.pixel_format == "MONO16":
-                self.current_frame = np.random.randint(
-                    65535, size=(2000, 2000), dtype=np.uint16
-                )
-                self.current_frame[901:1100, 901:1100] = 200 * 256
+
+        # Switch field of view on stage movement
+        if dx != 0 or dy != 0:
+            self.current_fov = np.random.choice(list(self.fields_of_view.keys()))
+        
+        channel_map = {
+            0: 'BF_LED_matrix_full',
+            11: 'Fluorescence_405_nm_Ex',
+            12: 'Fluorescence_488_nm_Ex',
+            14: 'Fluorescence_561_nm_Ex',
+            13: 'Fluorescence_638_nm_Ex'
+        }
+        channel_name = channel_map.get(channel, 'random')  # Default to a random image if the channel is not in the map
+        # Load the image for the specified channel
+        image_filename = f"{self.current_fov}_{channel_name}.bmp"
+        image_path = os.path.join(self.image_folder, image_filename)
+        print("image_path", image_path)
+        
+        # Load the image if available; otherwise, generate random image data
+        if os.path.exists(image_path):
+            with Image.open(image_path) as img:
+                self.image = np.array(img)
+            self.image = (self.image - self.image.min()) / (self.image.max() - self.image.min()) * 255
         else:
-            self.current_frame = np.roll(self.current_frame, 10, axis=0)
-            pass
-            # self.current_frame = np.random.randint(255,size=(768,1024),dtype=np.uint8)
+            self.image = np.random.randint(0, 256, self.image_size, dtype=np.uint8)
+
+        # Simulate intensity and exposure
+        exposure_factor = exposure_time / 100
+        intensity_factor = intensity / 60
+        self.image = np.clip(self.image * exposure_factor * intensity_factor, 0, 255).astype(np.uint8)
+        
+        # Process the image based on pixel format
+        if self.pixel_format == "MONO8":
+            self.current_frame = self.image
+        elif self.pixel_format == "MONO12":
+            self.current_frame = (self.image.astype(np.uint16) * 16).astype(np.uint16)
+        elif self.pixel_format == "MONO16":
+            self.current_frame = (self.image.astype(np.uint16) * 256).astype(np.uint16)
+
+        # Apply focus effect if `dz` is not zero
+        if dz != 0:
+            sigma = abs(dz) * 6  # Adjust for blur intensity
+            self.current_frame = gaussian_filter(self.current_frame, sigma=sigma)
+        
         if self.new_image_callback_external is not None and self.callback_is_enabled:
             self.new_image_callback_external(self)
-
+                    
     def read_frame(self):
         return self.current_frame
 

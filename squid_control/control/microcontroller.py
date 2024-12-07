@@ -6,9 +6,11 @@ import time
 import numpy as np
 import threading
 from crc import CrcCalculator, Crc8
-
+import json
 from squid_control.control.config import CONFIG
 from qtpy.QtCore import QTimer
+from scipy.spatial import ConvexHull, Delaunay
+import os
 
 
 from enum import Enum
@@ -107,6 +109,14 @@ class Microcontroller:
 
         print("connecting to controller based on " + version)
 
+        #for software limit
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.edge_positions = []
+        self.edge_positions_file = os.path.join(script_dir,"edge_positions.json")
+        self.load_edge_positions()
+        print("edge positions: ", self.edge_positions)
+        #-------------------        
+
         if version == "Arduino Due":
             controller_ports = [
                 p.device
@@ -169,6 +179,42 @@ class Microcontroller:
         self.send_command(cmd)
         print("initialize the drivers")  # debug
 
+#These are used for software limits
+    def mark_edge_position(self):
+        """Marks the current XYZ position as an edge and saves it to a file"""
+        self.edge_positions.append([self.x_pos, self.y_pos, self.z_pos])
+        self.save_edge_positions()
+
+    def clear_edge_positions(self):
+        """Clears the list of edge positions"""
+        self.edge_positions = []
+        self.save_edge_positions()
+    
+    def load_edge_positions(self):
+        """Loads the list of edge positions from a file"""
+        try:
+            with open(self.edge_positions_file, "r") as f:
+                self.edge_positions = json.load(f)
+        except FileNotFoundError:
+            print("Edge positions file not found!")
+            exit()
+        
+    def save_edge_positions(self):
+        """Saves the list of edge positions to a file"""
+        with open(self.edge_positions_file, "w") as f:
+            json.dump(self.edge_positions, f)
+    
+    def is_point_in_concave_hull(self, point):
+        """Returns True if the point is inside the concave hull of the edge positions"""
+        if len(self.edge_positions) < 4:
+            print("Not enough edge positions to form a concave hull")
+            return False
+        #Compute the Delaunay triangulation of the edge positions
+        points=np.array(self.edge_positions)
+        hull = Delaunay(points)
+        return hull.find_simplex(point) >= 0
+ #-----------------------------------------------
+    
     def turn_on_illumination(self):
         cmd = bytearray(self.tx_buffer_length)
         cmd[1] = CMD_SET.TURN_ON_ILLUMINATION
@@ -266,6 +312,14 @@ class Microcontroller:
         # while self.mcu_cmd_execution_in_progress == True:
         #     time.sleep(self._motion_status_checking_interval)
 
+    def move_x_usteps_limited(self, usteps):
+        target_pos = self.x_pos + CONFIG.STAGE_MOVEMENT_SIGN_X * usteps
+        if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
+            self.move_x_usteps(usteps)
+            self.x_pos = target_pos
+        else:
+            print("Target position is outside the safe area, X movement cancelled")
+
     def move_x_to_usteps(self, usteps):
         payload = self._int_to_payload(usteps, 4)
         cmd = bytearray(self.tx_buffer_length)
@@ -275,6 +329,15 @@ class Microcontroller:
         cmd[4] = (payload >> 8) & 0xFF
         cmd[5] = payload & 0xFF
         self.send_command(cmd)
+    
+    def move_x_to_usteps_limited(self, usteps):
+        target_pos = usteps
+        if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
+            self.move_x_to_usteps(usteps)
+            self.x_pos = target_pos
+
+        else:
+            print("Target position is outside the safe area, X movement cancelled")
 
     """
     def move_y(self,delta):
@@ -321,6 +384,15 @@ class Microcontroller:
         # while self.mcu_cmd_execution_in_progress == True:
         #     time.sleep(self._motion_status_checking_interval)
 
+    def move_y_usteps_limited(self, usteps):
+        target_pos = self.y_pos + CONFIG.STAGE_MOVEMENT_SIGN_Y * usteps
+        if self.is_point_in_concave_hull([self.x_pos, target_pos, self.z_pos]):
+            self.move_y_usteps(usteps)
+            self.y_pos = target_pos
+
+        else:
+            print("Target position is outside the safe area, Y movement cancelled")
+
     def move_y_to_usteps(self, usteps):
         payload = self._int_to_payload(usteps, 4)
         cmd = bytearray(self.tx_buffer_length)
@@ -330,6 +402,14 @@ class Microcontroller:
         cmd[4] = (payload >> 8) & 0xFF
         cmd[5] = payload & 0xFF
         self.send_command(cmd)
+    
+    def move_y_to_usteps_limited(self, usteps):
+        target_pos = usteps
+        if self.is_point_in_concave_hull([self.x_pos, target_pos, self.z_pos]):
+            self.move_y_to_usteps(usteps)
+            self.y_pos = target_pos
+        else:
+            print("Target position is outside the safe area, Y movement cancelled")
 
     """
     def move_z(self,delta):
@@ -375,6 +455,14 @@ class Microcontroller:
         self.send_command(cmd)
         # while self.mcu_cmd_execution_in_progress == True:
         #     time.sleep(self._motion_status_checking_interval)
+    
+    def move_z_usteps_limited(self, usteps):    
+        target_pos = self.z_pos + CONFIG.STAGE_MOVEMENT_SIGN_Z * usteps
+        if self.is_point_in_concave_hull([self.x_pos, self.y_pos, target_pos]):
+            self.move_z_usteps(usteps)
+            self.z_pos = target_pos
+        else:
+            print("Target position is outside the safe area, Z movement cancelled")
 
     def move_z_to_usteps(self, usteps):
         payload = self._int_to_payload(usteps, 4)
@@ -385,6 +473,15 @@ class Microcontroller:
         cmd[4] = (payload >> 8) & 0xFF
         cmd[5] = payload & 0xFF
         self.send_command(cmd)
+    
+    def move_z_to_usteps_limited(self, usteps):
+        target_pos = usteps
+        if self.is_point_in_concave_hull([self.x_pos, self.y_pos, target_pos]):
+            self.move_z_to_usteps(usteps)
+            self.z_pos = target_pos
+        else:
+            print("Target position is outside the safe area, Z movement cancelled")
+
 
     def move_theta_usteps(self, usteps):
         direction = CONFIG.STAGE_MOVEMENT_SIGN_THETA * np.sign(usteps)
@@ -636,35 +733,35 @@ class Microcontroller:
         self.configure_motor_driver(
             AXIS.X,
             CONFIG.MICROSTEPPING_DEFAULT_X,
-            CONFIG.X_MOTOR_RMS_CURRENT_mA,
+            CONFIG.X_MOTOR_RMS_CURRENT_MA,
             CONFIG.X_MOTOR_I_HOLD,
         )
         self.wait_till_operation_is_completed()
         self.configure_motor_driver(
             AXIS.Y,
             CONFIG.MICROSTEPPING_DEFAULT_Y,
-            CONFIG.Y_MOTOR_RMS_CURRENT_mA,
+            CONFIG.Y_MOTOR_RMS_CURRENT_MA,
             CONFIG.Y_MOTOR_I_HOLD,
         )
         self.wait_till_operation_is_completed()
         self.configure_motor_driver(
             AXIS.Z,
             CONFIG.MICROSTEPPING_DEFAULT_Z,
-            CONFIG.Z_MOTOR_RMS_CURRENT_mA,
+            CONFIG.Z_MOTOR_RMS_CURRENT_MA,
             CONFIG.Z_MOTOR_I_HOLD,
         )
         self.wait_till_operation_is_completed()
         # max velocity and acceleration
         self.set_max_velocity_acceleration(
-            AXIS.X, CONFIG.MAX_VELOCITY_X_mm, CONFIG.MAX_ACCELERATION_X_mm
+            AXIS.X, CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_ACCELERATION_X_MM
         )
         self.wait_till_operation_is_completed()
         self.set_max_velocity_acceleration(
-            AXIS.Y, CONFIG.MAX_VELOCITY_Y_mm, CONFIG.MAX_ACCELERATION_Y_mm
+            AXIS.Y, CONFIG.MAX_VELOCITY_Y_MM, CONFIG.MAX_ACCELERATION_Y_MM
         )
         self.wait_till_operation_is_completed()
         self.set_max_velocity_acceleration(
-            AXIS.Z, CONFIG.MAX_VELOCITY_Z_mm, CONFIG.MAX_ACCELERATION_Z_mm
+            AXIS.Z, CONFIG.MAX_VELOCITY_Z_MM, CONFIG.MAX_ACCELERATION_Z_MM
         )
         self.wait_till_operation_is_completed()
         # home switch
@@ -910,6 +1007,14 @@ class Microcontroller_Simulation:
 
         self.crc_calculator = CrcCalculator(Crc8.CCITT, table_based=True)
 
+        #for software limit
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.edge_positions = []
+        self.edge_positions_file = os.path.join(script_dir,"edge_positions.json")
+        self.load_edge_positions()
+        print("edge positions: ", self.edge_positions)
+        #-------------------
+
     def close(self):
         self.terminate_reading_received_packet_thread = True
         self.thread_read_received_packet.join()
@@ -926,6 +1031,40 @@ class Microcontroller_Simulation:
         cmd[1] = CMD_SET.INITIALIZE
         self.send_command(cmd)
         print("initialize the drivers")  # debug
+
+    def mark_edge_position(self):
+        """Marks the current XYZ position as an edge and saves it to a file"""
+        self.edge_positions.append([self.x_pos, self.y_pos, self.z_pos])
+        self.save_edge_positions()
+
+    def clear_edge_positions(self):
+        """Clears the list of edge positions"""
+        self.edge_positions = []
+        self.save_edge_positions()
+    
+    def load_edge_positions(self):
+        """Loads the list of edge positions from a file"""
+        try:
+            with open(self.edge_positions_file, "r") as f:
+                self.edge_positions = json.load(f)
+        except FileNotFoundError:
+            print("Edge positions file not found!")
+            exit()
+        
+    def save_edge_positions(self):
+        """Saves the list of edge positions to a file"""
+        with open(self.edge_positions_file, "w") as f:
+            json.dump(self.edge_positions, f)
+    
+    def is_point_in_concave_hull(self, point):
+        """Returns True if the point is inside the concave hull of the edge positions"""
+        if len(self.edge_positions) < 4:
+            print("Not enough edge positions to form a concave hull")
+            return False
+        #Compute the Delaunay triangulation of the edge positions
+        points=np.array(self.edge_positions)
+        hull = Delaunay(points)
+        return hull.find_simplex(point) >= 0
 
     def move_x_usteps(self, usteps):
         self.x_pos = self.x_pos + CONFIG.STAGE_MOVEMENT_SIGN_X * usteps
@@ -962,6 +1101,66 @@ class Microcontroller_Simulation:
         cmd = bytearray(self.tx_buffer_length)
         self.send_command(cmd)
         print("   mcu command " + str(self._cmd_id) + ": move z to")
+
+    def move_x_usteps_limited(self, usteps):
+        target_pos = self.x_pos + CONFIG.STAGE_MOVEMENT_SIGN_X * usteps
+        if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
+            self.x_pos = target_pos
+            cmd = bytearray(self.tx_buffer_length)
+            self.send_command(cmd)
+            print("   mcu command " + str(self._cmd_id) + ": move x")
+        else:
+            print("Target position is outside the safe area, X movement cancelled")
+
+    def move_x_to_usteps_limited(self, usteps):
+        target_pos = usteps
+        if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
+            self.x_pos = target_pos
+            cmd = bytearray(self.tx_buffer_length)
+            self.send_command(cmd)
+            print("   mcu command " + str(self._cmd_id) + ": move x to")
+        else:
+            print("Target position is outside the safe area, X movement cancelled")
+
+    def move_y_usteps_limited(self, usteps):
+        target_pos = self.y_pos + CONFIG.STAGE_MOVEMENT_SIGN_Y * usteps
+        if self.is_point_in_concave_hull([self.x_pos, target_pos, self.z_pos]):
+            self.y_pos = target_pos
+            cmd = bytearray(self.tx_buffer_length)
+            self.send_command(cmd)
+            print("   mcu command " + str(self._cmd_id) + ": move y")
+        else:
+            print("Target position is outside the safe area, Y movement cancelled")
+
+    def move_y_to_usteps_limited(self, usteps):
+        target_pos = usteps
+        if self.is_point_in_concave_hull([self.x_pos, target_pos, self.z_pos]):
+            self.y_pos = target_pos
+            cmd = bytearray(self.tx_buffer_length)
+            self.send_command(cmd)
+            print("   mcu command " + str(self._cmd_id) + ": move y to")
+        else:
+            print("Target position is outside the safe area, Y movement cancelled")
+
+    def move_z_usteps_limited(self, usteps):
+        target_pos = self.z_pos + CONFIG.STAGE_MOVEMENT_SIGN_Z * usteps
+        if self.is_point_in_concave_hull([self.x_pos, self.y_pos, target_pos]):
+            self.z_pos = target_pos
+            cmd = bytearray(self.tx_buffer_length)
+            self.send_command(cmd)
+            print("   mcu command " + str(self._cmd_id) + ": move z")
+        else:
+            print("Target position is outside the safe area, Z movement cancelled")
+
+    def move_z_to_usteps_limited(self, usteps):
+        target_pos = usteps
+        if self.is_point_in_concave_hull([self.x_pos, self.y_pos, target_pos]):
+            self.z_pos = target_pos
+            cmd = bytearray(self.tx_buffer_length)
+            self.send_command(cmd)
+            print("   mcu command " + str(self._cmd_id) + ": move z to")
+        else:
+            print("Target position is outside the safe area, Z movement cancelled")
 
     def move_theta_usteps(self, usteps):
         self.theta_pos = self.theta_pos + usteps
@@ -1108,35 +1307,35 @@ class Microcontroller_Simulation:
         self.configure_motor_driver(
             AXIS.X,
             CONFIG.MICROSTEPPING_DEFAULT_X,
-            CONFIG.X_MOTOR_RMS_CURRENT_mA,
+            CONFIG.X_MOTOR_RMS_CURRENT_MA,
             CONFIG.X_MOTOR_I_HOLD,
         )
         self.wait_till_operation_is_completed()
         self.configure_motor_driver(
             AXIS.Y,
             CONFIG.MICROSTEPPING_DEFAULT_Y,
-            CONFIG.Y_MOTOR_RMS_CURRENT_mA,
+            CONFIG.Y_MOTOR_RMS_CURRENT_MA,
             CONFIG.Y_MOTOR_I_HOLD,
         )
         self.wait_till_operation_is_completed()
         self.configure_motor_driver(
             AXIS.Z,
             CONFIG.MICROSTEPPING_DEFAULT_Z,
-            CONFIG.Z_MOTOR_RMS_CURRENT_mA,
+            CONFIG.Z_MOTOR_RMS_CURRENT_MA,
             CONFIG.Z_MOTOR_I_HOLD,
         )
         self.wait_till_operation_is_completed()
         # max velocity and acceleration
         self.set_max_velocity_acceleration(
-            AXIS.X, CONFIG.MAX_VELOCITY_X_mm, CONFIG.MAX_ACCELERATION_X_mm
+            AXIS.X, CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_ACCELERATION_X_MM
         )
         self.wait_till_operation_is_completed()
         self.set_max_velocity_acceleration(
-            AXIS.Y, CONFIG.MAX_VELOCITY_Y_mm, CONFIG.MAX_ACCELERATION_Y_mm
+            AXIS.Y, CONFIG.MAX_VELOCITY_Y_MM, CONFIG.MAX_ACCELERATION_Y_MM
         )
         self.wait_till_operation_is_completed()
         self.set_max_velocity_acceleration(
-            AXIS.Z, CONFIG.MAX_VELOCITY_Z_mm, CONFIG.MAX_ACCELERATION_Z_mm
+            AXIS.Z, CONFIG.MAX_VELOCITY_Z_MM, CONFIG.MAX_ACCELERATION_Z_MM
         )
         self.wait_till_operation_is_completed()
         # home switch

@@ -13,16 +13,20 @@ from qtpy.QtCore import *
 from qtpy.QtWidgets import *
 from qtpy.QtGui import *
 
+# Add the parent directory of squid_control to sys.path
+script_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.abspath(os.path.join(script_dir, '..'))
+sys.path.insert(0, parent_dir)
+
 # app specific libraries
 import squid_control.control.gui_hcs as gui
 
-from configparser import ConfigParser
+from configparser import ConfigParsers
 from squid_control.control.widgets import (
     ConfigEditorBackwardsCompatible,
     ConfigEditorForAcquisitions,
 )
 
-from squid_control.control._def import CACHED_CONFIG_FILE_PATH
 
 import glob
 
@@ -46,14 +50,13 @@ def show_acq_config(cfm):
 if __name__ == "__main__":
     cf_editor_parser = ConfigParser()
     config_files = glob.glob("." + "/" + "configuration*.ini")
-    if config_files:
-        cf_editor_parser.read(CACHED_CONFIG_FILE_PATH)
+
     app = QApplication([])
     app.setStyle("Fusion")
     if args.simulation:
         win = gui.OctopiGUI(is_simulation=True)
     else:
-        win = gui.OctopiGUI()
+        win = gui.OctopiGUI(is_simulation=False)
 
     acq_config_action = QAction("Acquisition Settings", win)
     acq_config_action.triggered.connect(

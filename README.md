@@ -27,6 +27,28 @@ To load a custom multipoint function:
 ```
 python -m squid_control --config HCS_v2 --simulation --multipoint-function=./my_multipoint_custom_script_entry.py:multipoint_custom_script_entry
 ```
+Registering a Hypha Service and Chatbot for the Microscope
+----------------------------------------------------------
+
+The Squid Control software now supports integration with **Hypha**, a generative AI-powered application framework designed for large-scale data management, AI model serving, and real-time communication. This feature allows users to register a Hypha service and a chatbot service for the microscope, enabling advanced automation and real-time collaboration.
+
+### What is Hypha?
+
+Hypha is a framework that connects various computational and user interface components through **Hypha-RPC**, a bidirectional remote procedure call system. It supports real-time communication, scalable data management, and integration with AI models and tools. For more details, see the [Hypha documentation](https://docs.amun.ai/#/).
+
+### Setting Up the Hypha Service
+
+To register a Hypha service for the microscope, follow these steps:
+
+1.  **Follow the Hypha Tutorial**: Refer to the [Hypha tutorial](https://docs.amun.ai/#/) for detailed instructions on setting up the service.
+2.  **Run the Hypha Service Script**: After completing the setup, start the Hypha service by running the following command:
+
+![](/chatllm/staticllm/gpt.webp)
+
+
+` python start_hypha_service.py `
+
+This script will initialize the Hypha service for the microscope.
 
 ## About
 

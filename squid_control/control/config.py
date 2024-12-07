@@ -180,7 +180,7 @@ class TrackingSetting(BaseModel):
     DEFAULT_INIT_METHOD: str = "roi"
 
 
-class SlidPoisitonSetting(BaseModel):
+class SlidePositionSetting(BaseModel):
     LOADING_X_MM: int = 30
     LOADING_Y_MM: int = 55
     SCANNING_X_MM: int = 3
@@ -212,8 +212,10 @@ class FlipImageSetting(Enum):
     Vertical = "Vertical"
     Both = "Both"
 
-
 class BaseConfig(BaseModel):
+    class Config:
+        extra = "allow"  # Allow extra fields that are not defined in the model
+
     MicrocontrollerDef: MicrocontrollerDefSetting = MicrocontrollerDefSetting()
     VOLUMETRIC_IMAGING: VolumetricImagingSetting = VolumetricImagingSetting()
     CMD_EXECUTION_STATUS: CmdExecutionStatus = CmdExecutionStatus()
@@ -221,7 +223,7 @@ class BaseConfig(BaseModel):
     PLATE_READER: PlateReaderSetting = PlateReaderSetting()
     AF: AFSetting = AFSetting()
     Tracking: TrackingSetting = TrackingSetting()
-    SLIDE_POSITION: SlidPoisitonSetting = SlidPoisitonSetting()
+    SLIDE_POSITION: SlidePositionSetting = SlidePositionSetting()
     OUTPUT_GAINS: OutputGainSetting = OutputGainSetting()
     SOFTWARE_POS_LIMIT: SoftwarePosLimitSetting = SoftwarePosLimitSetting()
     Acquisition: AcquisitionSetting = AcquisitionSetting()
@@ -290,21 +292,21 @@ class BaseConfig(BaseModel):
     MICROSTEPPING_DEFAULT_Z: float = 8
     MICROSTEPPING_DEFAULT_THETA: float = 8  # not used, to be removed
 
-    X_MOTOR_RMS_CURRENT_mA: float = 490
-    Y_MOTOR_RMS_CURRENT_mA: float = 490
-    Z_MOTOR_RMS_CURRENT_mA: float = 490
+    X_MOTOR_RMS_CURRENT_MA: float = 490  # Corrected casing
+    Y_MOTOR_RMS_CURRENT_MA: float = 490
+    Z_MOTOR_RMS_CURRENT_MA: float = 490
 
     X_MOTOR_I_HOLD: float = 0.5
     Y_MOTOR_I_HOLD: float = 0.5
     Z_MOTOR_I_HOLD: float = 0.5
 
-    MAX_VELOCITY_X_mm: float = 25
-    MAX_VELOCITY_Y_mm: float = 25
-    MAX_VELOCITY_Z_mm: float = 2
+    MAX_VELOCITY_X_MM: float = 25
+    MAX_VELOCITY_Y_MM: float = 25
+    MAX_VELOCITY_Z_MM: float = 2
 
-    MAX_ACCELERATION_X_mm: float = 500
-    MAX_ACCELERATION_Y_mm: float = 500
-    MAX_ACCELERATION_Z_mm: float = 20
+    MAX_ACCELERATION_X_MM: float = 500
+    MAX_ACCELERATION_Y_MM: float = 500
+    MAX_ACCELERATION_Z_MM: float = 20
 
     # config encoder arguments
     HAS_ENCODER_X: bool = False
@@ -447,7 +449,7 @@ class BaseConfig(BaseModel):
     )
 
     # controller version
-    CONTROLLER_VERSION: str = "Arduino Due"  # 'Teensy'
+    CONTROLLER_VERSION: str = 'Teensy'
 
     # How to read Spinnaker nodemaps, options are INDIVIDUAL or VALUE
     CHOSEN_READ: str = "INDIVIDUAL"
@@ -504,14 +506,31 @@ class BaseConfig(BaseModel):
     CHANNEL_CONFIGURATIONS_PATH: str = ""
     LAST_COORDS_PATH: str = ""
 
+    # for check if the stage is moved
+    STAGE_MOVED_THRESHOLD: float = 0.005
+
+    # Additional field to store options
+    OPTIONS: dict = {}
+
+
+    def write_config_to_txt(self, output_path):
+        with open(output_path, 'w') as file:
+            for attribute, value in self.__dict__.items():
+                if isinstance(value, BaseModel):
+                    file.write(f"[{attribute}]\n")
+                    for sub_attribute, sub_value in value.dict().items():
+                        file.write(f"{sub_attribute.lower()} = {sub_value}\n")
+                else:
+                    file.write(f"{attribute.lower()} = {value}\n")
+                file.write("\n")
 
     def read_config(self, config_path):
         cached_config_file_path = None
 
         try:
-            with open(CONFIG.CACHE_CONFIG_FILE_PATH, "r") as file:
+            with open(self.CACHE_CONFIG_FILE_PATH, "r") as file:
                 for line in file:
-                    cached_config_file_path = line
+                    cached_config_file_path = line.strip()
                     break
         except FileNotFoundError:
             cached_config_file_path = None
@@ -520,53 +539,44 @@ class BaseConfig(BaseModel):
         if config_files:
             if len(config_files) > 1:
                 if cached_config_file_path in config_files:
-                    print(
-                        "defaulting to last cached config file at "
-                        + cached_config_file_path
-                    )
+                    print("defaulting to last cached config file at " + cached_config_file_path)
                     config_files = [cached_config_file_path]
                 else:
-                    print(
-                        "multiple machine configuration files found, the program will exit"
-                    )
+                    print("multiple machine configuration files found, the program will exit")
                     exit()
             print("load machine-specific configuration")
-            # exec(open(config_files[0]).read())
             cfp = ConfigParser()
             cfp.read(config_files[0])
-            var_items = list(self.model_fields.keys())
-            for var_name in var_items:
-                if type(getattr(self, var_name)) is type:
-                    continue
-                varnamelower = var_name.lower()
-                if varnamelower not in cfp.options("GENERAL"):
-                    continue
-                value = cfp.get("GENERAL", varnamelower)
-                actualvalue = conf_attribute_reader(value)
-                setattr(self, var_name, actualvalue)
-            for classkey in var_items:
-                myclass = None
-                classkeyupper = classkey.upper()
-                pop_items = None
-                try:
-                    pop_items = cfp.items(classkeyupper)
-                except:
-                    continue
-                if type(getattr(self, classkey)) is not type:
-                    continue
-                myclass = getattr(self, classkey)
-                populate_class_from_dict(myclass, pop_items)
-            with open(CONFIG.CACHE_CONFIG_FILE_PATH, "w") as file:
-                file.write(str(config_files[0]))
-            cached_config_file_path = config_files[0]
+            for section in cfp.sections():
+                for key, value in cfp.items(section):
+                    actualvalue = conf_attribute_reader(value)
+                    if key.startswith("_") and key.endswith("_options"):
+                        self.OPTIONS[key] = actualvalue
+                    else:
+                        section_upper = section.upper()
+                        if hasattr(self, section_upper):
+                            class_instance = getattr(self, section_upper)
+                            if isinstance(class_instance, BaseModel):
+                                if key.upper() in class_instance.__fields__:
+                                    setattr(class_instance, key.upper(), actualvalue)
+                                else:
+                                    setattr(class_instance, key.upper(), actualvalue)
+                            else:
+                                setattr(self, section_upper, actualvalue)
+                        else:
+                            setattr(self, key.upper(), actualvalue)
+            try:
+                with open(self.CACHE_CONFIG_FILE_PATH, "w") as file:
+                    file.write(str(config_files[0]))
+                cached_config_file_path = config_files[0]
+            except Exception as e:
+                print(f"Error caching config file path: {e}")
         else:
             print("configuration*.ini file not found, defaulting to legacy configuration")
             config_files = glob.glob("." + "/" + "configuration*.txt")
             if config_files:
                 if len(config_files) > 1:
-                    print(
-                        "multiple machine configuration files found, the program will exit"
-                    )
+                    print("multiple machine configuration files found, the program will exit")
                     exit()
                 print("load machine-specific configuration")
                 exec(open(config_files[0]).read())
@@ -581,16 +591,13 @@ CONFIG = BaseConfig()
 
 def load_config(config_path, multipoint_function):
     global CONFIG
-    home_dir = Path.home()
-    config_dir = home_dir / '.squid-control'
 
-    # Ensure the .squid-control directory exists
-    config_dir.mkdir(exist_ok=True)
+    config_dir = Path(os.path.abspath(__file__))
+
 
     current_dir = Path(__file__).parent
     if not str(config_path).endswith(".ini"):
         config_path = current_dir / ("../configurations/configuration_" + str(config_path) + ".ini")
-
 
     CONFIG.CACHE_CONFIG_FILE_PATH = str(config_dir / 'cache_config_file_path.txt')
     CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / 'channel_configurations.xml')
@@ -600,7 +607,6 @@ def load_config(config_path, multipoint_function):
         raise FileNotFoundError(f"Configuration file {config_path} not found.")
 
     cf_editor_parser = ConfigParser()
-    # Read the config
     cached_config_file_path = CONFIG.read_config(config_path)
     CONFIG.STAGE_POS_SIGN_X = CONFIG.STAGE_MOVEMENT_SIGN_X
     CONFIG.STAGE_POS_SIGN_Y = CONFIG.STAGE_MOVEMENT_SIGN_Y
@@ -610,11 +616,8 @@ def load_config(config_path, multipoint_function):
         CONFIG.RUN_CUSTOM_MULTIPOINT = True
         CONFIG.CUSTOM_MULTIPOINT_FUNCTION = multipoint_function
 
-    # saving path
     if not (CONFIG.DEFAULT_SAVING_PATH.startswith(str(Path.home()))):
-        CONFIG.DEFAULT_SAVING_PATH = (
-            str(Path.home()) + "/" + CONFIG.DEFAULT_SAVING_PATH.strip("/")
-        )
+        CONFIG.DEFAULT_SAVING_PATH = str(Path.home()) + "/" + CONFIG.DEFAULT_SAVING_PATH.strip("/")
 
     if CONFIG.ENABLE_TRACKING:
         CONFIG.DEFAULT_DISPLAY_CROP = CONFIG.Tracking.DEFAULT_DISPLAY_CROP
@@ -650,13 +653,65 @@ def load_config(config_path, multipoint_function):
         CONFIG.A1_X_MM = 24.55
         CONFIG.A1_Y_MM = 23.01
 
-    if os.path.exists(cached_config_file_path):
-        cf_editor_parser.read(cached_config_file_path)
-    else:
+
+    # Write configuration to txt file after reading
+    CONFIG.write_config_to_txt('config_parameters.txt')
+
+    try:
+        if os.path.exists(cached_config_file_path):
+            cf_editor_parser.read(cached_config_file_path)
+    except:
         return False
 
 
 
 
+# For flexible plate format:
+class WELLPLATE_FORMAT_384:
+    WELL_SIZE_MM = 3.3
+    WELL_SPACING_MM = 4.5
+    NUMBER_OF_SKIP = 1
+    A1_X_MM = 12.05
+    A1_Y_MM = 9.05
 
+
+class WELLPLATE_FORMAT_96:
+    NUMBER_OF_SKIP = 0
+    WELL_SIZE_MM = 6.21
+    WELL_SPACING_MM = 9
+    A1_X_MM = 14.3
+    A1_Y_MM = 11.36
+
+
+class WELLPLATE_FORMAT_24:
+    NUMBER_OF_SKIP = 0
+    WELL_SIZE_MM = 15.54
+    WELL_SPACING_MM = 19.3
+    A1_X_MM = 17.05
+    A1_Y_MM = 13.67
+
+
+class WELLPLATE_FORMAT_12:
+    NUMBER_OF_SKIP = 0
+    WELL_SIZE_MM = 22.05
+    WELL_SPACING_MM = 26
+    A1_X_MM = 24.75
+    A1_Y_MM = 16.86
+
+
+class WELLPLATE_FORMAT_6:
+    NUMBER_OF_SKIP = 0
+    WELL_SIZE_MM = 34.94
+    WELL_SPACING_MM = 39.2
+    A1_X_MM = 24.55
+    A1_Y_MM = 23.01
+
+
+
+#For simulated camera
+class SIMULATED_CAMERA:
+    ORIN_X = 20
+    ORIN_Y = 20
+    ORIN_Z = 3.354
+    MAGNIFICATION_FACTOR = 80
     
