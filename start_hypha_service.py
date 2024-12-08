@@ -10,7 +10,7 @@ import numpy as np
 from hypha_rpc import login, connect_to_server, register_rtc_service
 import json
 import cv2
-
+import dotenv
 import sys
 # Now you can import squid_control
 from squid_control.squid_controller import SquidController
@@ -18,6 +18,11 @@ from pydantic import Field, BaseModel
 from typing import List, Optional
 from hypha_tools.hypha_storage import HyphaDataStore
 from hypha_tools.chatbot.aask import aask
+
+dotenv.load_dotenv()  
+ENV_FILE = dotenv.find_dotenv()  
+if ENV_FILE:  
+    dotenv.load_dotenv(ENV_FILE)  
 
 class Microscope:
     def __init__(self, is_simulation=True):
@@ -496,7 +501,11 @@ class Microscope:
         print(f"Extension service registered with id: {svc.id}, you can visit the service at:\n {self.chatbot_service_url}")
 
     async def setup(self):
-        token = await login({"server_url": self.server_url})
+        try:  
+            token = os.environ.get("WORKSPACE_TOKEN")  
+        except:  
+            token = await login({"server_url": self.server_url})
+            
         server = await connect_to_server(
             {"server_url": self.server_url, "token": token, "workspace": "agent-lens"}
         )
@@ -512,10 +521,13 @@ class Microscope:
                 await self.datastore.setup(server, service_id="data-store", config=config)
             else:
                 raise e
-        chatbot_id = "squid-microscope-control-test"
+        chatbot_id = "squid-control-chatbot"
         chatbot_server_url = "https://chat.bioimage.io"
-        token = await login({"server_url": chatbot_server_url})
-        chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": token})
+        try:
+            chatbot_token= os.environ.get("WORKSPACE_TOKEN_CHATBOT")
+        except:
+            chatbot_token = await login({"server_url": chatbot_server_url})
+        chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token})
         await self.start_chatbot_service(chatbot_server, chatbot_id)
 
 if __name__ == "__main__":
