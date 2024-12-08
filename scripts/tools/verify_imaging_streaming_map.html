@@ -39,121 +39,125 @@
             const server = await hyphaWebsocketClient.connectToServer({  
                 "server_url": "https://hypha.aicell.io",  
                 "workspace": "agent-lens",  
-                "token": token,
+                "token": token,  
             });  
 
             console.log("Server connected:", server);  
 
-            // Connect to the tile streaming service  
-            const rtcConnection = await hyphaWebsocketClient.getRTCService(server, "microscopy-tile-stream");  
-            console.log("RTC Connection established:", rtcConnection);  
+            // Define the on_init function for WebRTC setup  
+            async function on_init(peerConnection) {  
+                console.log("WebRTC connection initialized");  
 
-            // Set up WebRTC video element  
-            const videoElement = document.getElementById('videoStream');  
+                // Handle incoming video stream  
+                peerConnection.addEventListener('track', (event) => {  
+                    if (event.track.kind === 'video') {  
+                        const videoElement = document.getElementById('videoStream');  
+                        videoElement.srcObject = new MediaStream([event.track]);  
+                        console.log("Video track received and set");  
+                    }  
+                });  
 
-            // Handle incoming video stream  
-            rtcConnection.ontrack = (event) => {  
-                if (event.track.kind === 'video') {  
-                    videoElement.srcObject = new MediaStream([event.track]);  
-                }  
-            };  
+                // Create a data channel for sending tile coordinates  
+                const dataChannel = peerConnection.createDataChannel('tileCoords');  
+                dataChannel.onopen = () => console.log('Data channel opened');  
+                dataChannel.onerror = (error) => console.error('Data channel error:', error);  
 
-            // Create data channel for sending coordinates  
-            const dataChannel = rtcConnection.createDataChannel('tileCoords');  
-            dataChannel.onopen = () => console.log('Data channel opened');  
-            dataChannel.onerror = (error) => console.error('Data channel error:', error);  
+                // Define the resolutions (hardcoded for now)  
+                const resolutions = [  
+                    1, 1 / 2, 1 / 4, 1 / 8, 1 / 16, 1 / 32, 1 / 64  
+                ];  
 
-            // Define the resolutions (hardcoded for now)  
-            const resolutions = [  
-                1, 1 / 2, 1 / 4, 1 / 8, 1 / 16, 1 / 32, 1 / 64  
-            ];  
+                // Hardcoded metadata (adjust based on your data)  
+                const tileSize = 256; // Tile size in pixels  
+                const imageWidth = tileSize * 64; // Adjust based on your data  
+                const imageHeight = tileSize * 64;  
+                const extent = [0, 0, imageWidth, imageHeight];  
 
-            // Hardcoded metadata (adjust based on your data)  
-            const tileSize = 256; // Tile size in pixels  
-            const imageWidth = tileSize * 64; // Adjust based on your data  
-            const imageHeight = tileSize * 64;  
-            const extent = [0, 0, imageWidth, imageHeight];  
+                // Create custom tile grid  
+                const tileGrid = new ol.tilegrid.TileGrid({  
+                    extent: extent,  
+                    resolutions: resolutions,  
+                    tileSize: tileSize,  
+                });  
 
-            // Create custom tile grid  
-            const tileGrid = new ol.tilegrid.TileGrid({  
-                extent: extent,  
-                resolutions: resolutions,  
-                tileSize: tileSize,  
-            });  
-
-            // Create a custom tile layer that uses WebRTC  
-            const tileLayer = new ol.layer.Tile({  
-                source: new ol.source.TileImage({  
-                    tileGrid: tileGrid,  
-                    tileLoadFunction: (imageTile, src) => {  
-                        // Parse coordinates from src  
-                        const coords = src.match(/\/(\d+)\/(\d+)\/(\d+)/);  
-                        if (coords) {  
-                            const [_, z, x, y] = coords;  
-                            // Send coordinates through data channel  
-                            if (dataChannel.readyState === 'open') {  
-                                dataChannel.send(JSON.stringify({  
-                                    coords: { z: parseInt(z), x: parseInt(x), y: parseInt(y) }  
-                                }));  
+                // Create a custom tile layer that uses WebRTC  
+                const tileLayer = new ol.layer.Tile({  
+                    source: new ol.source.TileImage({  
+                        tileGrid: tileGrid,  
+                        tileLoadFunction: (imageTile, src) => {  
+                            // Parse coordinates from src  
+                            const coords = src.match(/\/(\d+)\/(\d+)\/(\d+)/);  
+                            if (coords) {  
+                                const [_, z, x, y] = coords;  
+                                // Send coordinates through data channel  
+                                if (dataChannel.readyState === 'open') {  
+                                    dataChannel.send(JSON.stringify({  
+                                        coords: { z: parseInt(z), x: parseInt(x), y: parseInt(y) }  
+                                    }));  
+                                }  
                             }  
-                        }  
-                    },  
-                    url: 'dummy/{z}/{x}/{y}' // Dummy URL for OpenLayers  
-                })  
-            });  
+                        },  
+                        url: 'dummy/{z}/{x}/{y}' // Dummy URL for OpenLayers  
+                    })  
+                });  
 
-            // Create the map view  
-            const view = new ol.View({  
-                center: [imageWidth / 2, imageHeight / 2],  
-                zoom: 0,  
-                maxZoom: resolutions.length - 1,  
-                minZoom: 0,  
-                resolutions: resolutions,  
-            });  
+                // Create the map view  
+                const view = new ol.View({  
+                    center: [imageWidth / 2, imageHeight / 2],  
+                    zoom: 0,  
+                    maxZoom: resolutions.length - 1,  
+                    minZoom: 0,  
+                    resolutions: resolutions,  
+                });  
 
-            // Create the map  
-            const map = new ol.Map({  
-                target: 'map',  
-                layers: [tileLayer],  
-                view: view,  
-            });  
+                // Create the map  
+                const map = new ol.Map({  
+                    target: 'map',  
+                    layers: [tileLayer],  
+                    view: view,  
+                });  
 
-            // Handle map movement  
-            map.on('moveend', () => {  
-                const center = view.getCenter();  
-                const zoom = view.getZoom();  
+                // Handle map movement  
+                map.on('moveend', () => {  
+                    const center = view.getCenter();  
+                    const zoom = view.getZoom();  
 
-                // Calculate visible tiles  
-                const extent = view.calculateExtent(map.getSize());  
-                const z = Math.floor(zoom);  
-                const tileRange = tileGrid.getTileRangeForExtentAndZ(extent, z);  
+                    // Calculate visible tiles  
+                    const extent = view.calculateExtent(map.getSize());  
+                    const z = Math.floor(zoom);  
+                    const tileRange = tileGrid.getTileRangeForExtentAndZ(extent, z);  
 
-                // Send current viewport info  
-                if (dataChannel.readyState === 'open') {  
-                    dataChannel.send(JSON.stringify({  
-                        viewport: {  
-                            center,  
-                            zoom,  
-                            extent: extent,  
-                            tileRange: {  
-                                minX: tileRange.minX,  
-                                minY: tileRange.minY,  
-                                maxX: tileRange.maxX,  
-                                maxY: tileRange.maxY  
+                    // Send current viewport info  
+                    if (dataChannel.readyState === 'open') {  
+                        dataChannel.send(JSON.stringify({  
+                            viewport: {  
+                                center,  
+                                zoom,  
+                                extent: extent,  
+                                tileRange: {  
+                                    minX: tileRange.minX,  
+                                    minY: tileRange.minY,  
+                                    maxX: tileRange.maxX,  
+                                    maxY: tileRange.maxY  
+                                }  
                             }  
-                        }  
-                    }));  
-                }  
-            });  
+                        }));  
+                    }  
+                });  
 
-            // Handle channel switching (if needed)  
-            function switchChannel(channelName) {  
-                if (dataChannel.readyState === 'open') {  
-                    dataChannel.send(JSON.stringify({  
-                        channel: channelName  
-                    }));  
+                // Handle channel switching (if needed)  
+                function switchChannel(channelName) {  
+                    if (dataChannel.readyState === 'open') {  
+                        dataChannel.send(JSON.stringify({  
+                            channel: channelName  
+                        }));  
+                    }  
                 }  
             }  
+
+            // Connect to the WebRTC service with the on_init callback  
+            const rtcConnection = await hyphaWebsocketClient.getRTCService(server, "microscopy-tile-stream", { on_init });  
+            console.log("RTC Connection established:", rtcConnection);  
         }  
 
         // Initialize the viewer  
