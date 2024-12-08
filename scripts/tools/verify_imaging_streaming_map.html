@@ -32,20 +32,21 @@
     <script>  
         async function initializeViewer() {  
             // Connect to Hypha server  
-            token = await hyphaWebsocketClient.login({"server_url": "https://hypha.aicell.io",
-                workspace: "agent-lens"})
-            const server = await hyphaWebsocketClient.connectToServer({  
-                "server_url": "https://hypha.aicell.io",
-                workspace: "agent-lens",
-                token: token
+            const token = await hyphaWebsocketClient.login({  
+                "server_url": "https://hypha.aicell.io",  
+                "workspace": "agent-lens"  
             });  
+            const server = await hyphaWebsocketClient.connectToServer({  
+                "server_url": "https://hypha.aicell.io",  
+                "workspace": "agent-lens",  
+                "token": token  
+            });  
+
+            console.log("Server connected:", server);  
 
             // Connect to the tile streaming service  
             const rtcConnection = await hyphaWebsocketClient.getRTCService(server, "microscopy-tile-stream");  
-
-            // Get metadata service  
-            const metadataService = await server.getService("microscopy-tile-service");  
-            const metadata = await metadataService.get_metadata();  
+            console.log("RTC Connection established:", rtcConnection);  
 
             // Set up WebRTC video element  
             const videoElement = document.getElementById('videoStream');  
@@ -62,20 +63,22 @@
             dataChannel.onopen = () => console.log('Data channel opened');  
             dataChannel.onerror = (error) => console.error('Data channel error:', error);  
 
-            // Define the resolutions  
+            // Define the resolutions (hardcoded for now)  
             const resolutions = [  
-                1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64  
+                1, 1 / 2, 1 / 4, 1 / 8, 1 / 16, 1 / 32, 1 / 64  
             ];  
 
-            const imageWidth = metadata.tile_size * 64;  // Adjust based on your data  
-            const imageHeight = metadata.tile_size * 64;  
+            // Hardcoded metadata (adjust based on your data)  
+            const tileSize = 256; // Tile size in pixels  
+            const imageWidth = tileSize * 64; // Adjust based on your data  
+            const imageHeight = tileSize * 64;  
             const extent = [0, 0, imageWidth, imageHeight];  
 
             // Create custom tile grid  
             const tileGrid = new ol.tilegrid.TileGrid({  
                 extent: extent,  
                 resolutions: resolutions,  
-                tileSize: metadata.tile_size,  
+                tileSize: tileSize,  
             });  
 
             // Create a custom tile layer that uses WebRTC  
