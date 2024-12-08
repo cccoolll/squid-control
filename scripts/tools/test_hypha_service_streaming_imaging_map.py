@@ -11,6 +11,14 @@ from streaming_imaging_map import get_tile_from_zarr, ZARR_FOLDER, CHANNEL_NAME
 import os  
 from io import BytesIO  
 import dotenv  
+
+"""
+This script sets up a video stream track for streaming image tiles based on received coordinates using WebRTC.
+It utilizes the aiortc library for real-time communication and the hypha_rpc library for connecting to the Hypha server.
+The TileStreamTrack class extends the MediaStreamTrack class to handle video streaming, updating coordinates, and channels for tile retrieval.
+Environment variables are loaded using dotenv for configuration.
+"""
+
 dotenv.load_dotenv()  
 ENV_FILE = dotenv.find_dotenv()  
 if ENV_FILE:  
@@ -130,7 +138,8 @@ async def start_tile_service(server_url):
         service_id="microscopy-tile-stream",  
         config={  
             "visibility": "public",  
-            "on_init": on_init,  # Pass the corrected on_init function  
+            "on_init": on_init,  # Pass the corrected on_init function
+            "webrtc": True,
         }  
     )  
 

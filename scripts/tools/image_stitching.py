@@ -6,6 +6,12 @@ import json
 from tqdm import tqdm
 import tifffile  # Add this import
 # TODO: import fuctions from stitcher.py instead of copying them here
+
+"""
+This script provides utility functions for image stitching, including calculating overlap percentages, determining pixel sizes based on imaging parameters, and rotating/flipping images.
+It uses OpenCV for image processing and numpy for numerical operations.
+"""
+
 def compute_overlap_percent(deltaX, deltaY, image_width, image_height, pixel_size_xy, min_overlap=0):
     """Helper function to calculate percent overlap between images in a grid."""
     shift_x = deltaX / pixel_size_xy

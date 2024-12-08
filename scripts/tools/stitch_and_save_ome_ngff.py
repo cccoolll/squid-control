@@ -3,7 +3,21 @@ import numpy as np
 import zarr  
 from skimage.transform import downscale_local_mean  
 import tifffile  
+"""
+This script provides functionality to save a stitched image to the OME-NGFF (Open Microscopy Environment - Next Generation File Formats) format with multi-resolution layers. 
 
+The main function, `save_to_ome_ngff`, takes an output folder path, a channel name, a stitched image (as a 2D NumPy array), and an optional maximum downscaling factor. It creates a Zarr group for the specified channel and generates a multi-resolution pyramid of the stitched image by iteratively downscaling it. Each resolution level is saved as a separate dataset within the Zarr group, with appropriate chunking and compression. Additionally, OME-NGFF metadata is added to the Zarr group to describe the multi-resolution structure.
+
+Dependencies:
+- os
+- numpy
+- zarr
+- skimage
+- tifffile
+
+Usage:
+Call the `save_to_ome_ngff` function with the appropriate parameters to save a stitched image in OME-NGFF format.
+"""
 def save_to_ome_ngff(output_folder, channel_name, stitched_image, max_scale=64):  
     """  
     Save a stitched image to OME-NGFF format with multi-resolution layers.  
