@@ -1,153 +1,71 @@
 import asyncio  
-import fractions  
-import json
-import logging
-from tkinter import Image  
-import numpy as np  
-from av import VideoFrame  
-from aiortc import MediaStreamTrack  
-from hypha_rpc import connect_to_server, login, register_rtc_service  
-from streaming_imaging_map import get_tile_from_zarr, ZARR_FOLDER, CHANNEL_NAME  
 import os  
-from io import BytesIO  
 import dotenv  
+from hypha_rpc import connect_to_server  
 
-"""
-This script sets up a video stream track for streaming image tiles based on received coordinates using WebRTC.
-It utilizes the aiortc library for real-time communication and the hypha_rpc library for connecting to the Hypha server.
-The TileStreamTrack class extends the MediaStreamTrack class to handle video streaming, updating coordinates, and channels for tile retrieval.
-Environment variables are loaded using dotenv for configuration.
-"""
+# Import your existing streaming module  
+import streaming_imaging_map  
 
+# Load environment variables  
 dotenv.load_dotenv()  
-ENV_FILE = dotenv.find_dotenv()  
-if ENV_FILE:  
-    dotenv.load_dotenv(ENV_FILE)  
-  
-logger = logging.getLogger("tile_streaming")
+token = os.getenv("SQUID_WORKSPACE_TOKEN")  
 
-class TileStreamTrack(MediaStreamTrack):  
+async def start_server(server_url):  
     """  
-    A video stream track that streams tiles based on received coordinates  
+    Start the Hypha server and register the tile streaming service.  
     """  
-    kind = "video"  
-    def __init__(self):  
-        super().__init__()  
-        self.count = 0  
-        self.current_channel = CHANNEL_NAME  
-        self.current_coords = {"z": 0, "x": 0, "y": 0}  
-        self._running = True  
-
-    def update_coords(self, z, x, y):  
-        """Update the current coordinates for tile streaming"""  
-        self.current_coords = {"z": z, "x": x, "y": y}  
-
-    def update_channel(self, channel_name):  
-        """Update the current channel"""  
-        self.current_channel = channel_name  
-
-    async def recv(self):  
-        if not self._running:  
-            return None  
-
-        try:  
-            # Get tile based on current coordinates  
-            zarr_path = os.path.join(ZARR_FOLDER, f"{self.current_channel}.zarr")  
-            tile_buffer = get_tile_from_zarr(  
-                zarr_path,   
-                self.current_coords["z"],  
-                self.current_coords["x"],  
-                self.current_coords["y"]  
-            )  
-
-            # Convert tile to numpy array for video frame  
-            tile_array = np.array(Image.open(tile_buffer))  
-
-            # Ensure the array is in the correct format (BGR)  
-            if len(tile_array.shape) == 2:  # If grayscale  
-                tile_array = np.stack([tile_array] * 3, axis=-1)  
-
-            # Create video frame  
-            new_frame = VideoFrame.from_ndarray(tile_array, format="bgr24")  
-            new_frame.pts = self.count  
-            self.count += 1  
-            new_frame.time_base = fractions.Fraction(1, 1000)  
-
-            return new_frame  
-
-        except Exception as e:  
-            logger.error(f"Error in tile streaming: {str(e)}")  
-            # Return a blank frame in case of error  
-            blank_frame = np.zeros((256, 256, 3), dtype=np.uint8)  
-            new_frame = VideoFrame.from_ndarray(blank_frame, format="bgr24")  
-            new_frame.pts = self.count  
-            self.count += 1  
-            new_frame.time_base = fractions.Fraction(1, 1000)  
-            return new_frame  
-
-async def start_tile_service(server_url):  
-    try:  
-        token = os.environ.get("WORKSPACE_TOKEN")  
-    except:  
-        token = await login({"server_url": server_url})  
-
     # Connect to the Hypha server  
     server = await connect_to_server({  
         "server_url": server_url,  
         "token": token,  
-        "workspace": "agent-lens",  
+        "workspace": "squid-control",  # Specify the workspace if needed  
     })  
 
-    # Create a shared tile stream track instance  
-    tile_track = TileStreamTrack()  
-
-    async def on_init(peer_connection):  
+    # Define the RPC function for serving tiles  
+    async def get_tile(z: int, x: int, y: int) -> bytes:  
         """  
-        This function is called when a new WebRTC peer connection is initialized.  
+        Serve a tile for the fixed channel and z, x, y parameters.  
         """  
-        @peer_connection.on("datachannel")  
-        def on_datachannel(channel):  
-            @channel.on("message")  
-            def on_message(message):  
-                try:  
-                    data = json.loads(message)  
-                    if "coords" in data:  
-                        tile_track.update_coords(  
-                            data["coords"]["z"],  
-                            data["coords"]["x"],  
-                            data["coords"]["y"]  
-                        )  
-                    if "channel" in data:  
-                        tile_track.update_channel(data["channel"])  
-                except Exception as e:  
-                    logger.error(f"Error processing message: {str(e)}")  
+        try:  
+            # Use the existing function from streaming_imaging_map  
+            tile = streaming_imaging_map.get_tile(z, x, y)  
+            return tile.read()  # Return the binary content of the tile  
+        except Exception as e:  
+            return {"error": str(e)}  
 
-        @peer_connection.on("track")  
-        def on_track(track):  
-            logger.info(f"Track {track.kind} received")  
-            peer_connection.addTrack(tile_track)  
+    # Define the RPC function for serving the main webpage  
+    async def index() -> str:  
+        """  
+        Serve the main webpage with OpenLayers.  
+        """  
+        try:  
+            # Use the existing function from streaming_imaging_map  
+            return streaming_imaging_map.index()  
+        except Exception as e:  
+            return {"error": str(e)}  
 
-            @track.on("ended")  
-            def on_ended():  
-                logger.info(f"Track {track.kind} ended")  
-                tile_track._running = False  
+    # Register the service with Hypha  
+    service_info = await server.register_service({  
+        "name": "Tile Streaming Service",  
+        "id": "tile-streaming",  
+        "config": {  
+            "visibility": "public",  # Make the service publicly accessible  
+            "require_context": False,  # No specific context required  
+            "run_in_executor": True,  # Run in an executor for compatibility  
+        },  
+        "get_tile": get_tile,  # Expose the get_tile function  
+        "index": index,        # Expose the index function  
+    })  
 
-    # Register the WebRTC service  
-    await register_rtc_service(  
-        server,  
-        service_id="microscopy-tile-stream",  
-        config={  
-            "visibility": "public",  
-            "on_init": on_init,  # Pass the corrected on_init function
-            "webrtc": True,
-        }  
-    )  
+    print(f"Service registered successfully!")  
+    print(f"Service ID: {service_info.id}")  
+    print(f"Workspace: {server.config.workspace}")  
+    print(f"Test the service at: {server_url}/{server.config.workspace}/services/{service_info.id}/get_tile?z=0&x=0&y=0")  
 
-    print(f"WebRTC service registered at workspace: {server.config.workspace}")  
-
-    # Keep the service running  
+    # Keep the server running  
     await server.serve()  
 
 if __name__ == "__main__":  
+    # Replace with your Hypha server URL  
     server_url = "https://hypha.aicell.io"  
-    asyncio.run(start_tile_service(server_url))  
+    asyncio.run(start_server(server_url))  
