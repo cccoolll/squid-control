@@ -29,13 +29,14 @@ async def test_tile_service():
             (0, 0, 0),  # zoom level 0, top-left tile    
             (1, 0, 0),  # zoom level 1, top-left tile    
             (1, 1, 1),  # zoom level 1, bottom-right tile    
-        ]    
+        ]
+        channel_name = "Fluorescence_561_nm"
 
         for z, x, y in test_coords:    
             print(f"\nTesting tile at z={z}, x={x}, y={y}")    
             try:    
                 # Get tile data    
-                tile_bytes = await service.get_tile(z, x, y)     
+                tile_bytes = await service.get_tile(channel_name, z, x, y)     
 
                 if tile_bytes is None:    
                     print(f"No tile data received for z={z}, x={x}, y={y}")    

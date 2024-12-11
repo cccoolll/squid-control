@@ -95,13 +95,15 @@ async def start_server(server_url):
         "workspace": "squid-control",  
     })  
   
-    async def get_tile(z: int, x: int, y: int):  
+    async def get_tile(channel_name: str ,z: int, x: int, y: int):  
         """Serve a tile for the fixed channel and z, x, y parameters."""  
         try:  
             print(f"Backend: Fetching tile z={z}, x={x}, y={y}")  
-              
-            # Path to the Zarr file for the fixed channel  
-            zarr_path = os.path.join(ZARR_FOLDER, f"{CHANNEL_NAME}.zarr")  
+            
+            try:
+                zarr_path = os.path.join(ZARR_FOLDER, f"{channel_name}.zarr")  
+            except:
+                zarr_path = os.path.join(ZARR_FOLDER, f"{CHANNEL_NAME}.zarr")  
   
             # Check if the Zarr file exists  
             if not os.path.exists(zarr_path):  
