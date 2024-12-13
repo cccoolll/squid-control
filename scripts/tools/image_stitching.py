@@ -22,6 +22,47 @@ def compute_overlap_percent(deltaX, deltaY, image_width, image_height, pixel_siz
     overlap_y = overlap_y * 100.0 / image_height
     overlap = max(min_overlap, overlap_x, overlap_y)
     return overlap
+def compute_shift(image1, image2):
+    """
+    Compute the relative shift (translation) between two overlapping images using SIFT feature matching.
+    Args:
+        image1: First image (grayscale).
+        image2: Second image (grayscale).
+    Returns:
+        dx, dy: The computed shift in x and y directions.
+    """
+    # Initialize SIFT detector
+    sift = cv2.SIFT_create()
+
+    # Detect keypoints and descriptors
+    keypoints1, descriptors1 = sift.detectAndCompute(image1, None)
+    keypoints2, descriptors2 = sift.detectAndCompute(image2, None)
+
+    print(f"Keypoints in image1: {len(keypoints1)}, image2: {len(keypoints2)}")
+
+    # Use BFMatcher to find matches
+    bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
+    matches = bf.match(descriptors1, descriptors2)
+
+    # Sort matches by distance (best matches first)
+    matches = sorted(matches, key=lambda x: x.distance)
+
+    print(f"Number of matches: {len(matches)}")
+
+    # Ensure there are enough matches to compute a shift
+    if len(matches) < 5:  # Arbitrary threshold, adjust as needed
+        print("Warning: Not enough matches found to compute shift.")
+        return 0, 0
+
+    # Extract matched keypoints
+    points1 = np.float32([keypoints1[m.queryIdx].pt for m in matches])
+    points2 = np.float32([keypoints2[m.trainIdx].pt for m in matches])
+
+    # Compute the translation using the mean of the differences
+    dx = np.mean(points2[:, 0] - points1[:, 0])
+    dy = np.mean(points2[:, 1] - points1[:, 1])
+
+    return dx, dy
 
 # CAMERA_PIXEL_SIZE_UM = 1.85, TUBE_LENS_MM = 50, OBJECTIVE_TUBE_LENS_MM = 180, MAGNIFICATION = 40
 def get_pixel_size(parameters, default_pixel_size=1.85, default_tube_lens_mm=50.0, default_objective_tube_lens_mm=180.0, default_magnification=40.0):
@@ -116,7 +157,7 @@ def create_preview_image(canvas, max_size=4000):
 
 def process_channel(channel_name, image_info, parameters, output_folder, rotation_angle=0):
     """Process one channel at a time to reduce memory usage, with optional rotation."""
-    
+
     dx, dy, Nx, Ny, pixel_size_xy = get_image_positions(parameters)
 
     # Filter images for current channel
@@ -127,8 +168,11 @@ def process_channel(channel_name, image_info, parameters, output_folder, rotatio
 
     # Get image dimensions from first image
     sample_image = cv2.imread(channel_images[0]["filepath"])
+    if sample_image is None:
+        print(f"Error: Unable to read sample image {channel_images[0]['filepath']}. Skipping channel...")
+        return
     img_height, img_width, _ = sample_image.shape
-    overlap_percent = min(100, compute_overlap_percent(dx, dy, img_width, img_height, pixel_size_xy))
+    overlap_percent = min(100, max(0, compute_overlap_percent(dx, dy, img_width, img_height, pixel_size_xy)))
     print(f"dx: {dx}, dy: {dy}, pixel_size_xy: {pixel_size_xy}")
     print(f"Image dimensions: width={img_width}, height={img_height}")
     print(f"Calculated overlap_percent: {overlap_percent}")
@@ -136,10 +180,12 @@ def process_channel(channel_name, image_info, parameters, output_folder, rotatio
     # Calculate effective step size (accounting for overlap)
     x_step = img_width * (1 - overlap_percent / 100)
     y_step = img_height * (1 - overlap_percent / 100)
+    print(f"x_step: {x_step}, y_step: {y_step}")
 
     # Calculate canvas size
     canvas_width = int(img_width + (Nx - 1) * x_step + 10)  # Add a small buffer
     canvas_height = int(img_height + (Ny - 1) * y_step + 10)
+    print(f"Canvas size: width={canvas_width}, height={canvas_height}")
 
     # Create output file paths
     output_path = os.path.join(output_folder, f"stitched_{channel_name}.tiff")
@@ -153,19 +199,56 @@ def process_channel(channel_name, image_info, parameters, output_folder, rotatio
         x_idx = info["x_idx"]
         y_idx = info["y_idx"]
 
-        # Calculate position on canvas
+        # Calculate initial position on canvas
         x_pos = round(x_idx * x_step)
-        y_pos = round((Ny - y_idx - 1) * y_step) # origin (0, 0) is at the top-left corner when taking images, but at the bottom-left corner in the canvas
+        y_pos = round((Ny - y_idx - 1) * y_step)
+
         # Read image and convert to grayscale if it's not already
         image = cv2.imread(info["filepath"], cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            print(f"Error: Unable to read image {info['filepath']}. Skipping...")
+            continue
+        image = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
         # Rotate the image if a rotation angle is specified
         if rotation_angle != 0:
-            image = rotate_flip_image(image, rotation_angle,flip=True)
-            
+            image = rotate_flip_image(image, rotation_angle, flip=True)
+
+        # If this is not the first image, compute the shift
+        if x_idx > 0 or y_idx > 0:
+            # Get the previous image for shift computation
+            prev_image_path = [info for info in channel_images if info["x_idx"] == x_idx - 1 and info["y_idx"] == y_idx]
+            if not prev_image_path:
+                prev_image_path = [info for info in channel_images if info["x_idx"] == x_idx and info["y_idx"] == y_idx - 1]
+
+            if prev_image_path:  # Ensure a previous image exists
+                prev_image = cv2.imread(prev_image_path[0]["filepath"], cv2.IMREAD_GRAYSCALE)
+                if prev_image is None:
+                    print(f"Error: Unable to read previous image {prev_image_path[0]['filepath']}. Skipping shift computation...")
+                else:
+                    try:
+                        if rotation_angle != 0:
+                            prev_image = rotate_flip_image(prev_image, rotation_angle, flip=True)
+                        dx, dy = compute_shift(prev_image, image)
+                        x_pos += int(dx)
+                        y_pos += int(dy)
+                    except Exception as e:
+                        print(f"Error computing shift for image {info['filepath']}: {e}")
+            else:
+                print(f"Warning: No previous image found for ({x_idx}, {y_idx}). Using default position.")
+
+        # Ensure positions are within canvas bounds
+        x_pos = max(0, x_pos)
+        y_pos = max(0, y_pos)
+
+        # Ensure the image fits within the canvas
+        x_end = min(canvas.shape[1], x_pos + img_width)
+        y_end = min(canvas.shape[0], y_pos + img_height)
+        image_x_end = x_end - x_pos
+        image_y_end = y_end - y_pos
 
         # Place the (rotated) image on the canvas
-        canvas[y_pos:y_pos + img_height, x_pos:x_pos + img_width] = image
+        canvas[y_pos:y_end, x_pos:x_end] = image[:image_y_end, :image_x_end]
 
     # Save the full resolution stitched image as TIFF
     try:
