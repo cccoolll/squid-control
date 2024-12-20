@@ -13,6 +13,20 @@ def load_imaging_parameters(parameter_file):
         parameters = json.load(f)
     return parameters
 
+def rotate_flip_image(image, angle=90, flip=True):
+    """Rotate an image by a specified angle."""
+    (h, w) = image.shape[:2]
+    center = (w // 2, h // 2)
+
+    # Get the rotation matrix
+    rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+
+    # Perform the rotation
+    rotated = cv2.warpAffine(image, rotation_matrix, (w, h))
+    if flip:
+      rotated = cv2.flip(rotated, -1) # Flip horizontally and vertically
+    return rotated
+
 def get_pixel_size(parameters, default_pixel_size=1.85, default_tube_lens_mm=50.0, default_objective_tube_lens_mm=180.0, default_magnification=40.0):
     """Calculate pixel size based on imaging parameters."""
     try:
@@ -175,28 +189,30 @@ def process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limit
     canvas_width = datasets[selected_channel[0]]["scale0"].shape[1]
     canvas_height = datasets[selected_channel[0]]["scale0"].shape[0]
 
-    for info, index in tqdm(zip(image_info, range(len(image_info))), total=len(image_info)):
+    for info in tqdm(image_info):
         # Extract FOV information
         filepath = info["filepath"]
         region = info["region"]
         x_idx = info["x_idx"]
+        y_idx = info["y_idx"]
         channel = info["channel_name"]
 
         # Skip images not in the selected channel
         if channel not in selected_channel:
             continue
 
+        # Skip images not in the selected channel
+        if channel not in selected_channel:
+            continue
+
         # Get physical coordinates from coordinates.csv
-        coordinate_index =  index //5 +1
-        print(f"Index in the coordinates: {coordinate_index}")
-        coord_row = coordinates.iloc[coordinate_index]
+        coord_row = coordinates[(coordinates["region"] == region) & (coordinates["i"] == x_idx) & (coordinates["j"] == info["y_idx"])]
         if coord_row.empty:
             print(f"Warning: No coordinates found for {filepath}")
             continue
 
         # Extract x, y coordinates
-        x_mm = coord_row["x (mm)"]
-        y_mm = coord_row["y (mm)"]
+        x_mm, y_mm = coord_row.iloc[0]["x (mm)"], coord_row.iloc[0]["y (mm)"] 
         x_um = (x_mm * 1000) - x_offset
         y_um = (y_mm * 1000) - y_offset
 
@@ -219,7 +235,7 @@ def process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limit
             # Clip the image to the computed range and normalize to 8-bit
             image = np.clip(image, img_min, img_max)
             image = ((image - img_min) * 255 / (img_max - img_min)).astype(np.uint8)
-
+        image = rotate_flip_image(image)
         # Validate and clip the placement region
         if x_start < 0 or y_start < 0 or x_start >= canvas_width or y_start >= canvas_height:
             print(f"Warning: Image at {filepath} is out of canvas bounds and will be skipped.")
@@ -245,10 +261,10 @@ def process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limit
 
 def main():
     # Paths and parameters
-    data_folder = "/media/reef/harddisk/hpa-2_2024-11-12_17-03-42.994649"
+    data_folder = "/media/reef/harddisk/20241112-hpa_2024-11-12_15-49-12.554140"
     image_folder = os.path.join(data_folder, "0")
     parameter_file = os.path.join(data_folder, "acquisition parameters.json")
-    coordinates_file = os.path.join(image_folder, "coordinates.csv")
+    coordinates_file = os.path.join(image_folder, "coordinates-processed.csv")
     output_folder = "/media/reef/harddisk/stitched_output_whole_view"
     os.makedirs(output_folder, exist_ok=True)
 
@@ -260,9 +276,9 @@ def main():
     pixel_size_xy = get_pixel_size(parameters)
     stage_limits = {
         "x_positive": 120,
-        "x_negative": 10,
-        "y_positive": 76,
-        "y_negative": 4,
+        "x_negative": 0,
+        "y_positive": 86,
+        "y_negative": 0,
         "z_positive": 6
     }
     canvas_width, canvas_height = create_canvas_size(stage_limits, pixel_size_xy)
