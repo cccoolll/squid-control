@@ -8,8 +8,8 @@ from PIL import Image
 app = Flask(__name__)  
   
 # Path to the folder containing Zarr files  
-ZARR_FOLDER = "/media/reef/harddisk/test_stitching/ome_ngff_output/"  
-CHANNEL_NAME = "Fluorescence_561_nm"  # Fixed channel name  
+ZARR_FOLDER = "/media/reef/harddisk/stitched_output_whole_view"  
+CHANNEL_NAME = "stitched_images"  # Fixed channel name  
   
 def create_blank_tile(tile_size=256):  
     """  
@@ -26,7 +26,7 @@ def get_tile_from_zarr(zarr_path, z, x, y):
     Fetch a tile from the Zarr file based on the z, x, y parameters.  
     """  
     # Open the Zarr file  
-    zarr_group = zarr.open_group(zarr_path, mode="r")  
+    zarr_group = zarr.open_group(f"{zarr_path}/BF_LED_matrix_full", mode="r")  
 
     # Dynamically determine the number of scales  
     zarr_scales = [key for key in zarr_group.keys() if key.startswith("scale")]  

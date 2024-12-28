@@ -286,15 +286,16 @@ def main():
     # Calculate appropriate number of pyramid levels
     max_dimension = max(canvas_width, canvas_height)
     max_levels = int(np.floor(np.log2(max_dimension)))
-    pyramid_levels = min(7, max_levels)  # Cap at 7 or fewer levels
+    print(f"Max dimension: {max_dimension}, max levels: {max_levels}")
+    pyramid_levels = 11
 
     print(f"Using {pyramid_levels} pyramid levels for {canvas_width}x{canvas_height} canvas")
     # Parse image filenames and get unique channels
     image_info = parse_image_filenames(image_folder)
     channels = list(set(info["channel_name"] for info in image_info))
     print(f"Found {len(image_info)} images with {len(channels)} channels")
-    selected_channel = ['BF_LED_matrix_full']
-    print(f"Selected channel: {selected_channel}")
+    # selected_channel = ['BF_LED_matrix_full']
+    # print(f"Selected channel: {selected_channel}")
 
     # If dataset eixts, use it
     if os.path.exists(os.path.join(output_folder, "stitched_images.zarr")):
@@ -302,11 +303,11 @@ def main():
         datasets = zarr.open(os.path.join(output_folder, "stitched_images.zarr"), mode="a")
     else:
         # Create OME-NGFF file
-        root, datasets = create_ome_ngff(output_folder, canvas_width, canvas_height, selected_channel)
+        root, datasets = create_ome_ngff(output_folder, canvas_width, canvas_height, channels, pyramid_levels=pyramid_levels)
         print(f"Dataset created: {datasets}")
 
     # Process images and stitch them
-    process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limits, selected_channel=selected_channel)
+    process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limits, selected_channel=channels, pyramid_levels=pyramid_levels)
 
 if __name__ == "__main__":
     main()

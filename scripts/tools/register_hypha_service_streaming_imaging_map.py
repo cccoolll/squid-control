@@ -8,7 +8,7 @@ import zarr
 import numpy as np  
   
 # Constants from streaming_imaging_map  
-ZARR_FOLDER = "/media/reef/harddisk/test_stitching/ome_ngff_output/"  
+ZARR_PATH = "/media/reef/harddisk/stitched_output_whole_view/stitched_images.zarr"  
 CHANNEL_NAME = "Fluorescence_561_nm"  
   
 def create_blank_tile(tile_size=256):  
@@ -19,11 +19,12 @@ def create_blank_tile(tile_size=256):
     buffer.seek(0)  
     return buffer  
   
-def get_tile_from_zarr(zarr_path, z=0, x=0, y=0):  
+def get_tile_from_zarr(zarr_path,channel_name, z=0, x=0, y=0):  
     """Fetch a tile from the Zarr file based on the z, x, y parameters."""  
     try:  
-        # Open the Zarr file  
-        zarr_group = zarr.open_group(zarr_path, mode="r")  
+        # Open the Zarr file
+        tile_path = f"{zarr_path}/{channel_name}"
+        zarr_group = zarr.open_group(tile_path, mode="r")  
   
         # Dynamically determine the number of scales  
         zarr_scales = [key for key in zarr_group.keys() if key.startswith("scale")]  
@@ -99,11 +100,9 @@ async def start_server(server_url):
         """Serve a tile for the fixed channel and z, x, y parameters."""  
         try:  
             print(f"Backend: Fetching tile z={z}, x={x}, y={y}")  
-            
-            try:
-                zarr_path = os.path.join(ZARR_FOLDER, f"{channel_name}.zarr")  
-            except:
-                zarr_path = os.path.join(ZARR_FOLDER, f"{CHANNEL_NAME}.zarr")  
+            if channel_name is None:
+                channel_name = CHANNEL_NAME
+            zarr_path = ZARR_PATH 
   
             # Check if the Zarr file exists  
             if not os.path.exists(zarr_path):  
@@ -111,7 +110,7 @@ async def start_server(server_url):
                 return create_blank_tile()  
   
             # Fetch the tile from the Zarr file  
-            tile_buffer = get_tile_from_zarr(zarr_path, z, x, y)
+            tile_buffer = get_tile_from_zarr(zarr_path,channel_name, z, x, y)
 
             tile_bytes = tile_buffer.getvalue()  
             print(f"Successfully fetched tile, size={len(tile_bytes)} bytes")  
@@ -127,8 +126,8 @@ async def start_server(server_url):
   
     # Register the service with Hypha  
     service_info = await server.register_service({  
-        "name": "Tile Streaming Service",  
-        "id": "tile-streaming",  
+        "name": "Tile Streaming Service (Whole View)",  
+        "id": "tile-streaming-whole-view",  
         "config": {  
             "visibility": "public",  
             "require_context": False,  

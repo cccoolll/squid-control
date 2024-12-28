@@ -16,7 +16,7 @@ def create_preview_image(zarr_path, output_path, max_size=4000):
     
     # Get scale6 data from BF_LED_matrix_full channel
     channel = 'BF_LED_matrix_full'
-    scale_data = store[channel]['scale6'][:]
+    scale_data = store[channel]['scale10'][:]
     
     # Get original dimensions
     original_height, original_width = scale_data.shape

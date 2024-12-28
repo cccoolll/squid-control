@@ -32,12 +32,16 @@
             1 / 8,   // Scale 3  
             1 / 16,  // Scale 4  
             1 / 32,  // Scale 5  
-            1 / 64,  // Scale 6 (most zoomed-out)  
+            1 / 64,  // Scale 6
+            1 / 128, // Scale 7
+            1 / 256, // Scale 8
+            1 / 512, // Scale 9
+            1 / 1024 // Scale 10 (least detailed)
         ];  
 
         // Define the extent of the image (adjust based on the size of scale 0)  
-        const imageWidth = 500; // Width of scale 6  
-        const imageHeight = 500; // Height of scale 6  
+        const imageWidth = 500; // Width of scale 10 
+        const imageHeight = 700; // Height of scale 10 
         const extent = [0, 0, imageWidth, imageHeight];  
 
         // Create a custom tile grid  
