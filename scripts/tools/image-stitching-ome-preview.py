@@ -14,9 +14,9 @@ def create_preview_image(zarr_path, output_path, max_size=4000):
     # Open the zarr dataset
     store = zarr.open(zarr_path, mode='r')
     
-    # Get scale6 data from BF_LED_matrix_full channel
-    channel = 'BF_LED_matrix_full'
-    scale_data = store[channel]['scale10'][:]
+    # Get scale6 data from which channel
+    channel = 'Fluorescence_488_nm_Ex'
+    scale_data = store[channel]['scale5'][:]
     
     # Get original dimensions
     original_height, original_width = scale_data.shape

@@ -10,7 +10,6 @@ app = Flask(__name__)
 # Path to the folder containing Zarr files  
 ZARR_FOLDER = "/media/reef/harddisk/stitched_output_whole_view"  
 CHANNEL_NAME = "stitched_images"  # Fixed channel name  
-  
 def create_blank_tile(tile_size=256):  
     """  
     Create a blank tile (all black) of the given size.  
@@ -26,7 +25,7 @@ def get_tile_from_zarr(zarr_path, z, x, y):
     Fetch a tile from the Zarr file based on the z, x, y parameters.  
     """  
     # Open the Zarr file  
-    zarr_group = zarr.open_group(f"{zarr_path}/BF_LED_matrix_full", mode="r")  
+    zarr_group = zarr.open_group(f"{zarr_path}/Fluorescence_488_nm_Ex", mode="r")  
 
     # Dynamically determine the number of scales  
     zarr_scales = [key for key in zarr_group.keys() if key.startswith("scale")]  
@@ -37,7 +36,9 @@ def get_tile_from_zarr(zarr_path, z, x, y):
 
     # Ensure the requested zoom level is within bounds  
     if z not in zarr_zoom_mapping:  
-        return create_blank_tile()  
+        print("Requested zoom level is out of bounds")
+        return create_blank_tile() 
+
 
     # Get the corresponding Zarr scale  
     zarr_scale_index = zarr_zoom_mapping[z]  
@@ -45,6 +46,7 @@ def get_tile_from_zarr(zarr_path, z, x, y):
 
     # Ensure the scale exists in the Zarr file  
     if scale_key not in zarr_group:  
+        print("Requested scale does not exist in the Zarr file")
         return create_blank_tile()  
 
     # Get the dataset for the requested zoom level  
@@ -73,6 +75,7 @@ def get_tile_from_zarr(zarr_path, z, x, y):
     # Convert the tile data to an image  
     image = Image.fromarray(tile_data)  
     image = image.convert("L")  # Convert to grayscale  
+    print(f'The image is {image.size}')
 
     # Save the image to a BytesIO object as PNG  
     buffer = BytesIO()  

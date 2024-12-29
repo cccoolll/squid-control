@@ -7,6 +7,50 @@ from numcodecs import Blosc
 from tqdm import tqdm
 import json
 
+def calculate_image_shift(canvas_region, new_image, x_start, y_start, image_shape, overlap_threshold=0.3):
+    """
+    Calculate shift between overlapping regions using phase correlation.
+
+    Args:
+        canvas_region: Region from the canvas where new image will be placed
+        new_image: New image to be registered
+        x_start, y_start: Initial coordinates based on stage position
+        image_shape: Shape of the new image
+        overlap_threshold: Minimum ratio of non-zero pixels required in overlap region
+
+    Returns:
+        dx, dy: Calculated shift in x and y directions
+        is_valid: Boolean indicating if the shift is valid
+    """
+    # Check if there's enough overlap to calculate shift
+    overlap_mask = canvas_region > 0
+    overlap_ratio = np.sum(overlap_mask) / (canvas_region.shape[0] * canvas_region.shape[1])
+
+    if overlap_ratio < overlap_threshold:
+        return 0, 0, False
+
+    # Apply phase correlation only on overlapping region
+    height, width = new_image.shape
+    valid_region = canvas_region[overlap_mask]
+    new_image_region = new_image[overlap_mask]
+
+    # Calculate phase correlation
+    try:
+        shift, error, diffphase = cv2.phaseCorrelate(
+            np.float32(valid_region), 
+            np.float32(new_image_region)
+        )
+        dx, dy = int(round(shift[0])), int(round(shift[1]))
+
+        # Limit maximum shift to prevent unrealistic results
+        max_shift = min(width, height) // 4
+        if abs(dx) > max_shift or abs(dy) > max_shift:
+            return 0, 0, False
+
+        return dx, dy, True
+    except:
+        return 0, 0, False
+    
 def load_imaging_parameters(parameter_file):
     """Load imaging parameters from a JSON file."""
     with open(parameter_file, "r") as f:
@@ -38,6 +82,7 @@ def get_pixel_size(parameters, default_pixel_size=1.85, default_tube_lens_mm=50.
         raise ValueError("Missing required parameters for pixel size calculation.")
 
     pixel_size_xy = pixel_size_um / (magnification / (objective_tube_lens_mm / tube_lens_mm))
+    print(f"Pixel size: {pixel_size_xy} µm")
     return pixel_size_xy
 
 def create_canvas_size(stage_limits, pixel_size_xy):
@@ -70,7 +115,8 @@ def parse_image_filenames(image_folder):
                 "channel_name": channel_name
             })
 
-
+    # Sort images by region, y_idx, and x_idx (top to bottom, left to right)
+    image_info.sort(key=lambda x: (x["region"], x["y_idx"], x["x_idx"]))
     return image_info
 
 def create_ome_ngff(output_folder, canvas_width, canvas_height, channels, pyramid_levels=7, chunk_size=(256, 256)):
@@ -188,76 +234,108 @@ def process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limit
     # Get canvas dimensions from the dataset
     canvas_width = datasets[selected_channel[0]]["scale0"].shape[1]
     canvas_height = datasets[selected_channel[0]]["scale0"].shape[0]
+    
+    accumulated_shifts = {}  # Store accumulated shifts for each region
+    reference_channel = selected_channel[0]
+    current_shifts = {}  # Store shifts for current position (for all channels to use)
+    # Process images by position (same x,y,region) together
+    position_groups = {}
+    
+    for info in image_info:
+        position_key = (info["region"], info["x_idx"], info["y_idx"])
+        if position_key not in position_groups:
+            position_groups[position_key] = []
+        position_groups[position_key].append(info)
+        
+    # Sort position keys by region, y, then x
+    sorted_positions = sorted(position_groups.keys(), key=lambda pos: (
+        pos[0],  # region
+        coordinates[(coordinates["region"] == pos[0]) & 
+                   (coordinates["i"] == pos[1]) & 
+                   (coordinates["j"] == pos[2])]["y (mm)"].iloc[0],
+        coordinates[(coordinates["region"] == pos[0]) & 
+                   (coordinates["i"] == pos[1]) & 
+                   (coordinates["j"] == pos[2])]["x (mm)"].iloc[0]
+    ))
+        
+    for position in tqdm(sorted_positions):
+        region, x_idx, y_idx = position
 
-    for info in tqdm(image_info):
-        # Extract FOV information
-        filepath = info["filepath"]
-        region = info["region"]
-        x_idx = info["x_idx"]
-        y_idx = info["y_idx"]
-        channel = info["channel_name"]
+        # Initialize accumulated shift for new region
+        if region not in accumulated_shifts:
+            accumulated_shifts[region] = {"dx": 0, "dy": 0}
 
-        # Skip images not in the selected channel
-        if channel not in selected_channel:
-            continue
+        # Get coordinates for this position
+        coord_row = coordinates[(coordinates["region"] == region) & 
+                              (coordinates["i"] == x_idx) & 
+                              (coordinates["j"] == y_idx)].iloc[0]
 
-        # Skip images not in the selected channel
-        if channel not in selected_channel:
-            continue
-
-        # Get physical coordinates from coordinates.csv
-        coord_row = coordinates[(coordinates["region"] == region) & (coordinates["i"] == x_idx) & (coordinates["j"] == info["y_idx"])]
-        if coord_row.empty:
-            print(f"Warning: No coordinates found for {filepath}")
-            continue
-
-        # Extract x, y coordinates
-        x_mm, y_mm = coord_row.iloc[0]["x (mm)"], coord_row.iloc[0]["y (mm)"] 
+        x_mm, y_mm = coord_row["x (mm)"], coord_row["y (mm)"]
         x_um = (x_mm * 1000) - x_offset
         y_um = (y_mm * 1000) - y_offset
-
-        # Convert physical coordinates to pixel coordinates
         x_start = int(x_um / pixel_size_xy)
         y_start = int(y_um / pixel_size_xy)
 
-        # Read the image
-        image = cv2.imread(filepath, cv2.IMREAD_ANYDEPTH)  # Use ANYDEPTH for 16-bit images
-        if image is None:
-            print(f"Error: Unable to read {filepath}")
-            continue
+        # Process all channels at this position
+        for info in position_groups[position]:
+            channel = info["channel_name"]
+            if channel not in selected_channel:
+                continue
 
-        # Normalize each image individually
-        if image.dtype != np.uint8:
-            # Get the actual min and max of the image
-            img_min = np.percentile(image, 1)  # 1st percentile to remove outliers
-            img_max = np.percentile(image, 99)  # 99th percentile to remove outliers
+            # Read and preprocess image
+            image = cv2.imread(info["filepath"], cv2.IMREAD_ANYDEPTH)
+            if image is None:
+                print(f"Error: Unable to read {info['filepath']}")
+                continue
 
-            # Clip the image to the computed range and normalize to 8-bit
-            image = np.clip(image, img_min, img_max)
-            image = ((image - img_min) * 255 / (img_max - img_min)).astype(np.uint8)
-        image = rotate_flip_image(image)
-        # Validate and clip the placement region
-        if x_start < 0 or y_start < 0 or x_start >= canvas_width or y_start >= canvas_height:
-            print(f"Warning: Image at {filepath} is out of canvas bounds and will be skipped.")
-            continue
+            # Normalize image (your existing normalization code)
+            if image.dtype != np.uint8:
+                img_min = np.percentile(image, 1)
+                img_max = np.percentile(image, 99)
+                image = np.clip(image, img_min, img_max)
+                image = ((image - img_min) * 255 / (img_max - img_min)).astype(np.uint8)
+            image = rotate_flip_image(image)
 
-        # Calculate end positions
-        x_end = min(x_start + image.shape[1], canvas_width)
-        y_end = min(y_start + image.shape[0], canvas_height)
+            # Calculate shift only for reference channel
+            if channel == reference_channel:
+                region_height, region_width = image.shape
+                canvas_region = datasets[channel]["scale0"][
+                    y_start:y_start + region_height,
+                    x_start:x_start + region_width
+                ]
 
-        # Clip the image if necessary
-        if x_end - x_start != image.shape[1] or y_end - y_start != image.shape[0]:
-            image = image[:y_end-y_start, :x_end-x_start]
+                dx, dy, is_valid = calculate_image_shift(
+                    canvas_region, image, x_start, y_start, image.shape
+                )
 
-        # Place the image on the base resolution canvas
-        datasets[channel]["scale0"][y_start:y_end, x_start:x_end] = image
+                if is_valid:
+                    accumulated_shifts[region]["dx"] += dx
+                    accumulated_shifts[region]["dy"] += dy
 
-        # Update pyramid levels
-        for level in range(1, pyramid_levels):
-            update_pyramid(datasets, channel, level, image, x_start, y_start)
+            # Apply the accumulated shift from the region to all channels
+            adjusted_x = x_start + accumulated_shifts[region]["dx"]
+            adjusted_y = y_start + accumulated_shifts[region]["dy"]
 
-        # Free memory
-        del image
+            # Validate and clip the placement region
+            if adjusted_x < 0 or adjusted_y < 0 or adjusted_x >= canvas_width or adjusted_y >= canvas_height:
+                print(f"Warning: Image at {info['filepath']} is out of canvas bounds after registration.")
+                continue
+
+            # Calculate end positions and clip image if necessary
+            x_end = min(adjusted_x + image.shape[1], canvas_width)
+            y_end = min(adjusted_y + image.shape[0], canvas_height)
+
+            if x_end - adjusted_x != image.shape[1] or y_end - adjusted_y != image.shape[0]:
+                image = image[:y_end-adjusted_y, :x_end-adjusted_x]
+
+            # Place the image and update pyramid
+            datasets[channel]["scale0"][adjusted_y:y_end, adjusted_x:x_end] = image
+
+            # Update pyramid levels
+            for level in range(1, pyramid_levels):
+                update_pyramid(datasets, channel, level, image, adjusted_x, adjusted_y)
+
+            del image
 
 def main():
     # Paths and parameters
@@ -294,8 +372,8 @@ def main():
     image_info = parse_image_filenames(image_folder)
     channels = list(set(info["channel_name"] for info in image_info))
     print(f"Found {len(image_info)} images with {len(channels)} channels")
-    # selected_channel = ['BF_LED_matrix_full']
-    # print(f"Selected channel: {selected_channel}")
+    selected_channel = ['Fluorescence_488_nm_Ex']
+    print(f"Selected channel: {selected_channel}")
 
     # If dataset eixts, use it
     if os.path.exists(os.path.join(output_folder, "stitched_images.zarr")):
@@ -303,11 +381,11 @@ def main():
         datasets = zarr.open(os.path.join(output_folder, "stitched_images.zarr"), mode="a")
     else:
         # Create OME-NGFF file
-        root, datasets = create_ome_ngff(output_folder, canvas_width, canvas_height, channels, pyramid_levels=pyramid_levels)
+        root, datasets = create_ome_ngff(output_folder, canvas_width, canvas_height, selected_channel, pyramid_levels=pyramid_levels)
         print(f"Dataset created: {datasets}")
 
     # Process images and stitch them
-    process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limits, selected_channel=channels, pyramid_levels=pyramid_levels)
+    process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limits, selected_channel=selected_channel, pyramid_levels=pyramid_levels)
 
 if __name__ == "__main__":
     main()
