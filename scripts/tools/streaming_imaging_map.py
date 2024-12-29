@@ -25,7 +25,7 @@ def get_tile_from_zarr(zarr_path, z, x, y):
     Fetch a tile from the Zarr file based on the z, x, y parameters.  
     """  
     # Open the Zarr file  
-    zarr_group = zarr.open_group(f"{zarr_path}/Fluorescence_488_nm_Ex", mode="r")  
+    zarr_group = zarr.open_group(f"{zarr_path}/Fluorescence_561_nm_Ex", mode="r")  
 
     # Dynamically determine the number of scales  
     zarr_scales = [key for key in zarr_group.keys() if key.startswith("scale")]  

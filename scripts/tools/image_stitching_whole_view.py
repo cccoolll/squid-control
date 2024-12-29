@@ -29,21 +29,29 @@ def calculate_image_shift(canvas_region, new_image, x_start, y_start, image_shap
     if overlap_ratio < overlap_threshold:
         return 0, 0, False
 
-    # Apply phase correlation only on overlapping region
-    height, width = new_image.shape
-    valid_region = canvas_region[overlap_mask]
-    new_image_region = new_image[overlap_mask]
+    # Mask out dark regions in both images
+    dark_threshold = 30  # Adjust this threshold based on your image intensity range
+    canvas_mask = canvas_region > dark_threshold
+    new_image_mask = new_image > dark_threshold
+    combined_mask = canvas_mask & new_image_mask
+
+    if np.sum(combined_mask) == 0:
+        return 0, 0, False  # No valid overlap after masking
+
+    # Apply phase correlation only on the valid overlapping region
+    valid_canvas_region = canvas_region[combined_mask]
+    valid_new_image_region = new_image[combined_mask]
 
     # Calculate phase correlation
     try:
         shift, error, diffphase = cv2.phaseCorrelate(
-            np.float32(valid_region), 
-            np.float32(new_image_region)
+            np.float32(valid_canvas_region), 
+            np.float32(valid_new_image_region)
         )
         dx, dy = int(round(shift[0])), int(round(shift[1]))
 
         # Limit maximum shift to prevent unrealistic results
-        max_shift = min(width, height) // 4
+        max_shift = min(image_shape[1], image_shape[0]) // 4
         if abs(dx) > max_shift or abs(dy) > max_shift:
             return 0, 0, False
 
@@ -208,8 +216,13 @@ def update_pyramid(datasets, channel, level, image, x_start, y_start):
             if end_y - y_scaled != scaled_image.shape[0] or end_x - x_scaled != scaled_image.shape[1]:
                 scaled_image = scaled_image[:(end_y - y_scaled), :(end_x - x_scaled)]
 
-            # Update the dataset
-            pyramid_dataset[y_scaled:end_y, x_scaled:end_x] = scaled_image
+            # Combine with the existing region by taking the brighter pixel
+            existing_region = pyramid_dataset[y_scaled:end_y, x_scaled:end_x]
+            if existing_region.shape == scaled_image.shape:
+                combined_region = np.maximum(existing_region, scaled_image)
+                pyramid_dataset[y_scaled:end_y, x_scaled:end_x] = combined_region
+            else:
+                pyramid_dataset[y_scaled:end_y, x_scaled:end_x] = scaled_image
         else:
             print(f"Skipping update for level {level} due to out-of-bounds coordinates")
 
@@ -328,8 +341,18 @@ def process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limit
             if x_end - adjusted_x != image.shape[1] or y_end - adjusted_y != image.shape[0]:
                 image = image[:y_end-adjusted_y, :x_end-adjusted_x]
 
+            # Replace this section in process_images where the image is placed on the canvas
             # Place the image and update pyramid
-            datasets[channel]["scale0"][adjusted_y:y_end, adjusted_x:x_end] = image
+            existing_region = datasets[channel]["scale0"][adjusted_y:y_end, adjusted_x:x_end]
+
+            # Ensure the region exists and has the same shape as the new image
+            if existing_region.shape == image.shape:
+                # Combine the images by taking the brighter pixel at each position
+                combined_region = np.maximum(existing_region, image)
+                datasets[channel]["scale0"][adjusted_y:y_end, adjusted_x:x_end] = combined_region
+            else:
+                # If no overlap, directly place the image
+                datasets[channel]["scale0"][adjusted_y:y_end, adjusted_x:x_end] = image
 
             # Update pyramid levels
             for level in range(1, pyramid_levels):
@@ -372,7 +395,7 @@ def main():
     image_info = parse_image_filenames(image_folder)
     channels = list(set(info["channel_name"] for info in image_info))
     print(f"Found {len(image_info)} images with {len(channels)} channels")
-    selected_channel = ['Fluorescence_488_nm_Ex']
+    selected_channel = ['Fluorescence_561_nm_Ex', 'Fluorescence_405_nm_Ex', 'Fluorescence_488_nm_Ex', 'Fluorescence_638_nm_Ex', 'BF_LED_matrix_full']
     print(f"Selected channel: {selected_channel}")
 
     # If dataset eixts, use it
