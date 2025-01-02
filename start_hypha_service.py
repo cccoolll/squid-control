@@ -470,7 +470,7 @@ class Microscope:
         )
 
         print(
-            f"Service (service_id={service_id}) started successfully, available at http://{self.server_url}/{server.config.workspace}/services"
+            f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
         print(f"You can access at https://cccoolll.github.io/reef-imaging/?service_id={service_id}")
 
@@ -502,12 +502,12 @@ class Microscope:
 
     async def setup(self):
         try:  
-            token = os.environ.get("WORKSPACE_TOKEN")  
+            token = os.environ.get("SQUID_WORKSPACE_TOKEN")  
         except:  
             token = await login({"server_url": self.server_url})
             
         server = await connect_to_server(
-            {"server_url": self.server_url, "token": token, "workspace": "agent-lens"}
+            {"server_url": self.server_url, "token": token, "workspace": "squid-control"}
         )
         await self.start_hypha_service(server, service_id="microscope-control-squid-test")
 
