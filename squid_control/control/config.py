@@ -375,7 +375,7 @@ class BaseConfig(BaseModel):
     }
     TUBE_LENS_MM: float = 50
     CAMERA_SENSOR: str = "IMX226"
-    DEFAULT_OBJECTIVE: str = "10x (Mitutoyo)"
+    DEFAULT_OBJECTIVE: str = "40x"
     TRACKERS: List[str] = [
         "csrt",
         "kcf",
