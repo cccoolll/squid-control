@@ -23,7 +23,7 @@ async def test_tile_service():
         print("Connected to server successfully")    
 
         # Get the tile service    
-        service = await server.get_service("tile-streaming")    
+        service = await server.get_service("tile-streaming-whole-view")    
         print("Got tile service successfully")    
 
         # Test parameters    
