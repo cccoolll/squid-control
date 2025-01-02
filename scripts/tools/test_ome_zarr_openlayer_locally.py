@@ -4,7 +4,9 @@ import numpy as np
 from flask import Flask, send_file, abort  
 from io import BytesIO  
 from PIL import Image  
-  
+"""
+Description: Serve Zarr tiles using Flask and OpenLayers. To let user test the ome-zarr file locally.
+"""
 app = Flask(__name__)  
   
 # Path to the folder containing Zarr files  

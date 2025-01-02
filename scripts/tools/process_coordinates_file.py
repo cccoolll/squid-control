@@ -1,5 +1,7 @@
 import pandas as pd
-
+"""
+This script processes the wrong coordinates file and allocates 'j' based on the cycle length of 'i'.
+"""
 # Load the CSV file
 folder_path = "/media/reef/harddisk/20241112-hpa_2024-11-12_15-49-12.554140/0"
 file_name = "coordinates.csv" 

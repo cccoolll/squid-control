@@ -1,7 +1,9 @@
 import zarr
 import numpy as np
 import cv2
-
+"""
+Description: Create a preview image from scale6 of an OME-NGFF file, maintaining aspect ratio.
+"""
 def create_preview_image(zarr_path, output_path, max_size=4000):
     """
     Create a preview image from scale6 of an OME-NGFF file, maintaining aspect ratio.

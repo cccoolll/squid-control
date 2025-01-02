@@ -4,7 +4,9 @@ import os
 import dotenv    
 from PIL import Image    
 import io    
-
+"""
+Description: Test the tile hypha service by fetching tiles from the hypha server.
+"""
 async def test_tile_service():    
     try:    
         # Load environment variables    
