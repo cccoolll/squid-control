@@ -1,0 +1,83 @@
+<!DOCTYPE html>  
+<html lang="en">  
+<head>  
+    <meta charset="UTF-8">  
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">  
+    <title>Microscopy Image Viewer</title>  
+    <!-- OpenLayers stylesheet -->  
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">  
+    <!-- OpenLayers script -->  
+    <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>  
+    <style>  
+        body {  
+            margin: 0;  
+            padding: 0;  
+        }  
+        #map {  
+            width: 100%;  
+            height: 100vh; /* Map takes the full viewport height */  
+        }  
+    </style>  
+</head>  
+<body>  
+    <!-- Map container -->  
+    <div id="map"></div>  
+
+    <script>  
+        // Define the resolutions for each scale (adjust based on your Zarr data)  
+        const resolutions = [  
+            1,       // Scale 0 (most detailed)  
+            1 / 2,   // Scale 1  
+            1 / 4,   // Scale 2  
+            1 / 8,   // Scale 3  
+            1 / 16,  // Scale 4  
+            1 / 32,  // Scale 5  
+            1 / 64,  // Scale 6
+            1 / 128, // Scale 7
+            1 / 256, // Scale 8
+            1 / 512, // Scale 9
+            1 / 1024 // Scale 10 (least detailed)
+        ];  
+
+        // Define the extent of the image (adjust based on the size of scale 0)  
+        const imageWidth = 700; // Width of scale 10 
+        const imageHeight = 500; // Height of scale 10 
+        const extent = [0, 0, imageWidth, imageHeight];  
+
+        // Create a custom tile grid  
+        const tileGrid = new ol.tilegrid.TileGrid({  
+            extent: extent,  
+            resolutions: resolutions, // Resolutions must be in descending order  
+            tileSize: 256, // Tile size (256x256 pixels)  
+        });  
+
+        // Define the tile source with the custom tile grid  
+        const tileSource = new ol.source.XYZ({  
+            url: 'http://localhost:5000/tile/{z}/{x}/{y}.png',  
+            tileGrid: tileGrid,  
+            attributions: 'Microscopy Data Viewer',  
+        });  
+
+        // Define the tile layer  
+        const tileLayer = new ol.layer.Tile({  
+            source: tileSource,  
+        });  
+
+        // Create the map view  
+        const view = new ol.View({  
+            center: [imageWidth / 2, imageHeight / 2], // Center the map  
+            zoom: 0, // Initial zoom level (most zoomed-out)  
+            maxZoom: resolutions.length - 1, // Maximum zoom level  
+            minZoom: 0, // Minimum zoom level  
+            resolutions: resolutions, // Use the custom resolutions  
+        });  
+
+        // Create the map  
+        const map = new ol.Map({  
+            target: 'map',  
+            layers: [tileLayer],  
+            view: view,  
+        });  
+    </script>  
+</body>  
+</html>  
