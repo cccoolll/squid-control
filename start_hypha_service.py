@@ -507,7 +507,7 @@ class Microscope:
             token = await login({"server_url": self.server_url})
             
         server = await connect_to_server(
-            {"server_url": self.server_url, "token": token, "workspace": "squid-control"}
+            {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
         )
         await self.start_hypha_service(server, service_id="microscope-control-squid-test")
 
@@ -527,7 +527,7 @@ class Microscope:
             chatbot_token= os.environ.get("WORKSPACE_TOKEN_CHATBOT")
         except:
             chatbot_token = await login({"server_url": chatbot_server_url})
-        chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token})
+        chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
         await self.start_chatbot_service(chatbot_server, chatbot_id)
 
 if __name__ == "__main__":

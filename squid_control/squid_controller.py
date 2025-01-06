@@ -349,14 +349,13 @@ class SquidController:
             # Read current position
             print('Getting simulated image')
             current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
-            # Calculate dx, dy, and dz
             self.dz = current_z - SIMULATED_CAMERA.ORIN_Z
             self.current_channel = channel
             magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
             self.current_expousre_time = exposure_time
             self.current_intensity = intensity
             self.camera.send_trigger( current_x,current_y,self.dz,self.pixel_size_xy, channel,intensity,exposure_time,magnification_factor)
-            print(f'For simulated camera, dx={self.dx}, dy={self.dy}, dz={self.dz},exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}')
+            print(f'For simulated camera,exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}')
             
     def do_autofocus(self):
         
@@ -522,7 +521,7 @@ class SquidController:
         self.slidePositionController.homing_done = True
 
         # move to scanning position
-        self.navigationController.move_x(20)
+        self.navigationController.move_x(30)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
         self.navigationController.move_y(20)

@@ -637,7 +637,7 @@ class Camera_Simulation(object):
                 # If the channel is not found in the Zarr file, return a random image
                 self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
             else:
-                dataset = root[channel_name]['0']  # Access scale0
+                dataset = root[channel_name]['scale0']  # Access scale0
 
                 # Calculate the pixel coordinates in the scale0 dataset
                 pixel_x = int(x / pixel_size_um)
