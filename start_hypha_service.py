@@ -509,7 +509,7 @@ class Microscope:
         server = await connect_to_server(
             {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
         )
-        await self.start_hypha_service(server, service_id="microscope-control-squid-test")
+        await self.start_hypha_service(server, service_id="microscope-control-squid")
 
         self.datastore = HyphaDataStore()
         try:
