@@ -81,7 +81,7 @@ class Camera(object):
             + self.row_period_us * self.pixel_size_byte * (self.row_numbers - 1)
         )
 
-        self.pixel_format = None  # use the default pixel format
+        self.pixel_format = "MONO8"  # use the default pixel format
 
         self.is_live = False  # this determines whether a new frame received will be handled in the streamHandler
         # mainly for discarding the last frame received after stop_live() is called, where illumination is being turned off during exposure
@@ -628,6 +628,7 @@ class Camera_Simulation(object):
         if channel_name is None:
             # If the channel is not found, return a random image
             self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
+            print(f"Channel {channel} not found, returning a random image")
         else:
             # Load the OME-Zarr file
             root = zarr.open(self.zarr_path, mode='r')
@@ -636,12 +637,13 @@ class Camera_Simulation(object):
             if channel_name not in root:
                 # If the channel is not found in the Zarr file, return a random image
                 self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
+                print(f"Channel {channel_name} not found in Zarr file, returning a random image")
             else:
                 dataset = root[channel_name]['scale0']  # Access scale0
 
                 # Calculate the pixel coordinates in the scale0 dataset
-                pixel_x = int(x / pixel_size_um)
-                pixel_y = int(y / pixel_size_um)
+                pixel_x = int(x / pixel_size_um) * 1000
+                pixel_y = int(y / pixel_size_um) * 1000
 
                 # Extract the region of interest (ROI) based on self.Width and self.Height
                 start_x = max(0, pixel_x - self.Width // 2)
@@ -657,10 +659,11 @@ class Camera_Simulation(object):
 
                 # Extract the image data
                 self.image = dataset[start_y:end_y, start_x:end_x]
-
-                # Normalize the image to 0-255
-                self.image = (self.image - self.image.min()) / (self.image.max() - self.image.min()) * 255
                 self.image = self.image.astype(np.uint8)
+                print(f"Extracted image data from {channel_name} at {x},{y}, ({start_x}, {start_y}) to ({end_x}, {end_y})")
+
+
+                
 
         # Simulate intensity and exposure
         exposure_factor = exposure_time / 100
@@ -679,6 +682,7 @@ class Camera_Simulation(object):
         if dz != 0:
             sigma = abs(dz) * 6  # Adjust for blur intensity
             self.current_frame = gaussian_filter(self.current_frame, sigma=sigma)
+            print(f"The image is blurred with dz={dz}, sigma={sigma}")
         
         if self.new_image_callback_external is not None and self.callback_is_enabled:
             self.new_image_callback_external(self)

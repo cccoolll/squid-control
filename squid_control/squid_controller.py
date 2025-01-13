@@ -191,7 +191,7 @@ class SquidController:
         print("home xy")
         timestamp_start = time.time()
         # x needs to be at > + 20 mm when homing y
-        self.navigationController.move_x(20)  # to-do: add blocking code
+        self.navigationController.move_x(25)  # to-do: add blocking code
         while self.microcontroller.is_busy():
             time.sleep(0.005)
         # home y
@@ -216,10 +216,10 @@ class SquidController:
         print("home xy done")
 
         # move to scanning position
-        self.navigationController.move_x(20)
+        self.navigationController.move_x(25)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
-        self.navigationController.move_y(20)
+        self.navigationController.move_y(25)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
 
@@ -355,8 +355,8 @@ class SquidController:
             self.current_expousre_time = exposure_time
             self.current_intensity = intensity
             self.camera.send_trigger( current_x,current_y,self.dz,self.pixel_size_xy, channel,intensity,exposure_time,magnification_factor)
-            print(f'For simulated camera,exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}')
-            
+            print(f'For simulated camera,exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}, current position: {current_x},{current_y},{current_z}')
+   
     def do_autofocus(self):
         
         if self.is_simulation:
@@ -424,9 +424,9 @@ class SquidController:
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
         if abs(x_pos - x) < CONFIG.STAGE_MOVED_THRESHOLD:
-            return False, x_pos_before, y_pos_before, z_pos_before, x
+            return True, x_pos_before, y_pos_before, z_pos_before, x
 
-        return True, x_pos_before, y_pos_before, z_pos_before, x
+        return False, x_pos_before, y_pos_before, z_pos_before, x
     
     def move_y_to_limited(self, y):
         x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
@@ -437,9 +437,9 @@ class SquidController:
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
         if abs(y_pos - y) < CONFIG.STAGE_MOVED_THRESHOLD:
-            return False, x_pos_before, y_pos_before, z_pos_before, y
+            return True, x_pos_before, y_pos_before, z_pos_before, y
     
-        return True, x_pos_before, y_pos_before, z_pos_before, y
+        return False, x_pos_before, y_pos_before, z_pos_before, y
 
     def move_z_to_limited(self, z):
         x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
@@ -450,9 +450,9 @@ class SquidController:
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
         if abs(z_pos - z) < CONFIG.STAGE_MOVED_THRESHOLD:
-            return False, x_pos_before, y_pos_before, z_pos_before, z
+            return True, x_pos_before, y_pos_before, z_pos_before, z
 
-        return True, x_pos_before, y_pos_before, z_pos_before, z
+        return False, x_pos_before, y_pos_before, z_pos_before, z
     
 
     def move_by_distance_limited(self, dx, dy, dz):
