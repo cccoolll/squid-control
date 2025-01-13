@@ -472,7 +472,6 @@ class Microscope:
         print(
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
-        print(f"You can access at https://cccoolll.github.io/reef-imaging/?service_id={service_id}")
 
     async def start_chatbot_service(self, server, service_id):
         chatbot_extension = {
