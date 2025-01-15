@@ -64,7 +64,7 @@ class Microscope:
         self.authorized_emails = self.load_authorized_emails(self.login_required)
         print(f"Authorized emails: {self.authorized_emails}")
         self.datastore = None
-        self.server_url = "https://hypha.aicell.io/"
+        self.server_url = "https://chat.bioimage.io/"
 
     def load_authorized_emails(self, login_required=True):
         if login_required:
@@ -100,6 +100,9 @@ class Microscope:
         return "pong"
 
     def move_by_distance(self, x, y, z, context=None):
+        """
+        Move the stage by a distance in x, y, z axis.
+        """
         is_success, x_pos, y_pos, z_pos, x_des, y_des, z_des = self.squidController.move_by_distance_limited(x, y, z)
         if is_success:
             result = f'The stage moved ({x},{y},{z})mm through x,y,z axis, from ({x_pos},{y_pos},{z_pos})mm to ({x_des},{y_des},{z_des})mm'
@@ -119,6 +122,9 @@ class Microscope:
             }
 
     def move_to_position(self, x, y, z, context=None):
+        """
+        Move the stage to a position in x, y, z axis.
+        """
         self.get_status()
         initial_x = self.parameters['current_x']
         initial_y = self.parameters['current_y']
@@ -190,6 +196,8 @@ class Microscope:
     def update_parameters_from_client(self, new_parameters, context=None):
         """
         Update the parameters from the client side.
+        Returns:
+            dict: Updated parameters in the microscope.
         """
         if self.parameters is None:
             self.parameters = {}
@@ -212,6 +220,9 @@ class Microscope:
 
 
     def one_new_frame(self, context=None):
+        """
+        Get the current frame from the camera as a grayscale image.
+        """
         gray_img = self.squidController.snap_image(0, 50, 100)
 
         min_val = np.min(gray_img)
@@ -333,6 +344,9 @@ class Microscope:
         print(f'The stage moved to well position ({row},{col})')
 
     def get_chatbot_url(self, context=None):
+        """
+        Get the chatbot service URL. Since the url chatbot service is not fixed, we provide this function to get the chatbot service URL.
+        """
         print(f"chatbot_service_url: {self.chatbot_service_url}")
         return self.chatbot_service_url
 
@@ -501,7 +515,7 @@ class Microscope:
 
     async def setup(self):
         try:  
-            token = os.environ.get("SQUID_WORKSPACE_TOKEN")  
+            token = os.environ.get("SQUID_WORKSPACE_BIOIMAGEIO")  
         except:  
             token = await login({"server_url": self.server_url})
             

@@ -87,7 +87,7 @@ async def start_server(server_url):
     """Start the Hypha server and register the tile streaming service."""  
     # Load environment variables  
     dotenv.load_dotenv()  
-    token = os.getenv("SQUID_WORKSPACE_TOKEN")  
+    token = os.getenv("SQUID_WORKSPACE_BIOIMAGEIO")  
   
     # Connect to the Hypha server  
     server = await connect_to_server({  
@@ -144,5 +144,5 @@ async def start_server(server_url):
     await server.serve()  
   
 if __name__ == "__main__":  
-    server_url = "https://hypha.aicell.io"  
+    server_url = "https://chat.bioimage.io"  
     asyncio.run(start_server(server_url))  
