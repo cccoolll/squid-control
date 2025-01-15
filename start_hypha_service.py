@@ -12,6 +12,8 @@ import json
 import cv2
 import dotenv
 import sys
+import io
+from PIL import Image  
 # Now you can import squid_control
 from squid_control.squid_controller import SquidController
 from pydantic import Field, BaseModel
@@ -219,11 +221,11 @@ class Microscope:
         return {"success": True, "message": "Parameters updated successfully.", "updated_parameters": new_parameters}
 
 
-    def one_new_frame(self, context=None):
+    def one_new_frame(self,exposure_time, channel, intensity, context=None):
         """
         Get the current frame from the camera as a grayscale image.
         """
-        gray_img = self.squidController.snap_image(0, 50, 100)
+        gray_img = self.squidController.snap_image(channel, intensity, exposure_time)
 
         min_val = np.min(gray_img)
         max_val = np.max(gray_img)
@@ -232,8 +234,30 @@ class Microscope:
             gray_img = gray_img.astype(np.uint8)  # Convert to 8-bit image
         else:
             gray_img = np.zeros((512, 512), dtype=np.uint8)  # If no variation, return a black image
-        bgr_img = np.stack((gray_img,) * 3, axis=-1)  # Duplicate grayscale data across 3 channels to simulate BGR format.
-        return bgr_img
+
+        gray_img = Image.fromarray(gray_img)
+        gray_img = gray_img.convert("L")  # Convert to grayscale  
+        # Save the image to a BytesIO object as PNG  
+        buffer = io.BytesIO()  
+        gray_img.save(buffer, format="PNG")  
+        buffer.seek(0) 
+        
+        #update the current illumination channel and intensity
+        if channel == 0:
+            self.BF_intensity_exposure = [intensity,exposure_time]
+        elif channel == 11:
+            self.F405_intensity_exposure = [intensity, exposure_time]
+        elif channel == 12:
+            self.F488_intensity_exposure = [intensity, exposure_time]
+        elif channel == 13:
+            self.F561_intensity_exposure = [intensity, exposure_time]
+        elif channel == 14:
+            self.F638_intensity_exposure = [intensity, exposure_time]
+        elif channel == 15:
+            self.F730_intensity_exposure = [intensity, exposure_time]
+        self.get_status()
+        
+        return buffer  
 
     def snap(self, exposure_time, channel, intensity, context=None):
         """
@@ -467,6 +491,7 @@ class Microscope:
                 "type": "echo",
                 "move_by_distance": self.move_by_distance,
                 "snap": self.snap,
+                "one_new_frame": self.one_new_frame,
                 "off_illumination": self.close_illumination,
                 "on_illumination": self.open_illumination,
                 "set_illumination": self.set_illumination,
