@@ -2853,8 +2853,8 @@ class ZoomScanController(QObject):
         liveController,
         # Additional parameters:
         rectangle=None,       # (x_min, y_min, x_max, y_max) in mm
-        overlap=0.2,          # e.g. 20% overlap
-        stage_speed=2.0,      # mm/s
+        overlap=0.1,          # e.g. 10% overlap
+        velocity_mm_s= 9.0,      # mm/s
         store_images=True,
         parent=None,
     ):
@@ -2865,7 +2865,7 @@ class ZoomScanController(QObject):
         self.liveController = liveController
         self.rectangle = rectangle
         self.overlap = overlap
-        self.stage_speed = stage_speed
+        self.velocity_mm_s = velocity_mm_s
         self.store_images = store_images
 
         # This will be your scanning thread reference
@@ -2887,7 +2887,7 @@ class ZoomScanController(QObject):
             liveController=self.liveController,
             rectangle=self.rectangle,
             overlap=self.overlap,
-            stage_speed=self.stage_speed,
+            velocity_mm_s=self.velocity_mm_s,
             store_images=self.store_images,
         )
 
@@ -2937,7 +2937,7 @@ class ZoomScanWorker(QObject):
         liveController,
         rectangle,
         overlap,
-        stage_speed,
+        velocity_mm_s,
         store_images=True,
         parent=None,
     ):
@@ -2948,7 +2948,7 @@ class ZoomScanWorker(QObject):
         self.liveController = liveController
         self.x_min, self.y_min, self.x_max, self.y_max = rectangle
         self.overlap = overlap
-        self.stage_speed = stage_speed
+        self.velocity_mm_s = velocity_mm_s
         self.store_images = store_images
 
         self.request_abort = False
@@ -2972,7 +2972,6 @@ class ZoomScanWorker(QObject):
         4) After done, run stitching routine.
         5) Emit finished signal.
         """
-        self._prepare_camera_and_illumination()
         self._move_stage_to_start()
         
         # Possibly define step size (FOV_x * (1 - overlap)), etc.
@@ -2990,7 +2989,9 @@ class ZoomScanWorker(QObject):
             self._move_stage_y(target_y)
 
             # Acquire row
+            self._prepare_camera_and_illumination()
             self._scan_one_row(row_idx, num_rows)
+            self.liveController.turn_off_illumination()
 
         # Stop streaming if needed
         # self.camera.stop_streaming()  # or not, depending on your design
@@ -3012,8 +3013,18 @@ class ZoomScanWorker(QObject):
         self.liveController.turn_on_illumination(self.illumination_source, self.illumination_intensity)
         # Set up any needed trigger mode or streaming
         if not self.camera.is_live:
-            self.liveController.set_trigger_mode(TriggerModeSetting.CONTINUOUS.value)
+            # 1. Compute fps from velocity, fov, overlap
+            overlap_fraction = self.overlap
+            fps = int(self.velocity_mm_s / (self._get_fov_width()  * (1 - overlap_fraction)))
+
+            # 2. Switch to software trigger
+            self.liveController.set_trigger_mode(TriggerModeSetting.SOFTWARE.value)
+            # 3. Set a suitably short exposure time first:
             self.camera.set_exposure_time(self.exposure_time)
+            # 4. Now set the software trigger’s FPS
+            self.liveController.set_trigger_fps(fps)
+
+            # 5. Start the camera streaming with software trigger
             self.liveController.start_live()
 
 
@@ -3042,7 +3053,7 @@ class ZoomScanWorker(QObject):
             distance_x = -distance_x
         
         # Start continuous move:
-        self.navigationController.move_x_continuous(distance_x, self.stage_speed)
+        self.navigationController.move_x_continuous(distance_x, self.velocity_mm_s)
 
         # 2) Let the camera keep streaming. Each time on_new_frame is called,
         #    we record the image + current stage position if enough stage
@@ -3059,8 +3070,6 @@ class ZoomScanWorker(QObject):
             # The actual image capture is done in StreamHandler.on_new_frame
             # which can call a ZoomScanController method or store frames.
             # Or poll camera frames here, depending on your design.
-            self._gather_if_valid_frame()
-            self._emit_progress(row_idx, num_rows)
             QThread.msleep(10)
 
         # 3) Stop the stage if still moving
@@ -3075,21 +3084,7 @@ class ZoomScanWorker(QObject):
             return x_pos >= self.x_min + distance_x - 0.01
         else:
             return x_pos <= self.x_min + distance_x + 0.01
-
-    def _gather_if_valid_frame(self):
-        """
-        If you want to poll the camera for a new frame directly, do it here.
-        Or rely on an asynchronous callback that automatically
-        appends frames to self.captured_frames.
-        """
-        # Example of direct read (if in continuous mode):
-        frame = self.camera.read_frame()
-        if frame is not None:
-            x_now = self.navigationController.x_pos_mm
-            y_now = self.navigationController.y_pos_mm
-            # Decide if we actually keep this frame
-            # e.g., if the stage moved enough from the last kept frame
-            self.captured_frames.append((frame.copy(), x_now, y_now))
+ 
 
     def _emit_progress(self, row_idx, num_rows):
         row_fraction = row_idx / float(num_rows)
@@ -3125,7 +3120,13 @@ class ZoomScanWorker(QObject):
         if effective_fov_y == 0:
             return 1
         return int(np.ceil(total_distance_y / effective_fov_y))
-
+    
+    def _get_fov_width(self):
+        """
+        You might read this from the camera or config. 
+        Placeholder:
+        """
+        return 1.0
     def _get_fov_height(self):
         """
         You might read this from the camera or config. 
