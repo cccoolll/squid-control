@@ -320,6 +320,23 @@ class Microcontroller:
         else:
             print("Target position is outside the safe area, X movement cancelled")
 
+    def move_x_continuous_usteps(self, distance_usteps, scan_velocity_mm):
+        """
+        This function is used to move the stage continuously in the x direction. Its was designed for 'Zoom Scan' feature.
+        
+        """
+        target_pos = self.x_pos + CONFIG.STAGE_MOVEMENT_SIGN_X * distance_usteps
+        if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
+            self.set_max_velocity_acceleration(AXIS.X, scan_velocity_mm, CONFIG.MAX_ACCELERATION_X_MM)
+            print(f"Set X axis' max velocity to {scan_velocity_mm} mm/s")
+            self.move_x_usteps(distance_usteps)
+            print(f"Move {distance_usteps} usteps")
+            self.x_pos = target_pos
+            self.set_max_velocity_acceleration(AXIS.X, CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_ACCELERATION_X_MM)
+            print("Set X axis' max velocity back to default")
+        else:
+            print("Target position is outside the safe area, X movement cancelled")
+            
     def move_x_to_usteps(self, usteps):
         payload = self._int_to_payload(usteps, 4)
         cmd = bytearray(self.tx_buffer_length)
@@ -392,7 +409,7 @@ class Microcontroller:
 
         else:
             print("Target position is outside the safe area, Y movement cancelled")
-
+       
     def move_y_to_usteps(self, usteps):
         payload = self._int_to_payload(usteps, 4)
         cmd = bytearray(self.tx_buffer_length)
@@ -481,7 +498,6 @@ class Microcontroller:
             self.z_pos = target_pos
         else:
             print("Target position is outside the safe area, Z movement cancelled")
-
 
     def move_theta_usteps(self, usteps):
         direction = CONFIG.STAGE_MOVEMENT_SIGN_THETA * np.sign(usteps)

@@ -925,7 +925,18 @@ class NavigationController(QObject):
                 )
             )
         )
-
+    def move_x_continuous(self, delta, velocity_mm_s):
+        self.microcontroller.move_y_continuous_usteps(
+            int(
+                delta
+                / (
+                    CONFIG.SCREW_PITCH_X_MM
+                    / (self.x_microstepping * CONFIG.FULLSTEPS_PER_REV_X)
+                )
+            ),
+            velocity_mm_s
+        )
+        
     def move_y_to_limited(self, delta):
         self.microcontroller.move_y_to_usteps_limited(
             CONFIG.STAGE_MOVEMENT_SIGN_Y
@@ -2141,7 +2152,6 @@ class MultiPointWorker(QObject):
         elapsed_time = time.perf_counter_ns() - self.start_time
         print("Time taken for acquisition/processing: " + str(elapsed_time / 10**9))
         self.finished.emit()
-
     def wait_till_operation_is_completed(self):
         while self.microcontroller.is_busy():
             time.sleep(CONFIG.SLEEP_TIME_S)
@@ -2825,7 +2835,317 @@ class MultiPointWorker(QObject):
         print(time.time())
         print(time.time() - start)
 
+class ZoomScanController(QObject):
+    """
+    Controller class for 'zoom scan' functionality.
+    Handles UI-level logic, user inputs, and
+    spawns a Worker to do the actual scanning.
+    """
 
+    zoomScanFinished = Signal(np.ndarray)  # or send a stitched image or path
+    zoomScanProgress = Signal(float)       # progress as 0..100 %
+
+    def __init__(
+        self,
+        camera,
+        microcontroller,
+        navigationController,
+        liveController,
+        # Additional parameters:
+        rectangle=None,       # (x_min, y_min, x_max, y_max) in mm
+        overlap=0.2,          # e.g. 20% overlap
+        stage_speed=2.0,      # mm/s
+        store_images=True,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.camera = camera
+        self.microcontroller = microcontroller
+        self.navigationController = navigationController
+        self.liveController = liveController
+        self.rectangle = rectangle
+        self.overlap = overlap
+        self.stage_speed = stage_speed
+        self.store_images = store_images
+
+        # This will be your scanning thread reference
+        self.thread = None
+        
+    def start_zoom_scan(self):
+        """
+        Sets up and starts the 'zoom scan' by creating a worker thread.
+        """
+        if not self.rectangle:
+            print("No rectangle set for ZoomScan. Aborting.")
+            return
+
+        self.thread = QThread()
+        self.zoomScanWorker = ZoomScanWorker(
+            camera=self.camera,
+            microcontroller=self.microcontroller,
+            navigationController=self.navigationController,
+            liveController=self.liveController,
+            rectangle=self.rectangle,
+            overlap=self.overlap,
+            stage_speed=self.stage_speed,
+            store_images=self.store_images,
+        )
+
+        # Connect signals
+        self.zoomScanWorker.finished.connect(self._on_worker_finished)
+        self.zoomScanWorker.progress.connect(self.zoomScanProgress)
+        self.zoomScanWorker.moveToThread(self.thread)
+
+        # Start the worker in the new thread
+        self.thread.started.connect(self.zoomScanWorker.run)
+        self.thread.start()
+
+    def _on_worker_finished(self, stitched_image):
+        """
+        Called when the zoom scanning is done.
+        """
+        # If stitched_image is an np.ndarray, do something with it
+        self.zoomScanFinished.emit(stitched_image)
+        
+        # Cleanup
+        self.zoomScanWorker.deleteLater()
+        self.thread.quit()
+        self.thread.wait()
+        self.thread = None
+
+    def stop_zoom_scan(self):
+        """
+        Handle external request to stop scan early (if you want).
+        """
+        if self.thread and self.thread.isRunning():
+            self.zoomScanWorker.request_abort = True
+
+class ZoomScanWorker(QObject):
+    """
+    Worker/Thread class that moves the stage continuously,
+    streams images, and stitches them at the end.
+    """
+
+    finished = Signal(np.ndarray)  # Return stitched image
+    progress = Signal(float)       # 0..100 progress, optional
+
+    def __init__(
+        self,
+        camera,
+        microcontroller,
+        navigationController,
+        liveController,
+        rectangle,
+        overlap,
+        stage_speed,
+        store_images=True,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.camera = camera
+        self.microcontroller = microcontroller
+        self.navigationController = navigationController
+        self.liveController = liveController
+        self.x_min, self.y_min, self.x_max, self.y_max = rectangle
+        self.overlap = overlap
+        self.stage_speed = stage_speed
+        self.store_images = store_images
+
+        self.request_abort = False
+
+        # For Camera streaming:
+        self.illumination_source = 1  # e.g., brightfield
+        self.illumination_intensity = 100  # 0..100
+        self.exposure_time = 1  # in ms
+        
+        # For storing frames:
+        self.captured_frames = []   # Each entry could be (image, x_pos, y_pos)
+
+    def run(self):
+        """
+        Main scanning procedure:
+        1) Start camera streaming if not already.
+        2) Move to (x_min, y_min).
+        3) For each row, move continuously in X;
+            gather frames from the camera stream, storing them
+            with stage positions. Then proceed to next row, etc.
+        4) After done, run stitching routine.
+        5) Emit finished signal.
+        """
+        self._prepare_camera_and_illumination()
+        self._move_stage_to_start()
+        
+        # Possibly define step size (FOV_x * (1 - overlap)), etc.
+        # Or do continuous movement along each row:
+        num_rows = self._estimate_num_rows()
+        row_height = self._get_fov_height() * (1 - self.overlap)
+
+        for row_idx in range(num_rows):
+            # Check if user canceled
+            if self.request_abort:
+                break
+            
+            # Move stage to row’s Y
+            target_y = self.y_min + row_idx * row_height
+            self._move_stage_y(target_y)
+
+            # Acquire row
+            self._scan_one_row(row_idx, num_rows)
+
+        # Stop streaming if needed
+        # self.camera.stop_streaming()  # or not, depending on your design
+
+        # Stitch all frames into one image
+        if not self.request_abort and len(self.captured_frames) > 1:
+            stitched = self._stitch_all()
+        else:
+            # If no frames or only one frame
+            stitched = np.array([])
+
+        self.finished.emit(stitched)
+
+    def _prepare_camera_and_illumination(self):
+        """
+        Ensure the camera is in continuous streaming mode & callbacks are on.
+        """
+        #Turn on LED for brightfield, set exposure time
+        self.liveController.turn_on_illumination(self.illumination_source, self.illumination_intensity)
+        # Set up any needed trigger mode or streaming
+        if not self.camera.is_live:
+            self.liveController.set_trigger_mode(TriggerModeSetting.CONTINUOUS.value)
+            self.camera.set_exposure_time(self.exposure_time)
+            self.liveController.start_live()
+
+
+
+        # Optionally set the camera’s fps, exposure, gain, etc.
+
+    def _move_stage_to_start(self):
+        """
+        Move to top-left corner (x_min, y_min).
+        """
+        self.navigationController.move_to(self.x_min, self.y_min)
+        self._wait_until_stage_idle()
+
+    def _scan_one_row(self, row_idx, num_rows):
+        """
+        Command the stage to move from x_min -> x_max at a set speed,
+        while camera streams frames. Collect frames in on_new_frame or
+        by polling.
+        """
+        # 1) Move stage in X direction continuously
+        #    For example, you can do:
+        #    microcontroller.move_x_continuous(distance_mm, speed_mm_s)
+        distance_x = self.x_max - self.x_min
+        # direction sign:
+        if row_idx % 2 == 1:  # zig-zag if you want
+            distance_x = -distance_x
+        
+        # Start continuous move:
+        self.navigationController.move_x_continuous(distance_x, self.stage_speed)
+
+        # 2) Let the camera keep streaming. Each time on_new_frame is called,
+        #    we record the image + current stage position if enough stage
+        #    motion has occurred. Then see if we reached x_max.
+        #    This could be done by hooking into the camera’s on_new_frame, or
+        #    by polling a shared buffer.
+
+        # One approach: just wait for the microcontroller to be done
+        # while gathering frames. E.g.:
+        while not self._stage_reached_x_target(distance_x):
+            if self.request_abort:
+                break
+            # Sleep briefly so as not to block the UI thread
+            # The actual image capture is done in StreamHandler.on_new_frame
+            # which can call a ZoomScanController method or store frames.
+            # Or poll camera frames here, depending on your design.
+            self._gather_if_valid_frame()
+            self._emit_progress(row_idx, num_rows)
+            QThread.msleep(10)
+
+        # 3) Stop the stage if still moving
+        self.microcontroller.stop_x()
+
+    def _stage_reached_x_target(self, distance_x):
+        """
+        Check if the current x_pos_mm is close to x_min + distance_x.
+        """
+        x_pos = self.navigationController.x_pos_mm
+        if distance_x > 0:
+            return x_pos >= self.x_min + distance_x - 0.01
+        else:
+            return x_pos <= self.x_min + distance_x + 0.01
+
+    def _gather_if_valid_frame(self):
+        """
+        If you want to poll the camera for a new frame directly, do it here.
+        Or rely on an asynchronous callback that automatically
+        appends frames to self.captured_frames.
+        """
+        # Example of direct read (if in continuous mode):
+        frame = self.camera.read_frame()
+        if frame is not None:
+            x_now = self.navigationController.x_pos_mm
+            y_now = self.navigationController.y_pos_mm
+            # Decide if we actually keep this frame
+            # e.g., if the stage moved enough from the last kept frame
+            self.captured_frames.append((frame.copy(), x_now, y_now))
+
+    def _emit_progress(self, row_idx, num_rows):
+        row_fraction = row_idx / float(num_rows)
+        # Possibly refine progress calc with x-pos
+        self.progress.emit(row_fraction * 100)
+
+    def _stitch_all(self):
+        """
+        Use OpenCV’s Stitcher to merge all captured frames into one mosaic.
+        """
+        # Convert frames to a list of images alone
+        images = [f[0] for f in self.captured_frames]
+
+        # Basic stitching approach:
+        stitcher = cv2.Stitcher_create(cv2.STITCHER_PANORAMA)
+        status, pano = stitcher.stitch(images)
+        if status == cv2.STITCHER_OK:
+            print("Stitching successful.")
+            return pano
+        else:
+            print("Stitching failed with code:", status)
+            return np.array([])
+
+    def _estimate_num_rows(self):
+        """
+        Simple approach: how many row steps from y_min to y_max
+        with given overlap?
+        """
+        total_distance_y = abs(self.y_max - self.y_min)
+        fov_y = self._get_fov_height()
+        effective_fov_y = fov_y * (1 - self.overlap)
+        # Number of steps
+        if effective_fov_y == 0:
+            return 1
+        return int(np.ceil(total_distance_y / effective_fov_y))
+
+    def _get_fov_height(self):
+        """
+        You might read this from the camera or config. 
+        Placeholder:
+        """
+        return 1.0  # mm, example
+
+    def _move_stage_y(self, y_mm):
+        """
+        Move the stage in Y to y_mm, then wait.
+        """
+        self.navigationController.move_y_to(y_mm)
+        self._wait_until_stage_idle()
+
+    def _wait_until_stage_idle(self):
+        while self.microcontroller.is_busy():
+            if self.request_abort:
+                break
+            QThread.msleep(10)
+        
 class MultiPointController(QObject):
 
     acquisitionFinished = Signal()
