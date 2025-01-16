@@ -3017,7 +3017,7 @@ class ZoomScanWorker(QObject):
             self._scan_one_row(row_idx, num_rows)
             self.liveController.turn_off_illumination()
             # Stitch frames of one row into one image
-            # TODO: Implement stitching
+            # TODO: Implement image stitching between rows, that should be in the squid_controller code
             if not self.request_abort and len(self.captured_frames) > 1:
                 stitched = self._stitch_all()
             else:
