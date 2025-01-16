@@ -2936,6 +2936,9 @@ class ZoomScanController(QObject):
         if not hasattr(self, 'zoomScanWorker') or not self.thread.isRunning():
             return
 
+
+        # Rescale image to 1/8, which is scale3 in .zarr file for imaging map, now image size should be 3000/8 = 375. 
+        image = cv2.resize(image, (0, 0), fx=0.125, fy=0.125)
         # Store frame with position
         self.zoomScanWorker.captured_frames.append(
             image.copy())
@@ -2972,6 +2975,7 @@ class ZoomScanWorker(QObject):
         self.store_images = store_images
 
         self.request_abort = False
+        self.scann_direction = 1
 
         # For Camera streaming:
         self.illumination_source = 1  # e.g., brightfield
@@ -3012,18 +3016,20 @@ class ZoomScanWorker(QObject):
             self._prepare_camera_and_illumination()
             self._scan_one_row(row_idx, num_rows)
             self.liveController.turn_off_illumination()
-
-        # Stop streaming if needed
-        # self.camera.stop_streaming()  # or not, depending on your design
-
-        # Stitch all frames into one image
-        if not self.request_abort and len(self.captured_frames) > 1:
-            stitched = self._stitch_all()
-        else:
-            # If no frames or only one frame
-            stitched = np.array([])
+            # Stitch frames of one row into one image
+            # TODO: Implement stitching
+            if not self.request_abort and len(self.captured_frames) > 1:
+                stitched = self._stitch_all()
+            else:
+                # If no frames or only one frame
+                stitched = np.array([])
 
         self.finished.emit(stitched)
+
+        # Stop streaming if needed
+        self.camera.stop_streaming()
+
+
 
     def _prepare_camera_and_illumination(self):
         """
@@ -3070,8 +3076,14 @@ class ZoomScanWorker(QObject):
 
         # Calculate movement parameters
         distance_x = self.x_max - self.x_min
+        
         if row_idx % 2 == 1:  # Bidirectional scanning
-            distance_x = -distance_x
+            self.scann_direction = -1
+        else:
+            self.scann_direction = 1
+        
+        distance_x = self.scann_direction * distance_x
+        
 
         # Start continuous movement
         self.navigationController.move_x_continuous(distance_x, self.velocity_mm_s)
@@ -3105,14 +3117,12 @@ class ZoomScanWorker(QObject):
 
     def _stitch_all(self):
         """
-        Use OpenCV’s Stitcher to merge all captured frames into one mosaic.
+        Use OpenCV's Stitcher to merge all captured frames into one mosaic.
         """
-        # Convert frames to a list of images alone
-        images = [f[0] for f in self.captured_frames]
 
         # Basic stitching approach:
-        stitcher = cv2.Stitcher_create(cv2.STITCHER_PANORAMA)
-        status, pano = stitcher.stitch(images)
+        stitcher = cv2.Stitcher.create(cv2.STITCHER_PANORAMA)
+        status, pano = stitcher.stitch(self.captured_frames)
         if status == cv2.STITCHER_OK:
             print("Stitching successful.")
             return pano
