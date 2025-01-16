@@ -207,7 +207,15 @@ class StreamHandler(QObject):
                     image_cropped, camera.frame_ID, camera.timestamp
                 )
                 self.timestamp_last_track = time_now
-
+                
+            # If zoom scan is active, send to zoom scan controller
+            if hasattr(self, 'zoom_scan_controller'):
+                self.zoom_scan_controller.on_new_frame(
+                    image_cropped,
+                    camera.frame_ID,
+                    camera.timestamp
+                )
+        
             self.handler_busy = False
             camera.image_locked = False
 
@@ -2919,6 +2927,18 @@ class ZoomScanController(QObject):
         """
         if self.thread and self.thread.isRunning():
             self.zoomScanWorker.request_abort = True
+    
+    def on_new_frame(self, image, frame_ID, timestamp):
+        """
+        Callback for new camera frames during zoom scan.
+        Called by StreamHandler's on_new_frame.
+        """
+        if not hasattr(self, 'zoomScanWorker') or not self.thread.isRunning():
+            return
+
+        # Store frame with position
+        self.zoomScanWorker.captured_frames.append(
+            image.copy())
 
 class ZoomScanWorker(QObject):
     """
@@ -2959,7 +2979,7 @@ class ZoomScanWorker(QObject):
         self.exposure_time = 1  # in ms
         
         # For storing frames:
-        self.captured_frames = []   # Each entry could be (image, x_pos, y_pos)
+        self.captured_frames = []   # Each entry could be image data
 
     def run(self):
         """
@@ -3040,40 +3060,32 @@ class ZoomScanWorker(QObject):
 
     def _scan_one_row(self, row_idx, num_rows):
         """
-        Command the stage to move from x_min -> x_max at a set speed,
-        while camera streams frames. Collect frames in on_new_frame or
-        by polling.
+        Scan one row with continuous stage movement and synchronized image capture.
         """
-        # 1) Move stage in X direction continuously
-        #    For example, you can do:
-        #    microcontroller.move_x_continuous(distance_mm, speed_mm_s)
+        # Clear any previous frames
+        self.captured_frames = []
+
+        # Start camera streaming for this row
+        self._prepare_camera_and_illumination()
+
+        # Calculate movement parameters
         distance_x = self.x_max - self.x_min
-        # direction sign:
-        if row_idx % 2 == 1:  # zig-zag if you want
+        if row_idx % 2 == 1:  # Bidirectional scanning
             distance_x = -distance_x
-        
-        # Start continuous move:
+
+        # Start continuous movement
         self.navigationController.move_x_continuous(distance_x, self.velocity_mm_s)
 
-        # 2) Let the camera keep streaming. Each time on_new_frame is called,
-        #    we record the image + current stage position if enough stage
-        #    motion has occurred. Then see if we reached x_max.
-        #    This could be done by hooking into the camera’s on_new_frame, or
-        #    by polling a shared buffer.
-
-        # One approach: just wait for the microcontroller to be done
-        # while gathering frames. E.g.:
+        # Monitor progress while capturing frames
         while not self._stage_reached_x_target(distance_x):
             if self.request_abort:
                 break
-            # Sleep briefly so as not to block the UI thread
-            # The actual image capture is done in StreamHandler.on_new_frame
-            # which can call a ZoomScanController method or store frames.
-            # Or poll camera frames here, depending on your design.
             QThread.msleep(10)
+            self._emit_progress(row_idx, num_rows)
 
-        # 3) Stop the stage if still moving
+        # Stop movement and streaming
         self.microcontroller.stop_x()
+        self.liveController.stop_live()
 
     def _stage_reached_x_target(self, distance_x):
         """
