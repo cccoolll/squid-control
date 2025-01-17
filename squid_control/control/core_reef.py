@@ -2922,11 +2922,12 @@ class ZoomScanController(QObject):
         self.thread = None
 
     def stop_zoom_scan(self):
-        """
-        Handle external request to stop scan early (if you want).
-        """
         if self.thread and self.thread.isRunning():
             self.zoomScanWorker.request_abort = True
+            self.thread.quit()
+            self.thread.wait(3000)  # 3 second timeout
+            if self.thread.isRunning():
+                self.thread.terminate()
     
     def on_new_frame(self, image, frame_ID, timestamp):
         """
@@ -2942,7 +2943,7 @@ class ZoomScanController(QObject):
         # Store frame with position
         # self.zoomScanWorker.captured_frames.append(
         #     image.copy())
-        self.zoomScanWorker.finished.emit(image)
+        self.zoomScanWorker.frame_ready.emit(image)
 
 class ZoomScanWorker(QObject):
     """
@@ -2951,6 +2952,7 @@ class ZoomScanWorker(QObject):
     """
 
     finished = Signal(np.ndarray)  # Return stitched image
+    frame_ready = Signal(np.ndarray)
     progress = Signal(float)       # 0..100 progress, optional
 
     def __init__(
@@ -2976,7 +2978,7 @@ class ZoomScanWorker(QObject):
         self.store_images = store_images
 
         self.request_abort = False
-        self.scann_direction = 1
+        self.scan_direction = 1
 
         # For Camera streaming:
         self.illumination_source = 1  # e.g., brightfield
@@ -3027,7 +3029,7 @@ class ZoomScanWorker(QObject):
         # self.finished.emit(stitched)
 
         # Stop streaming if needed
-        self.camera.stop_streaming()
+        self.camera.stop_live()
 
 
 
@@ -3078,11 +3080,11 @@ class ZoomScanWorker(QObject):
         distance_x = self.x_max - self.x_min
         
         if row_idx % 2 == 1:  # Bidirectional scanning
-            self.scann_direction = -1
+            self.scan_direction = -1
         else:
-            self.scann_direction = 1
+            self.scan_direction = 1
         
-        distance_x = self.scann_direction * distance_x
+        distance_x = self.scan_direction * distance_x
         
 
         # Start continuous movement
@@ -3112,8 +3114,10 @@ class ZoomScanWorker(QObject):
 
     def _emit_progress(self, row_idx, num_rows):
         row_fraction = row_idx / float(num_rows)
-        # Possibly refine progress calc with x-pos
-        self.progress.emit(row_fraction * 100)
+        x_pos = self.navigationController.x_pos_mm
+        x_progress = abs(x_pos - self.x_min) / abs(self.x_max - self.x_min)
+        total_progress = (row_fraction + x_progress/num_rows) * 100
+        self.progress.emit(total_progress)
 
     def _stitch_all(self):
         """
