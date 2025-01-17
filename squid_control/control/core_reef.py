@@ -2940,8 +2940,9 @@ class ZoomScanController(QObject):
         # Rescale image to 1/8, which is scale3 in .zarr file for imaging map, now image size should be 3000/8 = 375. 
         image = cv2.resize(image, (0, 0), fx=0.125, fy=0.125)
         # Store frame with position
-        self.zoomScanWorker.captured_frames.append(
-            image.copy())
+        # self.zoomScanWorker.captured_frames.append(
+        #     image.copy())
+        self.zoomScanWorker.finished.emit(image)
 
 class ZoomScanWorker(QObject):
     """
@@ -3017,14 +3018,13 @@ class ZoomScanWorker(QObject):
             self._scan_one_row(row_idx, num_rows)
             self.liveController.turn_off_illumination()
             # Stitch frames of one row into one image
-            # TODO: Implement image stitching between rows, that should be in the squid_controller code
-            if not self.request_abort and len(self.captured_frames) > 1:
-                stitched = self._stitch_all()
-            else:
-                # If no frames or only one frame
-                stitched = np.array([])
+        #     if not self.request_abort and len(self.captured_frames) > 1:
+        #         stitched = self._stitch_all()
+        #     else:
+        #         # If no frames or only one frame
+        #         stitched = np.array([])
 
-        self.finished.emit(stitched)
+        # self.finished.emit(stitched)
 
         # Stop streaming if needed
         self.camera.stop_streaming()
