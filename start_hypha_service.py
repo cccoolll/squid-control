@@ -576,7 +576,7 @@ if __name__ == "__main__":
         "--simulation",
         dest="simulation",
         action="store_true",
-        default=True,
+        default=False,
         help="Run in simulation mode (default: True)"
     )
     parser.add_argument("--verbose", "-v", action="count")
