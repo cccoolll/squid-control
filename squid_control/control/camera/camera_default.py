@@ -613,7 +613,7 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    def send_trigger(self, x=20, y=20, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20):
+    def send_trigger(self, x=29.81, y= 36.85, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20):
         self.frame_ID += 1
         self.timestamp = time.time()
         channel_map = {

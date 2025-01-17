@@ -934,7 +934,7 @@ class NavigationController(QObject):
             )
         )
     def move_x_continuous(self, delta, velocity_mm_s):
-        self.microcontroller.move_y_continuous_usteps(
+        self.microcontroller.move_x_continuous_usteps(
             int(
                 delta
                 / (
@@ -2941,8 +2941,8 @@ class ZoomScanController(QObject):
         # Rescale image to 1/8, which is scale3 in .zarr file for imaging map, now image size should be 3000/8 = 375. 
         image = cv2.resize(image, (0, 0), fx=0.125, fy=0.125)
         # Store frame with position
-        # self.zoomScanWorker.captured_frames.append(
-        #     image.copy())
+        self.zoomScanWorker.captured_frames.append(
+            image.copy())
         self.zoomScanWorker.frame_ready.emit(image)
 
 class ZoomScanWorker(QObject):
@@ -3005,7 +3005,8 @@ class ZoomScanWorker(QObject):
         # Or do continuous movement along each row:
         num_rows = self._estimate_num_rows()
         row_height = self._get_fov_height() * (1 - self.overlap)
-
+        # Clear any previous frames
+        self.captured_frames = []
         for row_idx in range(num_rows):
             # Check if user canceled
             if self.request_abort:
@@ -3038,7 +3039,8 @@ class ZoomScanWorker(QObject):
         Ensure the camera is in continuous streaming mode & callbacks are on.
         """
         #Turn on LED for brightfield, set exposure time
-        self.liveController.turn_on_illumination(self.illumination_source, self.illumination_intensity)
+        self.liveController.set_illumination(self.illumination_source, self.illumination_intensity)
+        self.liveController.turn_on_illumination()
         # Set up any needed trigger mode or streaming
         if not self.camera.is_live:
             # 1. Compute fps from velocity, fov, overlap
@@ -3070,8 +3072,6 @@ class ZoomScanWorker(QObject):
         """
         Scan one row with continuous stage movement and synchronized image capture.
         """
-        # Clear any previous frames
-        self.captured_frames = []
 
         # Start camera streaming for this row
         self._prepare_camera_and_illumination()
