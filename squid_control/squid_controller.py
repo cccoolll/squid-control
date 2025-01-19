@@ -15,14 +15,14 @@ import time
 
 #using os to set current working directory
 #find the current path
-# path=os.path.abspath(__file__)
-# #find the .ini file in the directory
-# path_ini=os.path.join(os.path.dirname(path),'configuration_HCS_v2.ini')
-# path_ini=Path(path_ini)
+path=os.path.abspath(__file__)
+#find the .ini file in the directory
+path_ini=os.path.join(os.path.dirname(path),'configuration_HCS_v2.ini')
+path_ini=Path(path_ini)
 
 
 
-# load_config(path_ini, False)
+load_config(path_ini, False)
 class SquidController:
     fps_software_trigger= 100
 
@@ -191,7 +191,7 @@ class SquidController:
         print("home xy")
         timestamp_start = time.time()
         # x needs to be at > + 20 mm when homing y
-        self.navigationController.move_x(25)  # to-do: add blocking code
+        self.navigationController.move_x(20)  # to-do: add blocking code
         while self.microcontroller.is_busy():
             time.sleep(0.005)
         # home y
@@ -228,12 +228,12 @@ class SquidController:
         # wait for the operation to finish
         
         # FIXME: This is failing right now, z return timeout
-        # t0 = time.time()
-        # while self.microcontroller.is_busy():
-        #     time.sleep(0.005)
-        #     if time.time() - t0 > 5:
-        #         print("z return timeout, the program will exit")
-        #         exit()
+        t0 = time.time()
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+            if time.time() - t0 > 5:
+                print("z return timeout, the program will exit")
+                exit()
 
         # set output's gains
         div = 1 if CONFIG.OUTPUT_GAINS.REFDIV is True else 0
