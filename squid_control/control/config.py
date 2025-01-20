@@ -169,6 +169,9 @@ class AFSetting(BaseModel):
     STOP_THRESHOLD: float = 0.85
     CROP_WIDTH: int = 800
     CROP_HEIGHT: int = 800
+    MULTIPOINT_REFLECTION_AUTOFOCUS_ENABLE_BY_DEFAULT: bool = False
+    MULTIPOINT_AUTOFOCUS_ENABLE_BY_DEFAULT: bool = False
+
 
 
 class TrackingSetting(BaseModel):
@@ -205,6 +208,7 @@ class SoftwarePosLimitSetting(BaseModel):
     Y_POSITIVE: float = 56
     Y_NEGATIVE: float = -0.5
     Z_POSITIVE: float = 6
+    Z_NEGATIVE: float = 0.05
 
 
 class FlipImageSetting(Enum):
@@ -400,7 +404,6 @@ class BaseConfig(BaseModel):
 
     MULTIPOINT_AUTOFOCUS_CHANNEL: str = "BF LED matrix full"
     # MULTIPOINT_AUTOFOCUS_CHANNEL:str = 'BF LED matrix left half'
-    MULTIPOINT_AUTOFOCUS_ENABLE_BY_DEFAULT: bool = False
     MULTIPOINT_BF_SAVING_OPTION: str = "Raw"
     # MULTIPOINT_BF_SAVING_OPTION:str = 'RGB2GRAY'
     # MULTIPOINT_BF_SAVING_OPTION:str = 'Green Channel Only'
@@ -455,7 +458,7 @@ class BaseConfig(BaseModel):
     CHOSEN_READ: str = "INDIVIDUAL"
 
     # laser autofocus
-    SUPPORT_LASER_AUTOFOCUS: bool = False
+    SUPPORT_LASER_AUTOFOCUS: bool = True
     MAIN_CAMERA_MODEL: str = "MER2-1220-32U3M"
     FOCUS_CAMERA_MODEL: str = "MER2-630-60U3M"
     FOCUS_CAMERA_EXPOSURE_TIME_MS: int = 2
@@ -467,7 +470,6 @@ class BaseConfig(BaseModel):
     HAS_TWO_INTERFACES: bool = True
     USE_GLASS_TOP: bool = True
     SHOW_LEGACY_DISPLACEMENT_MEASUREMENT_WINDOWS: bool = False
-    MULTIPOINT_REFLECTION_AUTOFOCUS_ENABLE_BY_DEFAULT: bool = False
     RUN_CUSTOM_MULTIPOINT: bool = False
     CUSTOM_MULTIPOINT_FUNCTION: str = None
     RETRACT_OBJECTIVE_BEFORE_MOVING_TO_LOADING_POSITION: bool = True
@@ -592,7 +594,7 @@ CONFIG = BaseConfig()
 def load_config(config_path, multipoint_function):
     global CONFIG
 
-    config_dir = Path(os.path.abspath(__file__))
+    config_dir = Path(os.path.abspath(__file__)).parent
 
 
     current_dir = Path(__file__).parent

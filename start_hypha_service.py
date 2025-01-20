@@ -27,7 +27,7 @@ if ENV_FILE:
     dotenv.load_dotenv(ENV_FILE)  
 
 class Microscope:
-    def __init__(self, is_simulation=True):
+    def __init__(self, is_simulation):
         self.login_required = True
         self.current_x = 0
         self.current_y = 0
@@ -37,6 +37,7 @@ class Microscope:
         self.current_intensity = None
         self.is_illumination_on = False
         self.chatbot_service_url = None
+        self.is_simulation = is_simulation
         self.squidController = SquidController(is_simulation=is_simulation)
         self.dx = 1
         self.dy = 1
@@ -547,19 +548,25 @@ class Microscope:
         server = await connect_to_server(
             {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
         )
-        await self.start_hypha_service(server, service_id="microscope-control-squid")
-
+        if self.is_simulation:
+            await self.start_hypha_service(server, service_id="microscope-control-squid-simulation")
+            datastore_id = 'data-store-simulated-microscope'
+            chatbot_id = "squid-control-chatbot-simulated-microscope"
+        else:
+            await self.start_hypha_service(server, service_id="microscope-control-squid-real-microscope")
+            datastore_id = 'data-store-real-microscope'
+            chatbot_id = "squid-control-chatbot-real-microscope"
         self.datastore = HyphaDataStore()
         try:
-            await self.datastore.setup(server, service_id="data-store")
+            await self.datastore.setup(server, service_id=datastore_id)
         except TypeError as e:
             if "Future" in str(e):
                 # If config is a Future, wait for it to resolve
                 config = await asyncio.wrap_future(server.config)
-                await self.datastore.setup(server, service_id="data-store", config=config)
+                await self.datastore.setup(server, service_id=datastore_id, config=config)
             else:
                 raise e
-        chatbot_id = "squid-control-chatbot"
+    
         chatbot_server_url = "https://chat.bioimage.io"
         try:
             chatbot_token= os.environ.get("WORKSPACE_TOKEN_CHATBOT")
