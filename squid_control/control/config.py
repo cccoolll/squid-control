@@ -375,7 +375,7 @@ class BaseConfig(BaseModel):
     }
     TUBE_LENS_MM: float = 50
     CAMERA_SENSOR: str = "IMX226"
-    DEFAULT_OBJECTIVE: str = "10x (Mitutoyo)"
+    DEFAULT_OBJECTIVE: str = "40x"
     TRACKERS: List[str] = [
         "csrt",
         "kcf",
@@ -507,7 +507,7 @@ class BaseConfig(BaseModel):
     LAST_COORDS_PATH: str = ""
 
     # for check if the stage is moved
-    STAGE_MOVED_THRESHOLD: float = 0.005
+    STAGE_MOVED_THRESHOLD: float = 0.05
 
     # Additional field to store options
     OPTIONS: dict = {}

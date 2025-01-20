@@ -191,7 +191,7 @@ class SquidController:
         print("home xy")
         timestamp_start = time.time()
         # x needs to be at > + 20 mm when homing y
-        self.navigationController.move_x(20)  # to-do: add blocking code
+        self.navigationController.move_x(25)  # to-do: add blocking code
         while self.microcontroller.is_busy():
             time.sleep(0.005)
         # home y
@@ -216,10 +216,10 @@ class SquidController:
         print("home xy done")
 
         # move to scanning position
-        self.navigationController.move_x(20)
+        self.navigationController.move_x(25)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
-        self.navigationController.move_y(20)
+        self.navigationController.move_y(25)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
 
@@ -284,15 +284,32 @@ class SquidController:
         self.navigationController.set_y_limit_neg_mm(CONFIG.SOFTWARE_POS_LIMIT.Y_NEGATIVE)
 
         # set the default infomation, this will be used for the simulated camera
-        self.dx = 0
-        self.dy = 0
         self.dz = 0
         self.current_channel = 0
         self.current_expousre_time = 100
         self.current_intensity = 100
-        self.recorded_x, self.recorded_y, self.recorded_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+        self.pixel_size_xy = 0.1665
+        self.get_pixel_size()
 
+
+    def get_pixel_size(self):
+        """Calculate pixel size based on imaging parameters."""
+        try:
+            tube_lens_mm = float(CONFIG.TUBE_LENS_MM)
+            pixel_size_um = float(CONFIG.CAMERA_PIXEL_SIZE_UM[CONFIG.CAMERA_SENSOR])
             
+            object_dict_key = self.objectiveStore.current_objective
+            objective = self.objectiveStore.objectives_dict[object_dict_key]
+            magnification =  float(objective['magnification'])
+            objective_tube_lens_mm = float(objective['tube_lens_f_mm'])
+            print(f"Tube lens: {tube_lens_mm} mm, Objective tube lens: {objective_tube_lens_mm} mm, Pixel size: {pixel_size_um} µm, Magnification: {magnification}")
+        except:
+            raise ValueError("Missing required parameters for pixel size calculation.")
+
+        self.pixel_size_xy = pixel_size_um / (magnification / (objective_tube_lens_mm / tube_lens_mm))
+        print(f"Pixel size: {self.pixel_size_xy} µm")
+        
+                
     def move_to_scaning_position(self):
         # move to scanning position
         self.navigationController.move_z_to(0.4)
@@ -332,18 +349,14 @@ class SquidController:
             # Read current position
             print('Getting simulated image')
             current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
-            # Calculate dx, dy, and dz
-            self.dx = current_x - self.recorded_x
-            self.dy = current_y - self.recorded_y
             self.dz = current_z - SIMULATED_CAMERA.ORIN_Z
-            self.recorded_x,self.recorded_y,self.recorded_z = current_x, current_y, current_z
             self.current_channel = channel
             magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
             self.current_expousre_time = exposure_time
             self.current_intensity = intensity
-            self.camera.send_trigger(self.dx,self.dy,self.dz,channel,intensity,exposure_time,magnification_factor)
-            print(f'For simulated camera, dx={self.dx}, dy={self.dy}, dz={self.dz},exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}')
-            
+            self.camera.send_trigger( current_x,current_y,self.dz,self.pixel_size_xy, channel,intensity,exposure_time,magnification_factor)
+            print(f'For simulated camera,exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}, current position: {current_x},{current_y},{current_z}')
+   
     def do_autofocus(self):
         
         if self.is_simulation:
@@ -411,9 +424,9 @@ class SquidController:
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
         if abs(x_pos - x) < CONFIG.STAGE_MOVED_THRESHOLD:
-            return False, x_pos_before, y_pos_before, z_pos_before, x
+            return True, x_pos_before, y_pos_before, z_pos_before, x
 
-        return True, x_pos_before, y_pos_before, z_pos_before, x
+        return False, x_pos_before, y_pos_before, z_pos_before, x
     
     def move_y_to_limited(self, y):
         x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
@@ -424,9 +437,9 @@ class SquidController:
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
         if abs(y_pos - y) < CONFIG.STAGE_MOVED_THRESHOLD:
-            return False, x_pos_before, y_pos_before, z_pos_before, y
+            return True, x_pos_before, y_pos_before, z_pos_before, y
     
-        return True, x_pos_before, y_pos_before, z_pos_before, y
+        return False, x_pos_before, y_pos_before, z_pos_before, y
 
     def move_z_to_limited(self, z):
         x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
@@ -437,10 +450,10 @@ class SquidController:
         x_pos,y_pos, z_pos, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
 
         if abs(z_pos - z) < CONFIG.STAGE_MOVED_THRESHOLD:
-            return False, x_pos_before, y_pos_before, z_pos_before, z
+            return True, x_pos_before, y_pos_before, z_pos_before, z
 
-        return True, x_pos_before, y_pos_before, z_pos_before, z
-
+        return False, x_pos_before, y_pos_before, z_pos_before, z
+    
 
     def move_by_distance_limited(self, dx, dy, dz):
         x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
@@ -508,7 +521,7 @@ class SquidController:
         self.slidePositionController.homing_done = True
 
         # move to scanning position
-        self.navigationController.move_x(20)
+        self.navigationController.move_x(30)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
         self.navigationController.move_y(20)

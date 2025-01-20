@@ -12,6 +12,8 @@ import json
 import cv2
 import dotenv
 import sys
+import io
+from PIL import Image  
 # Now you can import squid_control
 from squid_control.squid_controller import SquidController
 from pydantic import Field, BaseModel
@@ -64,7 +66,7 @@ class Microscope:
         self.authorized_emails = self.load_authorized_emails(self.login_required)
         print(f"Authorized emails: {self.authorized_emails}")
         self.datastore = None
-        self.server_url = "https://hypha.aicell.io/"
+        self.server_url = "https://chat.bioimage.io/"
 
     def load_authorized_emails(self, login_required=True):
         if login_required:
@@ -100,6 +102,9 @@ class Microscope:
         return "pong"
 
     def move_by_distance(self, x, y, z, context=None):
+        """
+        Move the stage by a distance in x, y, z axis.
+        """
         is_success, x_pos, y_pos, z_pos, x_des, y_des, z_des = self.squidController.move_by_distance_limited(x, y, z)
         if is_success:
             result = f'The stage moved ({x},{y},{z})mm through x,y,z axis, from ({x_pos},{y_pos},{z_pos})mm to ({x_des},{y_des},{z_des})mm'
@@ -119,6 +124,9 @@ class Microscope:
             }
 
     def move_to_position(self, x, y, z, context=None):
+        """
+        Move the stage to a position in x, y, z axis.
+        """
         self.get_status()
         initial_x = self.parameters['current_x']
         initial_y = self.parameters['current_y']
@@ -190,6 +198,8 @@ class Microscope:
     def update_parameters_from_client(self, new_parameters, context=None):
         """
         Update the parameters from the client side.
+        Returns:
+            dict: Updated parameters in the microscope.
         """
         if self.parameters is None:
             self.parameters = {}
@@ -211,8 +221,11 @@ class Microscope:
         return {"success": True, "message": "Parameters updated successfully.", "updated_parameters": new_parameters}
 
 
-    def one_new_frame(self, context=None):
-        gray_img = self.squidController.snap_image(0, 50, 100)
+    def one_new_frame(self,exposure_time, channel, intensity, context=None):
+        """
+        Get the current frame from the camera as a grayscale image.
+        """
+        gray_img = self.squidController.snap_image(channel, intensity, exposure_time)
 
         min_val = np.min(gray_img)
         max_val = np.max(gray_img)
@@ -221,8 +234,30 @@ class Microscope:
             gray_img = gray_img.astype(np.uint8)  # Convert to 8-bit image
         else:
             gray_img = np.zeros((512, 512), dtype=np.uint8)  # If no variation, return a black image
-        bgr_img = np.stack((gray_img,) * 3, axis=-1)  # Duplicate grayscale data across 3 channels to simulate BGR format.
-        return bgr_img
+
+        gray_img = Image.fromarray(gray_img)
+        gray_img = gray_img.convert("L")  # Convert to grayscale  
+        # Save the image to a BytesIO object as PNG  
+        buffer = io.BytesIO()  
+        gray_img.save(buffer, format="PNG")  
+        buffer.seek(0) 
+        
+        #update the current illumination channel and intensity
+        if channel == 0:
+            self.BF_intensity_exposure = [intensity,exposure_time]
+        elif channel == 11:
+            self.F405_intensity_exposure = [intensity, exposure_time]
+        elif channel == 12:
+            self.F488_intensity_exposure = [intensity, exposure_time]
+        elif channel == 13:
+            self.F561_intensity_exposure = [intensity, exposure_time]
+        elif channel == 14:
+            self.F638_intensity_exposure = [intensity, exposure_time]
+        elif channel == 15:
+            self.F730_intensity_exposure = [intensity, exposure_time]
+        self.get_status()
+        
+        return buffer  
 
     def snap(self, exposure_time, channel, intensity, context=None):
         """
@@ -333,6 +368,9 @@ class Microscope:
         print(f'The stage moved to well position ({row},{col})')
 
     def get_chatbot_url(self, context=None):
+        """
+        Get the chatbot service URL. Since the url chatbot service is not fixed, we provide this function to get the chatbot service URL.
+        """
         print(f"chatbot_service_url: {self.chatbot_service_url}")
         return self.chatbot_service_url
 
@@ -453,6 +491,7 @@ class Microscope:
                 "type": "echo",
                 "move_by_distance": self.move_by_distance,
                 "snap": self.snap,
+                "one_new_frame": self.one_new_frame,
                 "off_illumination": self.close_illumination,
                 "on_illumination": self.open_illumination,
                 "set_illumination": self.set_illumination,
@@ -470,9 +509,8 @@ class Microscope:
         )
 
         print(
-            f"Service (service_id={service_id}) started successfully, available at http://{self.server_url}/{server.config.workspace}/services"
+            f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
-        print(f"You can access at https://cccoolll.github.io/reef-imaging/?service_id={service_id}")
 
     async def start_chatbot_service(self, server, service_id):
         chatbot_extension = {
@@ -502,14 +540,14 @@ class Microscope:
 
     async def setup(self):
         try:  
-            token = os.environ.get("WORKSPACE_TOKEN")  
+            token = os.environ.get("SQUID_WORKSPACE_BIOIMAGEIO")  
         except:  
             token = await login({"server_url": self.server_url})
             
         server = await connect_to_server(
-            {"server_url": self.server_url, "token": token, "workspace": "agent-lens"}
+            {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
         )
-        await self.start_hypha_service(server, service_id="microscope-control-squid-test")
+        await self.start_hypha_service(server, service_id="microscope-control-squid")
 
         self.datastore = HyphaDataStore()
         try:
@@ -527,7 +565,7 @@ class Microscope:
             chatbot_token= os.environ.get("WORKSPACE_TOKEN_CHATBOT")
         except:
             chatbot_token = await login({"server_url": chatbot_server_url})
-        chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token})
+        chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
         await self.start_chatbot_service(chatbot_server, chatbot_id)
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ except:
 from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting
 from scipy.ndimage import gaussian_filter
+import zarr
 
 script_dir = os.path.dirname(__file__)
 
@@ -80,7 +81,7 @@ class Camera(object):
             + self.row_period_us * self.pixel_size_byte * (self.row_numbers - 1)
         )
 
-        self.pixel_format = None  # use the default pixel format
+        self.pixel_format = "MONO8"  # use the default pixel format
 
         self.is_live = False  # this determines whether a new frame received will be handled in the streamHandler
         # mainly for discarding the last frame received after stop_live() is called, where illumination is being turned off during exposure
@@ -531,7 +532,7 @@ class Camera_Simulation(object):
             14: '561nm.png',
             13: '638nm.png',
         }
-        self.image_size= (2000,2000)
+        self.zarr_path = os.getenv('ZARR_PATH')
         
         self.image_folder = os.getenv('IMAGE_DATA_FOR_SIMULATED_MICROSCOPE')
         if not self.image_folder:
@@ -612,14 +613,9 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    def send_trigger(self, dx=0, dy=0, dz=0, channel=0, intensity=100, exposure_time=100, magnification_factor=20):
+    def send_trigger(self, x=20, y=20, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20):
         self.frame_ID += 1
         self.timestamp = time.time()
-
-        # Switch field of view on stage movement
-        if dx != 0 or dy != 0:
-            self.current_fov = np.random.choice(list(self.fields_of_view.keys()))
-        
         channel_map = {
             0: 'BF_LED_matrix_full',
             11: 'Fluorescence_405_nm_Ex',
@@ -627,19 +623,47 @@ class Camera_Simulation(object):
             14: 'Fluorescence_561_nm_Ex',
             13: 'Fluorescence_638_nm_Ex'
         }
-        channel_name = channel_map.get(channel, 'random')  # Default to a random image if the channel is not in the map
-        # Load the image for the specified channel
-        image_filename = f"{self.current_fov}_{channel_name}.bmp"
-        image_path = os.path.join(self.image_folder, image_filename)
-        print("image_path", image_path)
-        
-        # Load the image if available; otherwise, generate random image data
-        if os.path.exists(image_path):
-            with Image.open(image_path) as img:
-                self.image = np.array(img)
-            self.image = (self.image - self.image.min()) / (self.image.max() - self.image.min()) * 255
+        channel_name = channel_map.get(channel, None)  # Get the channel name or None if not found
+
+        if channel_name is None:
+            # If the channel is not found, return a random image
+            self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
+            print(f"Channel {channel} not found, returning a random image")
         else:
-            self.image = np.random.randint(0, 256, self.image_size, dtype=np.uint8)
+            # Load the OME-Zarr file
+            root = zarr.open(self.zarr_path, mode='r')
+
+            # Access the specified channel and scale0
+            if channel_name not in root:
+                # If the channel is not found in the Zarr file, return a random image
+                self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
+                print(f"Channel {channel_name} not found in Zarr file, returning a random image")
+            else:
+                dataset = root[channel_name]['scale0']  # Access scale0
+
+                # Calculate the pixel coordinates in the scale0 dataset
+                pixel_x = int(x / pixel_size_um) * 1000
+                pixel_y = int(y / pixel_size_um) * 1000
+
+                # Extract the region of interest (ROI) based on self.Width and self.Height
+                start_x = max(0, pixel_x - self.Width // 2)
+                start_y = max(0, pixel_y - self.Height // 2)
+                end_x = start_x + self.Width
+                end_y = start_y + self.Height
+
+                # Ensure the ROI is within the bounds of the dataset
+                start_x = min(start_x, dataset.shape[1] - self.Width)
+                start_y = min(start_y, dataset.shape[0] - self.Height)
+                end_x = start_x + self.Width
+                end_y = start_y + self.Height
+
+                # Extract the image data
+                self.image = dataset[start_y:end_y, start_x:end_x]
+                self.image = self.image.astype(np.uint8)
+                print(f"Extracted image data from {channel_name} at {x},{y}, ({start_x}, {start_y}) to ({end_x}, {end_y})")
+
+
+                
 
         # Simulate intensity and exposure
         exposure_factor = exposure_time / 100
@@ -658,6 +682,7 @@ class Camera_Simulation(object):
         if dz != 0:
             sigma = abs(dz) * 6  # Adjust for blur intensity
             self.current_frame = gaussian_filter(self.current_frame, sigma=sigma)
+            print(f"The image is blurred with dz={dz}, sigma={sigma}")
         
         if self.new_image_callback_external is not None and self.callback_is_enabled:
             self.new_image_callback_external(self)
