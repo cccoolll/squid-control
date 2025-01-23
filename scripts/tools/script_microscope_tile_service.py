@@ -6,7 +6,7 @@ from hypha_rpc import connect_to_server
 from PIL import Image  
 import zarr  
 import numpy as np  
-  
+import base64
 # Constants from streaming_imaging_map  
 ZARR_PATH = "/media/reef/harddisk/stitched_output_whole_view/stitched_images.zarr"  
 CHANNEL_NAME = "Fluorescence_561_nm"  
@@ -87,7 +87,7 @@ async def start_server(server_url):
     """Start the Hypha server and register the tile streaming service."""  
     # Load environment variables  
     dotenv.load_dotenv()  
-    token = os.getenv("SQUID_WORKSPACE_BIOIMAGEIO")  
+    token = os.getenv("SQUID_WORKSPACE_TOKEN")  
   
     # Connect to the Hypha server  
     server = await connect_to_server({  
@@ -123,7 +123,35 @@ async def start_server(server_url):
         except Exception as e:  
             print(f"Error getting tile: {str(e)}")  
             return create_blank_tile()  
+
+    async def get_tile_base64(channel_name: str ,z: int, x: int, y: int):  
+        """Serve a tile for the fixed channel and z, x, y parameters."""  
+        try:  
+            print(f"Backend: Fetching tile z={z}, x={x}, y={y}")  
+            if channel_name is None:
+                channel_name = CHANNEL_NAME
+            zarr_path = ZARR_PATH 
   
+            # Check if the Zarr file exists  
+            if not os.path.exists(zarr_path):  
+                print(f"Zarr file not found: {zarr_path}")  
+                return create_blank_tile()  
+  
+            # Fetch the tile from the Zarr file  
+            tile_buffer = get_tile_from_zarr(zarr_path,channel_name, z, x, y)
+
+            tile_bytes = tile_buffer.getvalue()  
+            tile_base64 = base64.b64encode(tile_bytes).decode('utf-8') 
+            return tile_base64  # Return bytes directly instead of BytesIO
+
+        except Exception as e:  
+            print(f"Error getting tile: {str(e)}")  
+            return create_blank_tile().getvalue()  # Return bytes from blank tile 
+  
+        except Exception as e:  
+            print(f"Error getting tile: {str(e)}")  
+            return create_blank_tile()
+        
     # Register the service with Hypha  
     service_info = await server.register_service({  
         "name": "Tile Streaming Service (Whole View)",  
@@ -132,7 +160,8 @@ async def start_server(server_url):
             "visibility": "public",  
             "require_context": False,  
         },  
-        "get_tile": get_tile,  
+        "get_tile": get_tile,
+        "get_tile_base64": get_tile_base64,
     })  
   
     print(f"Service registered successfully!")  
@@ -144,5 +173,5 @@ async def start_server(server_url):
     await server.serve()  
   
 if __name__ == "__main__":  
-    server_url = "https://chat.bioimage.io"  
+    server_url = "https://hypha.aicell.io"  
     asyncio.run(start_server(server_url))  
