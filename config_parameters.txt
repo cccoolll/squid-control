@@ -32,7 +32,7 @@ offset_row_a_mm = 20
 stop_threshold = 0.85
 crop_width = 800
 crop_height = 800
-multipoint_reflection_autofocus_enable_by_default = True
+multipoint_reflection_autofocus_enable_by_default = False
 multipoint_autofocus_enable_by_default = False
 
 [Tracking]
@@ -65,7 +65,7 @@ x_positive = 112.5
 x_negative = 10
 y_positive = 76
 y_negative = 6
-z_positive = 7
+z_positive = 6
 z_negative = 0.05
 
 [Acquisition]
@@ -88,7 +88,7 @@ bit_pos_switch = 1
 
 rotate_image_angle = None
 
-flip_image = Both
+flip_image = Vertical
 
 camera_reverse_x = False
 
@@ -158,11 +158,11 @@ screw_pitch_y_mm = 2.54
 
 screw_pitch_z_mm = 0.3
 
-microstepping_default_x = 32
+microstepping_default_x = 256
 
-microstepping_default_y = 32
+microstepping_default_y = 256
 
-microstepping_default_z = 32
+microstepping_default_z = 256
 
 microstepping_default_theta = 256
 
@@ -182,7 +182,7 @@ max_velocity_x_mm = 30
 
 max_velocity_y_mm = 30
 
-max_velocity_z_mm = 3.8
+max_velocity_z_mm = 4
 
 max_acceleration_x_mm = 500
 
@@ -202,11 +202,11 @@ enable_pid_y = False
 
 enable_pid_z = False
 
-encoder_flip_dir_x = True
+encoder_flip_dir_x = False
 
-encoder_flip_dir_y = True
+encoder_flip_dir_y = False
 
-encoder_flip_dir_z = True
+encoder_flip_dir_z = False
 
 encoder_resolution_um_x = 0.05
 
@@ -242,7 +242,7 @@ default_display_crop = 100
 
 camera_pixel_size_um = {'IMX226': 1.85, 'IMX250': 3.45, 'IMX252': 3.45, 'PYTHON300': 4.8}
 
-objectives = {'2x': {'magnification': 2, 'NA': 0.1, 'tube_lens_f_mm': 180}, '4x': {'magnification': 4, 'NA': 0.13, 'tube_lens_f_mm': 180}, '10x': {'magnification': 10, 'NA': 0.25, 'tube_lens_f_mm': 180}, '10x (Mitutoyo)': {'magnification': 10, 'NA': 0.25, 'tube_lens_f_mm': 200}, '20x': {'magnification': 20, 'NA': 0.4, 'tube_lens_f_mm': 180}, '20x (Boli)': {'magnification': 20, 'NA': 0.4, 'tube_lens_f_mm': 180}, '20x (Nikon)': {'magnification': 20, 'NA': 0.45, 'tube_lens_f_mm': 200}, '40x': {'magnification': 40, 'NA': 0.6, 'tube_lens_f_mm': 180}}
+objectives = {'2x': {'magnification': 2, 'NA': 0.1, 'tube_lens_f_mm': 180}, '4x': {'magnification': 4, 'NA': 0.13, 'tube_lens_f_mm': 180}, '10x': {'magnification': 10, 'NA': 0.25, 'tube_lens_f_mm': 180}, '10x (Mitutoyo)': {'magnification': 10, 'NA': 0.25, 'tube_lens_f_mm': 200}, '20x (Boli)': {'magnification': 20, 'NA': 0.4, 'tube_lens_f_mm': 180}, '20x (Nikon)': {'magnification': 20, 'NA': 0.45, 'tube_lens_f_mm': 200}, '40x': {'magnification': 40, 'NA': 0.6, 'tube_lens_f_mm': 180}}
 
 tube_lens_mm = 50
 
@@ -268,7 +268,7 @@ autolevel_default_setting = False
 
 multipoint_autofocus_channel = BF LED matrix full
 
-multipoint_bf_saving_option = Raw
+multipoint_bf_saving_option = Green Channel Only
 
 default_multipoint_nx = 1
 
@@ -282,11 +282,11 @@ enable_strobe_output = False
 
 z_stacking_config = FROM CENTER
 
-wellplate_format = 384
+wellplate_format = 12
 
-x_mm_384_wellplate_upperleft = 13.1
+x_mm_384_wellplate_upperleft = 12.41
 
-y_mm_384_wellplate_upperleft = 10.3
+y_mm_384_wellplate_upperleft = 11.18
 
 default_z_pos_mm = 2.287
 
@@ -366,7 +366,7 @@ do_fluorescence_rtp = False
 
 enable_spinning_disk_confocal = False
 
-inverted_objective = True
+inverted_objective = False
 
 illumination_intensity_factor = 0.6
 
@@ -382,25 +382,25 @@ y_home_switch_polarity = 1
 
 z_home_switch_polarity = 2
 
-number_of_skip = 1
+number_of_skip = 0
 
-well_size_mm = 3.3
+well_size_mm = 22.05
 
-well_spacing_mm = 4.5
+well_spacing_mm = 26
 
-a1_x_mm = 12.05
+a1_x_mm = 24.75
 
-a1_y_mm = 9.05
+a1_y_mm = 16.86
 
 show_dac_control = False
 
-cache_config_file_path = /home/tao/Documents/code/squid-control/squid_control/control/cache_config_file_path.txt
+cache_config_file_path = /home/tao/workspace/reef-imaging/reef_imaging/control/squid_microscope/squid-control/squid_control/control/cache_config_file_path.txt
 
-channel_configurations_path = /home/tao/Documents/code/squid-control/squid_control/control/channel_configurations.xml
+channel_configurations_path = /home/tao/workspace/reef-imaging/reef_imaging/control/squid_microscope/squid-control/squid_control/control/channel_configurations.xml
 
-last_coords_path = /home/tao/Documents/code/squid-control/squid_control/control/last_coords.txt
+last_coords_path = /home/tao/workspace/reef-imaging/reef_imaging/control/squid_microscope/squid-control/squid_control/control/last_coords.txt
 
 stage_moved_threshold = 0.05
 
-options = {'_camera_type_options': '[Default, FLIR, Toupcam]', '_flip_image_options': '[Vertical, Horizontal, Both, None]', '_camera_reverse_x_options': '[True, False]', '_camera_reverse_y_options': '[True, False]', '_default_pixel_format_options': '[MONO8, MONO12, MONO14, MONO16, BAYER_RG8, BAYER_RG12]', '_use_encoder_x_options': '[True, False]', '_use_encoder_y_options': '[True, False]', '_use_encoder_z_options': '[True, False]', '_use_encoder_theta_options': '[True, False]', '_enable_pid_x_options': '[True, False]', '_enable_pid_y_options': '[True, False]', '_enable_pid_z_options': '[True, False]', '_has_encoder_x_options': '[True, False]', '_has_encoder_y_options': '[True, False]', '_has_encoder_z_options': '[True, False]', '_encoder_flip_dir_x_options': '[True, False]', '_encoder_flip_dir_y_options': '[True, False]', '_encoder_flip_dir_z_options': '[True, False]', '_homing_enabled_x_options': '[True, False]', '_homing_enabled_y_options': '[True, False]', '_homing_enabled_z_options': '[True, False]', '_multipoint_autofocus_enable_by_default_options': '[True, False]', '_camera_sensor_options': '[IMX226, IMX250, IMX252, PYTHON300]', '_default_objective_options': '[2x, 4x, 10x, 10x (Mitutoyo), 20x (Boli), 20x (Nikon), 40x]', '_do_fluorescence_rtp_options': '[True, False]', '_sort_during_multipoint_options': '[True, False]', '_enable_tracking_options': '[True, False]', '_tracking_show_microscope_configurations_options': '[True, False]', '_wellplate_format_options': [1536, 384, 96, 24, 12, 6], '_focus_camera_type_options': '[Default, FLIR, Toupcam]', '_support_laser_autofocus_options': '[True, False]', '_use_glass_top_options': '[True, False]', '_has_two_interfaces_options': '[True, False]', '_enable_flexible_multipoint_options': '[True, False]', '_inverted_objective_options': '[True, False]', '_filter_controller_enable_options': '[True, False]', '_default_init_method_options': '[roi]', '_refdiv_options': '[True, False]', '_channel0_gain_options': '[True, False]', '_channel1_gain_options': '[True, False]', '_channel2_gain_options': '[True, False]', '_channel3_gain_options': '[True, False]', '_channel4_gain_options': '[True, False]', '_channel5_gain_options': '[True, False]', '_channel6_gain_options': '[True, False]', '_channel7_gain_options': '[True, False]'}
+options = {'_flip_image_options': '[Vertical, Horizontal, Both]', '_camera_reverse_x_options': '[True,False]', '_camera_reverse_y_options': '[True, False]', '_default_pixel_format_options': '[MONO8,MONO12,MONO14,MONO16,BAYER_RG8,BAYER_RG12]', '_use_encoder_x_options': '[True,False]', '_use_encoder_y_options': '[True,False]', '_use_encoder_z_options': '[True,False]', '_use_encoder_theta_options': '[True,False]', '_homing_enabled_x_options': '[True,False]', '_homing_enabled_y_options': '[True,False]', '_homing_enabled_z_options': '[True,False]', '_multipoint_autofocus_enable_by_default_options': '[True,False]', '_camera_sensor_options': '[IMX226,IMX250,IMX252,PYTHON300]', '_default_objective_options': '[2x,4x,10x,10x (Mitutoyo), 20x (Boli), 20x (Nikon), 40x]', '_do_fluorescence_rtp_options': '[True,False]', '_sort_during_multipoint_options': '[True,False]', '_enable_tracking_options': '[True,False]', '_tracking_show_microscope_configurations_options': '[True,False]', '_wellplate_format_options': [384, 96, 24, 12, 6], '_support_laser_autofocus_options': '[True,False]', '_has_two_interfaces_options': '[True,False]', '_enable_flexible_multipoint_options': '[True,False]', '_enable_spinning_disk_confocal_options': '[True,False]', '_default_init_method_options': '[roi]'}
 

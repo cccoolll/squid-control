@@ -3098,7 +3098,7 @@ class ZoomScanWorker(QObject):
             self._emit_progress(row_idx, num_rows)
 
         # Stop movement and streaming
-        self.microcontroller.stop_x()
+        #self.microcontroller.stop_x() TODO: There's no stop_x method
         self.liveController.stop_live()
 
     def _stage_reached_x_target(self, distance_x):

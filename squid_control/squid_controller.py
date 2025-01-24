@@ -646,9 +646,10 @@ class SquidController:
 
 #main
 
-#squid_controller = SquidController(is_simulation=True)
-#print('Squid controller initialized')
-
-#zone_image = squid_controller.zoom_scan((25,25,35,35),0.1,9.0)
-#zone_image.write('zone_image.png')
-#print(f'Zone image shape: {zone_image.shape}')
+squid_controller = SquidController(is_simulation=True)
+print('Squid controller initialized')
+squid_controller.move_x_to_limited(30)
+squid_controller.move_y_to_limited(30)
+zone_image = squid_controller.zoom_scan((30,30,35,35),0.1,9.0)
+zone_image.write('zone_image.png')
+print(f'Zone image shape: {zone_image.shape}')
