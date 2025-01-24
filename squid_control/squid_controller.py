@@ -141,8 +141,7 @@ class SquidController:
                 self.liveController,
                 self.autofocusController,
             )
-        self.imageSaver = core.ImageSaver()
-        self.imageDisplay = core.ImageDisplay()
+
 
         
 
@@ -637,19 +636,28 @@ class SquidController:
 
         self.liveController.stop_live()
         self.camera.close()
-        self.imageSaver.close()
+        #self.imageSaver.close()
         self.imageDisplay.close()
         if CONFIG.SUPPORT_LASER_AUTOFOCUS:
             self.camera_focus.close()
             #self.imageDisplayWindow_focus.close()
         self.microcontroller.close()
 
-#main
+def write_to_file(file_path, data):
+    if isinstance(data, np.ndarray):
+        np.save(file_path, data)
+    else:
+        with open(file_path, 'w') as file:
+            file.write(data)
+        
+def try_zoom_scanner():
+    squid_controller = SquidController(is_simulation=True)
+    print('Squid controller initialized')
+    squid_controller.move_x_to_limited(30)
+    squid_controller.move_y_to_limited(30)
+    zone_image = squid_controller.zoom_scan((30,30,35,35),0.1,9.0)
+    write_to_file('zone_image.png',zone_image)
+    print(f'Zone image shape: {zone_image.shape}')
 
-squid_controller = SquidController(is_simulation=True)
-print('Squid controller initialized')
-squid_controller.move_x_to_limited(30)
-squid_controller.move_y_to_limited(30)
-zone_image = squid_controller.zoom_scan((30,30,35,35),0.1,9.0)
-zone_image.write('zone_image.png')
-print(f'Zone image shape: {zone_image.shape}')
+if __name__ == "__main__":
+    try_zoom_scanner()
