@@ -566,8 +566,52 @@ class Camera_Simulation(object):
     def set_callback(self, function):
         self.new_image_callback_external = function
 
+# TODO: Implement the following methods for the simulated camera
+    def register_capture_callback_simulated(self, user_param, callback):
+        """
+        Register a callback function to be called with simulated camera data.
+
+        :param user_param: User parameter to pass to the callback
+        :param callback: Callback function to be called with the simulated data
+        """
+        self.user_param = user_param
+        self.capture_callback = callback
+
+    def simulate_capture_event(self):
+        """
+        Simulate a camera capture event and call the registered callback.
+        """
+        if self.capture_callback:
+            simulated_data = self.generate_simulated_data()
+            self.capture_callback(self.user_param, simulated_data)
+
+    def generate_simulated_data(self):
+        """
+        Generate simulated camera data.
+
+        :return: Simulated data
+        """
+        # Replace this with actual simulated data generation logic
+        return np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
+        
     def enable_callback(self):
-        self.callback_is_enabled = True
+        if self.callback_is_enabled == False:
+            # stop streaming
+            if self.is_streaming:
+                was_streaming = True
+                self.stop_streaming()
+            else:
+                was_streaming = False
+            # enable callback
+            user_param = None
+            self.register_capture_callback_simulated(user_param, self._on_frame_callback)
+            self.callback_is_enabled = True
+            # resume streaming if it was on
+            if was_streaming:
+                self.start_streaming()
+            self.callback_is_enabled = True
+        else:
+            pass
 
     def disable_callback(self):
         self.callback_is_enabled = False
@@ -691,7 +735,31 @@ class Camera_Simulation(object):
         return self.current_frame
 
     def _on_frame_callback(self, user_param, raw_image):
-        pass
+        if raw_image is None:
+            raw_image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
+        if self.image_locked:
+            print("last image is still being processed, a frame is dropped")
+            return
+        if self.is_color:
+            rgb_image = raw_image.convert("RGB")
+            numpy_image = rgb_image.get_numpy_array()
+            if self.pixel_format == "BAYER_RG12":
+                numpy_image = numpy_image << 4
+        else:
+            numpy_image = raw_image.get_numpy_array()
+            if self.pixel_format == "MONO12":
+                numpy_image = numpy_image << 4
+        if numpy_image is None:
+            return
+        self.current_frame = numpy_image
+        self.frame_ID_software = self.frame_ID_software + 1
+        self.frame_ID = raw_image.get_frame_id()
+        if self.trigger_mode == TriggerModeSetting.HARDWARE:
+            if self.frame_ID_offset_hardware_trigger == None:
+                self.frame_ID_offset_hardware_trigger = self.frame_ID
+            self.frame_ID = self.frame_ID - self.frame_ID_offset_hardware_trigger
+        self.timestamp = time.time()
+        self.new_image_callback_external(self)  
 
     def set_ROI(self, offset_x=None, offset_y=None, width=None, height=None):
         pass

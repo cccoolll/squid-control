@@ -605,7 +605,7 @@ class SquidController:
             #   - at the end does not always call stitch,
             #   so we add a small snippet to do it ourselves.
             worker.run()  # performs the actual scanning
-
+            print(f'Captured {len(worker.captured_frames)} frames')
             # After run() is done, we can manually stitch what was captured if desired:
             if len(worker.captured_frames) > 1:
                 stitched_image = worker._stitch_all()

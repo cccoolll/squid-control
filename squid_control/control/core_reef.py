@@ -210,8 +210,8 @@ class StreamHandler(QObject):
                 )
                 self.timestamp_last_track = time_now
                 
-            # If zoom scan is active, send to zoom scan controller
-            if hasattr(self, 'zoom_scan_controller'):
+            # TODO: If zoom scan is active, send to zoom scan controller
+            if True:
                 self.zoom_scan_controller.on_new_frame(
                     image_cropped,
                     camera.frame_ID,
@@ -2742,6 +2742,7 @@ class ZoomScanWorker(QObject):
         self.microcontroller = microcontroller
         self.navigationController = navigationController
         self.liveController = liveController
+        self.streamHandler = StreamHandler()
         self.x_min, self.y_min, self.x_max, self.y_max = rectangle
         self.overlap = overlap
         self.velocity_mm_s = velocity_mm_s
@@ -2756,7 +2757,8 @@ class ZoomScanWorker(QObject):
         self.exposure_time = 1  # in ms
         
         # For storing frames:
-        self.captured_frames = []   # Each entry could be image data
+        self.captured_frames = []
+        self.frame_positions = [] # Store (x,y) positions for each frame
 
     @Slot(np.ndarray, int, float)
     def on_new_frame(self, image, frame_ID, timestamp):
@@ -2796,6 +2798,7 @@ class ZoomScanWorker(QObject):
             self._prepare_camera_and_illumination()
             self._scan_one_row(row_idx, num_rows)
             self.liveController.turn_off_illumination()
+            self.camera.disable_callback()
             # Stitch frames of one row into one image
         #     if not self.request_abort and len(self.captured_frames) > 1:
         #         stitched = self._stitch_all()
@@ -2820,17 +2823,19 @@ class ZoomScanWorker(QObject):
         # Set up any needed trigger mode or streaming
         if not self.camera.is_live:
             # 1. Compute fps from velocity, fov, overlap
-            overlap_fraction = self.overlap
-            fps = int(self.velocity_mm_s / (self._get_fov_width()  * (1 - overlap_fraction)))
+            fov_width_mm = self._get_fov_width()
+            effective_fov = fov_width_mm * (1 - self.overlap)
+            required_fps = self.velocity_mm_s / effective_fov
 
             # 2. Switch to software trigger
             self.liveController.set_trigger_mode(TriggerModeSetting.SOFTWARE.value)
             # 3. Set a suitably short exposure time first:
             self.camera.set_exposure_time(self.exposure_time)
             # 4. Now set the software trigger’s FPS
-            self.liveController.set_trigger_fps(fps)
+            self.liveController.set_trigger_fps(required_fps)
 
             # 5. Start the camera streaming with software trigger
+            self.camera.enable_callback()
             self.liveController.start_live()
 
 
@@ -2849,8 +2854,6 @@ class ZoomScanWorker(QObject):
         Scan one row with continuous stage movement and synchronized image capture.
         """
 
-        # Start camera streaming for this row
-        self._prepare_camera_and_illumination()
 
         # Calculate movement parameters
         distance_x = self.x_max - self.x_min
