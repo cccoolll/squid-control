@@ -344,7 +344,7 @@ class LiveController(QObject):
         self.is_live = True
         self.camera.is_live = True
         self.camera.start_streaming()
-        if self.trigger_mode == TriggerModeSetting.SOFTWARE or (
+        if self.trigger_mode == TriggerModeSetting.SOFTWARE.value or (
             self.trigger_mode == TriggerModeSetting.HARDWARE
             and self.use_internal_timer_for_hardware_trigger
         ):
