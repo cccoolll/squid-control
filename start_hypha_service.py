@@ -67,7 +67,7 @@ class Microscope:
         self.authorized_emails = self.load_authorized_emails(self.login_required)
         print(f"Authorized emails: {self.authorized_emails}")
         self.datastore = None
-        self.server_url = "https://chat.bioimage.io/"
+        self.server_url = "https://hypha.aicell.io/"
 
     def load_authorized_emails(self, login_required=True):
         if login_required:
@@ -541,7 +541,7 @@ class Microscope:
 
     async def setup(self):
         try:  
-            token = os.environ.get("SQUID_WORKSPACE_BIOIMAGEIO")  
+            token = os.environ.get("SQUID_WORKSPACE_TOKEN")  
         except:  
             token = await login({"server_url": self.server_url})
             

@@ -382,6 +382,8 @@ class LiveController(QObject):
             if self.control_illumination and self.illumination_on == False:
                 self.turn_on_illumination()
             self.trigger_ID = self.trigger_ID + 1
+            #if self.is_simulation: TODO: implement simulation
+            #    self.camera.send_trigger_simulation()
             self.camera.send_trigger()
             # measure real fps
             timestamp_now = round(time.time())
@@ -2835,8 +2837,8 @@ class ZoomScanWorker(QObject):
             self.liveController.set_trigger_fps(required_fps)
 
             # 5. Start the camera streaming with software trigger
-            self.camera.enable_callback()
             self.liveController.start_live()
+            self.camera.start_streaming()
 
 
 

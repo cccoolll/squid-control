@@ -705,6 +705,12 @@ class Camera_Simulation(object):
                 self.image = dataset[start_y:end_y, start_x:end_x]
                 self.image = self.image.astype(np.uint8)
                 print(f"Extracted image data from {channel_name} at {x},{y}, ({start_x}, {start_y}) to ({end_x}, {end_y})")
+                
+            
+            # TODO: callback to the _on_frame_callback use 'generate_simulated_data'
+            # self.simulate_capture_event()
+            
+            
 
 
                 
