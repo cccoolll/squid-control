@@ -197,14 +197,31 @@ class Microcontroller:
                 edge_positions_mm = json.load(f)
                 print("edge_positions_mm: ", edge_positions_mm)
                 for i in range(len(edge_positions_mm)):
-                    self.edge_positions.append(CONFIG.STAGE_MOVEMENT_SIGN_X
+                    x = (CONFIG.STAGE_MOVEMENT_SIGN_X
                                                 * int(
-                                                    edge_positions_mm[i]
+                                                    edge_positions_mm[i][0]
                                                     / (
                                                         CONFIG.SCREW_PITCH_X_MM
                                                         / (CONFIG.MICROSTEPPING_DEFAULT_X * CONFIG.FULLSTEPS_PER_REV_X)
                                                     )
                                                 ))
+                    y = (CONFIG.STAGE_MOVEMENT_SIGN_Y
+                                                * int(
+                                                    edge_positions_mm[i][1]
+                                                    / (
+                                                        CONFIG.SCREW_PITCH_Y_MM
+                                                        / (CONFIG.MICROSTEPPING_DEFAULT_Y * CONFIG.FULLSTEPS_PER_REV_Y)
+                                                    )
+                                                ))
+                    z = (CONFIG.STAGE_MOVEMENT_SIGN_Z
+                                                * int(
+                                                    edge_positions_mm[i][2]
+                                                    / (
+                                                        CONFIG.SCREW_PITCH_Z_MM
+                                                        / (CONFIG.MICROSTEPPING_DEFAULT_Z * CONFIG.FULLSTEPS_PER_REV_Z)
+                                                    )
+                                                ))
+                    self.edge_positions.append([x, y, z])
         except FileNotFoundError:
             print("Edge positions file not found!")
             exit()
