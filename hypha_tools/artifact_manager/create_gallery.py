@@ -21,7 +21,8 @@ async def main():
         type="collection",
         alias="agent-lens/microscopy-data",
         manifest=gallery_manifest,
-        config={"permissions": {"*": "r+", "@": "r+"}}
+        config={"permissions": {"*": "r+", "@": "r+"}},
+        overwrite=True
     )
     print("Dataset Gallery created.")
 

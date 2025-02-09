@@ -21,7 +21,8 @@ async def main():
         parent_id= "agent-lens/microscopy-data",
         alias="microscopy-tiles",
         manifest=dataset_manifest,
-        version="stage"
+        version="stage",
+        overwrite=True
     )
     print("Dataset added to the gallery.")
     

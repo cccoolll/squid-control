@@ -169,3 +169,4 @@ cython_debug/
 #.idea/
 
 configuration_HCS_v2.ini
+upload_record.json
