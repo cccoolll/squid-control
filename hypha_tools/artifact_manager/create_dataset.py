@@ -25,6 +25,8 @@ async def main():
         overwrite=True
     )
     print("Dataset added to the gallery.")
+    #detele the json file
+    os.remove("hypha_tools/artifact_manager/upload_record.json")
     
 
 asyncio.run(main())
