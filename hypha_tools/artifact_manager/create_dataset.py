@@ -14,12 +14,12 @@ async def main():
 
     # Add a dataset to the gallery
     dataset_manifest = {
-        "name": "Squid Dataset",
-        "description": "A dataset containing imaging data",
+        "name": "Squid Tile Dataset",
+        "description": "A dataset containing imaging map tiles of a microscopy sample",
     }
     dataset = await artifact_manager.create(
         parent_id= "agent-lens/microscopy-data",
-        alias="squid-dataset",
+        alias="microscopy-tiles",
         manifest=dataset_manifest,
         version="stage"
     )
