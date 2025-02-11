@@ -574,7 +574,6 @@ class Microscope:
             chatbot_token = await login({"server_url": chatbot_server_url})
         chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
         await self.start_chatbot_service(chatbot_server, chatbot_id)
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Squid microscope control services for Hypha."

@@ -19,14 +19,15 @@ async def main():
     }
     dataset = await artifact_manager.create(
         parent_id= "agent-lens/microscopy-data",
-        alias="microscopy-tiles",
+        alias="microscopy-tiles-complete",
         manifest=dataset_manifest,
         version="stage",
         overwrite=True
     )
     print("Dataset added to the gallery.")
     #detele the json file
-    os.remove("hypha_tools/artifact_manager/upload_record.json")
+    if os.path.exists("hypha_tools/artifact_manager/upload_record.json"):
+        os.remove("hypha_tools/artifact_manager/upload_record.json")
     
 
 asyncio.run(main())

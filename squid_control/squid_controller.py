@@ -257,7 +257,7 @@ class SquidController:
         # self.camera.set_reverse_y(CAMERA_REVERSE_Y) # these are not implemented for the cameras in use
         self.camera.set_software_triggered_acquisition()  # self.camera.set_continuous_acquisition()
         self.camera.set_callback(self.streamHandler.on_new_frame)
-        self.camera.enable_callback()
+        #self.camera.enable_callback()
 
         if CONFIG.SUPPORT_LASER_AUTOFOCUS:
 
@@ -272,7 +272,7 @@ class SquidController:
             # camera
             self.camera_focus.set_software_triggered_acquisition() #self.camera.set_continuous_acquisition()
             self.camera_focus.set_callback(self.streamHandler_focus_camera.on_new_frame)
-            self.camera_focus.enable_callback()
+            #self.camera_focus.enable_callback()
             self.camera_focus.start_streaming()
 
 

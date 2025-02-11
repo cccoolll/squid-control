@@ -12,7 +12,8 @@ from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting
 from scipy.ndimage import gaussian_filter
 import zarr
-
+from hypha_tools.artifact_manager.step2_get_tiles import TileManager
+import asyncio
 script_dir = os.path.dirname(__file__)
 
 def get_sn_by_model(model_name):
@@ -475,7 +476,7 @@ class Camera_Simulation(object):
         self.gamma_lut = None
         self.contrast_lut = None
         self.color_correction_param = None
-
+        self.image = None
         self.rotate_image_angle = rotate_image_angle
         self.flip_image = flip_image
 
@@ -526,39 +527,16 @@ class Camera_Simulation(object):
         self.simulated_focus = 3.3
         self.channels = [0, 11, 12, 14, 13]
         self.image_paths = {
-            0: 'LED.bmp',
-            11: '405nm.png',
-            12: '488nm.png',
-            14: '561nm.png',
-            13: '638nm.png',
+            0: 'BF_LED_matrix_full.bmp',
+            11: 'Fluorescence_405_nm_Ex.bmp',
+            12: 'Fluorescence_488_nm_Ex.bmp',
+            14: 'Fluorescence_561_nm_Ex.bmp',
+            13: 'Fluorescence_638_nm_Ex.bmp',
         }
-        self.zarr_path = os.getenv('ZARR_PATH')
+        self.SERVER_URL = "https://hypha.aicell.io"
+        self.WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
+        self.ARTIFACT_ALIAS = "microscopy-tiles"
         
-        self.image_folder = os.getenv('IMAGE_DATA_FOR_SIMULATED_MICROSCOPE')
-        if not self.image_folder:
-            raise EnvironmentError("Please set IMAGE_DATA_FOR_SIMULATED_MICROSCOPE to the folder path.")
-
-        # Initialize fields of view and channels
-        self.fields_of_view = {}
-        self.current_fov = None
-
-        # Load available fields of view and channels
-        for filepath in glob.glob(os.path.join(self.image_folder, '*.bmp')):
-            filename = os.path.basename(filepath)
-            parts = filename.split('_')
-            if len(parts) >= 5:
-                fov_id = '_'.join(parts[:4])  # Capture the full FOV ID, e.g., "A3_1_0_0"
-                channel_name = '_'.join(parts[4:])  # Capture the full channel name, e.g., "BF_LED_matrix_full"
-                
-                if fov_id not in self.fields_of_view:
-                    self.fields_of_view[fov_id] = {}
-                self.fields_of_view[fov_id][channel_name] = filepath
-
-
-        # Choose a random initial FOV
-        self.current_fov = np.random.choice(list(self.fields_of_view.keys()))
-        print("Number of fields of view", len(self.fields_of_view))
-        print("current_fov", self.current_fov)
         
     def open(self, index=0):
         pass
@@ -657,9 +635,10 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    def send_trigger(self, x=29.81, y= 36.85, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20):
+    def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20):
         self.frame_ID += 1
         self.timestamp = time.time()
+
         channel_map = {
             0: 'BF_LED_matrix_full',
             11: 'Fluorescence_405_nm_Ex',
@@ -667,59 +646,55 @@ class Camera_Simulation(object):
             14: 'Fluorescence_561_nm_Ex',
             13: 'Fluorescence_638_nm_Ex'
         }
-        channel_name = channel_map.get(channel, None)  # Get the channel name or None if not found
+        channel_name = channel_map.get(channel, None)
 
         if channel_name is None:
-            # If the channel is not found, return a random image
             self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
             print(f"Channel {channel} not found, returning a random image")
         else:
-            # Load the OME-Zarr file
-            root = zarr.open(self.zarr_path, mode='r')
+            # try:
+            #     # Create an async function to handle the TileManager operations
+            #     async def get_image_from_tiles():
+            #         # Initialize TileManager if not already done
+            #         if not hasattr(self, 'tile_manager'):
+            #             self.tile_manager = TileManager()
+            #             print("Connecting to TileManager...")
+            #             await self.tile_manager.connect()
+            #             print("Connected to TileManager")
+            #         # Calculate pixel coordinates
+            #         pixel_x = int(x / pixel_size_um) * 1000
+            #         pixel_y = int(y / pixel_size_um) * 1000
 
-            # Access the specified channel and scale0
-            if channel_name not in root:
-                # If the channel is not found in the Zarr file, return a random image
-                self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
-                print(f"Channel {channel_name} not found in Zarr file, returning a random image")
-            else:
-                dataset = root[channel_name]['scale0']  # Access scale0
+            #         # Get the region using TileManager
+            #         return await self.tile_manager.get_region(
+            #             channel=channel_name,
+            #             scale=0,  # Use highest resolution
+            #             x_start=max(0, pixel_x - self.Width // 2),
+            #             y_start=max(0, pixel_y - self.Height // 2),
+            #             width=self.Width,
+            #             height=self.Height
+            #         )
 
-                # Calculate the pixel coordinates in the scale0 dataset
-                pixel_x = int(x / pixel_size_um) * 1000
-                pixel_y = int(y / pixel_size_um) * 1000
+            #     # Run the async function in a new event loop
+            #     try:
+            #         self.image = asyncio.run(get_image_from_tiles())
+            #         if self.image is None:
+            #             raise ValueError("No image returned from TileManager")
+            #         print(f"Successfully retrieved image from {channel_name} at {x},{y}")
+            #     except Exception as e:
+            #         print(f"Error getting image from TileManager: {str(e)}")
+            #         self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
 
-                # Extract the region of interest (ROI) based on self.Width and self.Height
-                start_x = max(0, pixel_x - self.Width // 2)
-                start_y = max(0, pixel_y - self.Height // 2)
-                end_x = start_x + self.Width
-                end_y = start_y + self.Height
-
-                # Ensure the ROI is within the bounds of the dataset
-                start_x = min(start_x, dataset.shape[1] - self.Width)
-                start_y = min(start_y, dataset.shape[0] - self.Height)
-                end_x = start_x + self.Width
-                end_y = start_y + self.Height
-
-                # Extract the image data
-                self.image = dataset[start_y:end_y, start_x:end_x]
-                self.image = self.image.astype(np.uint8)
-                print(f"Extracted image data from {channel_name} at {x},{y}, ({start_x}, {start_y}) to ({end_x}, {end_y})")
-                
-            
-            # TODO: callback to the _on_frame_callback use 'generate_simulated_data'
-            # self.simulate_capture_event()
-            
-            
-
-
-                
+            # except Exception as e:
+            #     print(f"Error in send_trigger: {str(e)}")
+            #     # get image from /example-data
+            self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
 
         # Simulate intensity and exposure
         exposure_factor = exposure_time / 100
         intensity_factor = intensity / 60
         self.image = np.clip(self.image * exposure_factor * intensity_factor, 0, 255).astype(np.uint8)
-        
+
         # Process the image based on pixel format
         if self.pixel_format == "MONO8":
             self.current_frame = self.image
@@ -727,6 +702,7 @@ class Camera_Simulation(object):
             self.current_frame = (self.image.astype(np.uint16) * 16).astype(np.uint16)
         elif self.pixel_format == "MONO16":
             self.current_frame = (self.image.astype(np.uint16) * 256).astype(np.uint16)
+
 
         # Apply focus effect if `dz` is not zero
         if dz != 0:
