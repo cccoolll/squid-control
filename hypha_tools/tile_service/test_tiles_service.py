@@ -11,28 +11,28 @@ async def test_tile_service():
     try:    
         # Load environment variables    
         dotenv.load_dotenv()    
-        token = os.getenv("SQUID_WORKSPACE_TOKEN")    
+        token = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")    
 
         # Connect to server    
         server = await connect_to_server({    
             "server_url": "https://hypha.aicell.io",    
             "token": token,    
-            "workspace": "squid-control"    
+            "workspace": "agent-lens",    
         })    
 
         print("Connected to server successfully")    
 
         # Get the tile service    
-        service = await server.get_service("microscope_tile_service_test")    
+        service = await server.get_service("microscope_tile_service_artifact")    
         print("Got tile service successfully")    
 
         # Test parameters    
         test_coords = [    
-            (0, 0, 0),  # zoom level 0, top-left tile    
-            (1, 0, 0),  # zoom level 1, top-left tile    
-            (1, 1, 1),  # zoom level 1, bottom-right tile    
+            (3, 0, 0),  # zoom level 0, top-left tile    
+            (7, 5, 1),  # zoom level 7, top-left tile    
+            (9, 1, 1),  # zoom level 9, bottom-right tile    
         ]
-        channel_name = "Fluorescence_561_nm"
+        channel_name = "BF_LED_matrix_full"
 
         for z, x, y in test_coords:    
             print(f"\nTesting tile at z={z}, x={x}, y={y}")    
