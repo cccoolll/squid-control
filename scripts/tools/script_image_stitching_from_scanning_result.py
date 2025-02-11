@@ -307,7 +307,7 @@ def process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limit
                 img_max = np.percentile(image, 99)
                 image = np.clip(image, img_min, img_max)
                 image = ((image - img_min) * 255 / (img_max - img_min)).astype(np.uint8)
-            image = rotate_flip_image(image)
+            #image = rotate_flip_image(image)
 
             # Calculate shift only for reference channel
             if channel == reference_channel:
@@ -362,7 +362,7 @@ def process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limit
 
 def main():
     # Paths and parameters
-    data_folder = "/media/reef/harddisk/20241112-hpa_2024-11-12_15-49-12.554140"
+    data_folder = "/media/reef/harddisk/wholeplate_2025-01-14_15-00-51.879783"
     image_folder = os.path.join(data_folder, "0")
     parameter_file = os.path.join(data_folder, "acquisition parameters.json")
     coordinates_file = os.path.join(image_folder, "coordinates-processed.csv")

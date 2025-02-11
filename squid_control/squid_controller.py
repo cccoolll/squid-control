@@ -4,7 +4,7 @@ import squid_control.control.core_reef as core
 import squid_control.control.microcontroller as microcontroller
 from squid_control.control.config import *
 from squid_control.control.camera import get_camera
-
+import cv2
 import logging
 import squid_control.control.serial_peripherals as serial_peripherals
 import matplotlib.path as mpath
@@ -15,14 +15,14 @@ import time
 
 #using os to set current working directory
 #find the current path
-# path=os.path.abspath(__file__)
-# #find the .ini file in the directory
-# path_ini=os.path.join(os.path.dirname(path),'configuration_HCS_v2.ini')
-# path_ini=Path(path_ini)
+path=os.path.abspath(__file__)
+#find the .ini file in the directory
+path_ini=os.path.join(os.path.dirname(path),'configuration_HCS_v2.ini')
+path_ini=Path(path_ini)
 
 
 
-# load_config(path_ini, False)
+load_config(path_ini, False)
 class SquidController:
     fps_software_trigger= 100
 
@@ -141,8 +141,7 @@ class SquidController:
                 self.liveController,
                 self.autofocusController,
             )
-        self.imageSaver = core.ImageSaver()
-        self.imageDisplay = core.ImageDisplay()
+
 
         
 
@@ -191,7 +190,7 @@ class SquidController:
         print("home xy")
         timestamp_start = time.time()
         # x needs to be at > + 20 mm when homing y
-        self.navigationController.move_x(25)  # to-do: add blocking code
+        self.navigationController.move_x(20)  # to-do: add blocking code
         while self.microcontroller.is_busy():
             time.sleep(0.005)
         # home y
@@ -228,12 +227,12 @@ class SquidController:
         # wait for the operation to finish
         
         # FIXME: This is failing right now, z return timeout
-        # t0 = time.time()
-        # while self.microcontroller.is_busy():
-        #     time.sleep(0.005)
-        #     if time.time() - t0 > 5:
-        #         print("z return timeout, the program will exit")
-        #         exit()
+        t0 = time.time()
+        while self.microcontroller.is_busy():
+            time.sleep(0.005)
+            if time.time() - t0 > 5:
+                print("z return timeout, the program will exit")
+                exit()
 
         # set output's gains
         div = 1 if CONFIG.OUTPUT_GAINS.REFDIV is True else 0
@@ -258,7 +257,7 @@ class SquidController:
         # self.camera.set_reverse_y(CAMERA_REVERSE_Y) # these are not implemented for the cameras in use
         self.camera.set_software_triggered_acquisition()  # self.camera.set_continuous_acquisition()
         self.camera.set_callback(self.streamHandler.on_new_frame)
-        self.camera.enable_callback()
+        #self.camera.enable_callback()
 
         if CONFIG.SUPPORT_LASER_AUTOFOCUS:
 
@@ -268,12 +267,12 @@ class SquidController:
             self.liveController_focus_camera = core.LiveController(self.camera_focus,self.microcontroller,self.configurationManager_focus_camera,control_illumination=False,for_displacement_measurement=True)
             self.multipointController = core.MultiPointController(self.camera,self.navigationController,self.liveController,self.autofocusController,self.configurationManager,scanCoordinates=self.scanCoordinates,parent=self)
             self.displacementMeasurementController = core_displacement_measurement.DisplacementMeasurementController()
-            self.laserAutofocusController = core.LaserAutofocusController(self.microcontroller,self.camera_focus,self.liveController_focus_camera,self.navigationController,has_two_interfaces=HAS_TWO_INTERFACES,use_glass_top=USE_GLASS_TOP)
+            self.laserAutofocusController = core.LaserAutofocusController(self.microcontroller,self.camera_focus,self.liveController_focus_camera,self.navigationController,has_two_interfaces=CONFIG.HAS_TWO_INTERFACES,use_glass_top=CONFIG.USE_GLASS_TOP)
 
             # camera
             self.camera_focus.set_software_triggered_acquisition() #self.camera.set_continuous_acquisition()
             self.camera_focus.set_callback(self.streamHandler_focus_camera.on_new_frame)
-            self.camera_focus.enable_callback()
+            #self.camera_focus.enable_callback()
             self.camera_focus.start_streaming()
 
 
@@ -560,6 +559,64 @@ class SquidController:
             time.sleep(0.005)
 
         return gray_img
+    
+    def zoom_scan(self, rectangle, overlap=0.1, velocity_mm_s=9.0):
+            """
+            Perform a 'zoom scan' over the specified rectangular area.
+
+            Args:
+                rectangle: tuple (x_min, y_min, x_max, y_max) in millimeters.
+                overlap:   float; fraction of image overlap in [0..1]. E.g. 0.1 = 10% overlap
+                velocity_mm_s: stage velocity in mm/s.
+
+            Returns:
+                stitched_image (np.ndarray) – final panoramic image stitched from all frames.
+            """
+            # 1. Unpack the rectangle
+            (x_min, y_min, x_max, y_max) = rectangle
+            # Basic checks
+            if x_min >= x_max or y_min >= y_max:
+                raise ValueError("Invalid rectangle coordinates for zoom scan.")
+
+            # 2. Create a ZoomScanWorker (from the snippet in core.py).
+            #    If you prefer QThread-based usage, see your ZoomScanController example.
+            worker = core.ZoomScanWorker(
+                camera=self.camera,
+                microcontroller=self.microcontroller,
+                navigationController=self.navigationController,
+                liveController=self.liveController,
+                rectangle=(x_min, y_min, x_max, y_max),
+                overlap=overlap,
+                velocity_mm_s=velocity_mm_s,
+                store_images=False,  # or True if you want to save them
+            )
+
+            # 3. Run the worker in a blocking manner (simpler approach).
+            #    The run() method does the stage moves, captures images,
+            #    and calls _stitch_all() at the end.
+            #    We'll override that at the end to actually retrieve the stitched image.
+
+            # Hack: we’ll replace worker.run() with a version that returns the stitched image.
+            # A quick approach is to store it in a local variable.
+
+            # Original ZoomScanWorker in the snippet does:
+            #   - continuous rows
+            #   - stops camera
+            #   - at the end does not always call stitch,
+            #   so we add a small snippet to do it ourselves.
+            worker.run()  # performs the actual scanning
+            print(f'Captured {len(worker.captured_frames)} frames')
+            # After run() is done, we can manually stitch what was captured if desired:
+            if len(worker.captured_frames) > 1:
+                stitched_image = worker._stitch_all()
+            elif len(worker.captured_frames) == 1:
+                # Only one frame, no real stitching needed
+                stitched_image = worker.captured_frames[0]
+            else:
+                # No frames or user aborted
+                stitched_image = np.array([])
+
+            return stitched_image
 
     def close(self):
 
@@ -579,10 +636,28 @@ class SquidController:
 
         self.liveController.stop_live()
         self.camera.close()
-        self.imageSaver.close()
+        #self.imageSaver.close()
         self.imageDisplay.close()
         if CONFIG.SUPPORT_LASER_AUTOFOCUS:
             self.camera_focus.close()
             #self.imageDisplayWindow_focus.close()
         self.microcontroller.close()
 
+def write_to_file(file_path, data):
+    if isinstance(data, np.ndarray):
+        np.save(file_path, data)
+    else:
+        with open(file_path, 'w') as file:
+            file.write(data)
+        
+def try_zoom_scanner():
+    squid_controller = SquidController(is_simulation=True)
+    print('Squid controller initialized')
+    squid_controller.move_x_to_limited(30)
+    squid_controller.move_y_to_limited(30)
+    zone_image = squid_controller.zoom_scan((30,30,35,35),0.1,9.0)
+    write_to_file('zone_image.png',zone_image)
+    print(f'Zone image shape: {zone_image.shape}')
+
+if __name__ == "__main__":
+    try_zoom_scanner()

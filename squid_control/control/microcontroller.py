@@ -114,7 +114,7 @@ class Microcontroller:
         self.edge_positions = []
         self.edge_positions_file = os.path.join(script_dir,"edge_positions.json")
         self.load_edge_positions()
-        print("edge positions: ", self.edge_positions)
+        print("edge positions in usteps: ", self.edge_positions)
         #-------------------        
 
         if version == "Arduino Due":
@@ -194,7 +194,34 @@ class Microcontroller:
         """Loads the list of edge positions from a file"""
         try:
             with open(self.edge_positions_file, "r") as f:
-                self.edge_positions = json.load(f)
+                edge_positions_mm = json.load(f)
+                print("edge_positions_mm: ", edge_positions_mm)
+                for i in range(len(edge_positions_mm)):
+                    x = (CONFIG.STAGE_MOVEMENT_SIGN_X
+                                                * int(
+                                                    edge_positions_mm[i][0]
+                                                    / (
+                                                        CONFIG.SCREW_PITCH_X_MM
+                                                        / (CONFIG.MICROSTEPPING_DEFAULT_X * CONFIG.FULLSTEPS_PER_REV_X)
+                                                    )
+                                                ))
+                    y = (CONFIG.STAGE_MOVEMENT_SIGN_Y
+                                                * int(
+                                                    edge_positions_mm[i][1]
+                                                    / (
+                                                        CONFIG.SCREW_PITCH_Y_MM
+                                                        / (CONFIG.MICROSTEPPING_DEFAULT_Y * CONFIG.FULLSTEPS_PER_REV_Y)
+                                                    )
+                                                ))
+                    z = (CONFIG.STAGE_MOVEMENT_SIGN_Z
+                                                * int(
+                                                    edge_positions_mm[i][2]
+                                                    / (
+                                                        CONFIG.SCREW_PITCH_Z_MM
+                                                        / (CONFIG.MICROSTEPPING_DEFAULT_Z * CONFIG.FULLSTEPS_PER_REV_Z)
+                                                    )
+                                                ))
+                    self.edge_positions.append([x, y, z])
         except FileNotFoundError:
             print("Edge positions file not found!")
             exit()
@@ -318,8 +345,25 @@ class Microcontroller:
             self.move_x_usteps(usteps)
             self.x_pos = target_pos
         else:
-            print("Target position is outside the safe area, X movement cancelled")
+            print(f"Target position {target_pos} is outside the safe area, X movement cancelled")
 
+    def move_x_continuous_usteps(self, distance_usteps, scan_velocity_mm):
+        """
+        This function is used to move the stage continuously in the x direction. Its was designed for 'Zoom Scan' feature.
+        
+        """
+        target_pos = self.x_pos + CONFIG.STAGE_MOVEMENT_SIGN_X * distance_usteps
+        if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
+            self.set_max_velocity_acceleration(AXIS.X, scan_velocity_mm, CONFIG.MAX_ACCELERATION_X_MM)
+            print(f"Set X axis' max velocity to {scan_velocity_mm} mm/s")
+            self.move_x_usteps(distance_usteps)
+            print(f"Move {distance_usteps} usteps")
+            self.x_pos = target_pos
+            self.set_max_velocity_acceleration(AXIS.X, CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_ACCELERATION_X_MM)
+            print("Set X axis' max velocity back to default")
+        else:
+            print(f"Target position {target_pos} is outside the safe area, X movement cancelled")
+            
     def move_x_to_usteps(self, usteps):
         payload = self._int_to_payload(usteps, 4)
         cmd = bytearray(self.tx_buffer_length)
@@ -392,7 +436,7 @@ class Microcontroller:
 
         else:
             print("Target position is outside the safe area, Y movement cancelled")
-
+       
     def move_y_to_usteps(self, usteps):
         payload = self._int_to_payload(usteps, 4)
         cmd = bytearray(self.tx_buffer_length)
@@ -481,7 +525,6 @@ class Microcontroller:
             self.z_pos = target_pos
         else:
             print("Target position is outside the safe area, Z movement cancelled")
-
 
     def move_theta_usteps(self, usteps):
         direction = CONFIG.STAGE_MOVEMENT_SIGN_THETA * np.sign(usteps)
@@ -1046,7 +1089,34 @@ class Microcontroller_Simulation:
         """Loads the list of edge positions from a file"""
         try:
             with open(self.edge_positions_file, "r") as f:
-                self.edge_positions = json.load(f)
+                edge_positions_mm = json.load(f)
+                print("edge_positions_mm: ", edge_positions_mm)
+                for i in range(len(edge_positions_mm)):
+                    x = (CONFIG.STAGE_MOVEMENT_SIGN_X
+                                                * int(
+                                                    edge_positions_mm[i][0]
+                                                    / (
+                                                        CONFIG.SCREW_PITCH_X_MM
+                                                        / (CONFIG.MICROSTEPPING_DEFAULT_X * CONFIG.FULLSTEPS_PER_REV_X)
+                                                    )
+                                                ))
+                    y = (CONFIG.STAGE_MOVEMENT_SIGN_Y
+                                                * int(
+                                                    edge_positions_mm[i][1]
+                                                    / (
+                                                        CONFIG.SCREW_PITCH_Y_MM
+                                                        / (CONFIG.MICROSTEPPING_DEFAULT_Y * CONFIG.FULLSTEPS_PER_REV_Y)
+                                                    )
+                                                ))
+                    z = (CONFIG.STAGE_MOVEMENT_SIGN_Z
+                                                * int(
+                                                    edge_positions_mm[i][2]
+                                                    / (
+                                                        CONFIG.SCREW_PITCH_Z_MM
+                                                        / (CONFIG.MICROSTEPPING_DEFAULT_Z * CONFIG.FULLSTEPS_PER_REV_Z)
+                                                    )
+                                                ))
+                    self.edge_positions.append([x, y, z])
         except FileNotFoundError:
             print("Edge positions file not found!")
             exit()
@@ -1077,7 +1147,24 @@ class Microcontroller_Simulation:
         cmd = bytearray(self.tx_buffer_length)
         self.send_command(cmd)
         print("   mcu command " + str(self._cmd_id) + ": move x to")
-
+        
+    def move_x_continuous_usteps(self, distance_usteps, scan_velocity_mm):
+        """
+        This function is used to move the stage continuously in the x direction. Its was designed for 'Zoom Scan' feature.
+        
+        """
+        target_pos = self.x_pos + CONFIG.STAGE_MOVEMENT_SIGN_X * distance_usteps
+        if self.is_point_in_concave_hull([target_pos, self.y_pos, self.z_pos]):
+            self.set_max_velocity_acceleration(AXIS.X, scan_velocity_mm, CONFIG.MAX_ACCELERATION_X_MM)
+            print(f"Set X axis' max velocity to {scan_velocity_mm} mm/s")
+            self.move_x_usteps(distance_usteps)
+            print(f"Move {distance_usteps} usteps")
+            self.x_pos = target_pos
+            self.set_max_velocity_acceleration(AXIS.X, CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_ACCELERATION_X_MM)
+            print("Set X axis' max velocity back to default")
+        else:
+            print(f"Target position {target_pos} is outside the safe area, X movement cancelled")
+            
     def move_y_usteps(self, usteps):
         self.y_pos = self.y_pos + CONFIG.STAGE_MOVEMENT_SIGN_Y * usteps
         cmd = bytearray(self.tx_buffer_length)

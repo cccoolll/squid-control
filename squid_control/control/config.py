@@ -169,6 +169,9 @@ class AFSetting(BaseModel):
     STOP_THRESHOLD: float = 0.85
     CROP_WIDTH: int = 800
     CROP_HEIGHT: int = 800
+    MULTIPOINT_REFLECTION_AUTOFOCUS_ENABLE_BY_DEFAULT: bool = False
+    MULTIPOINT_AUTOFOCUS_ENABLE_BY_DEFAULT: bool = False
+
 
 
 class TrackingSetting(BaseModel):
@@ -200,11 +203,12 @@ class OutputGainSetting(BaseModel):
 
 
 class SoftwarePosLimitSetting(BaseModel):
-    X_POSITIVE: float = 56
-    X_NEGATIVE: float = -0.5
-    Y_POSITIVE: float = 56
-    Y_NEGATIVE: float = -0.5
+    X_POSITIVE: float = 112.5
+    X_NEGATIVE: float = 10
+    Y_POSITIVE: float = 76
+    Y_NEGATIVE: float = 6
     Z_POSITIVE: float = 6
+    Z_NEGATIVE: float = 0.05
 
 
 class FlipImageSetting(Enum):
@@ -246,7 +250,7 @@ class BaseConfig(BaseModel):
     # note: XY are the in-plane axes, Z is the focus axis
 
     # change the following so that "backward" is "backward" - towards the single sided hall effect sensor
-    STAGE_MOVEMENT_SIGN_X: int = -1
+    STAGE_MOVEMENT_SIGN_X: int = 1
     STAGE_MOVEMENT_SIGN_Y: int = 1
     STAGE_MOVEMENT_SIGN_Z: int = -1
     STAGE_MOVEMENT_SIGN_THETA: int = 1
@@ -283,30 +287,30 @@ class BaseConfig(BaseModel):
 
     # beginning of actuator specific configurations
 
-    SCREW_PITCH_X_MM: float = 1
-    SCREW_PITCH_Y_MM: float = 1
-    SCREW_PITCH_Z_MM: float = 0.012 * 25.4
+    SCREW_PITCH_X_MM: float = 2.54
+    SCREW_PITCH_Y_MM: float = 2.54
+    SCREW_PITCH_Z_MM: float = 0.3
 
-    MICROSTEPPING_DEFAULT_X: float = 8
-    MICROSTEPPING_DEFAULT_Y: float = 8
-    MICROSTEPPING_DEFAULT_Z: float = 8
-    MICROSTEPPING_DEFAULT_THETA: float = 8  # not used, to be removed
+    MICROSTEPPING_DEFAULT_X: float = 256
+    MICROSTEPPING_DEFAULT_Y: float = 256
+    MICROSTEPPING_DEFAULT_Z: float = 256
+    MICROSTEPPING_DEFAULT_THETA: float = 256
 
-    X_MOTOR_RMS_CURRENT_MA: float = 490  # Corrected casing
-    Y_MOTOR_RMS_CURRENT_MA: float = 490
-    Z_MOTOR_RMS_CURRENT_MA: float = 490
+    X_MOTOR_RMS_CURRENT_MA: float = 1000
+    Y_MOTOR_RMS_CURRENT_MA: float = 1000
+    Z_MOTOR_RMS_CURRENT_MA: float = 500
 
-    X_MOTOR_I_HOLD: float = 0.5
-    Y_MOTOR_I_HOLD: float = 0.5
+    X_MOTOR_I_HOLD: float = 0.25
+    Y_MOTOR_I_HOLD: float = 0.25
     Z_MOTOR_I_HOLD: float = 0.5
 
-    MAX_VELOCITY_X_MM: float = 25
-    MAX_VELOCITY_Y_MM: float = 25
-    MAX_VELOCITY_Z_MM: float = 2
+    MAX_VELOCITY_X_MM: float = 30
+    MAX_VELOCITY_Y_MM: float = 30
+    MAX_VELOCITY_Z_MM: float = 4
 
     MAX_ACCELERATION_X_MM: float = 500
     MAX_ACCELERATION_Y_MM: float = 500
-    MAX_ACCELERATION_Z_MM: float = 20
+    MAX_ACCELERATION_Z_MM: float = 100
 
     # config encoder arguments
     HAS_ENCODER_X: bool = False
@@ -400,7 +404,6 @@ class BaseConfig(BaseModel):
 
     MULTIPOINT_AUTOFOCUS_CHANNEL: str = "BF LED matrix full"
     # MULTIPOINT_AUTOFOCUS_CHANNEL:str = 'BF LED matrix left half'
-    MULTIPOINT_AUTOFOCUS_ENABLE_BY_DEFAULT: bool = False
     MULTIPOINT_BF_SAVING_OPTION: str = "Raw"
     # MULTIPOINT_BF_SAVING_OPTION:str = 'RGB2GRAY'
     # MULTIPOINT_BF_SAVING_OPTION:str = 'Green Channel Only'
@@ -455,7 +458,7 @@ class BaseConfig(BaseModel):
     CHOSEN_READ: str = "INDIVIDUAL"
 
     # laser autofocus
-    SUPPORT_LASER_AUTOFOCUS: bool = False
+    SUPPORT_LASER_AUTOFOCUS: bool = True
     MAIN_CAMERA_MODEL: str = "MER2-1220-32U3M"
     FOCUS_CAMERA_MODEL: str = "MER2-630-60U3M"
     FOCUS_CAMERA_EXPOSURE_TIME_MS: int = 2
@@ -467,7 +470,6 @@ class BaseConfig(BaseModel):
     HAS_TWO_INTERFACES: bool = True
     USE_GLASS_TOP: bool = True
     SHOW_LEGACY_DISPLACEMENT_MEASUREMENT_WINDOWS: bool = False
-    MULTIPOINT_REFLECTION_AUTOFOCUS_ENABLE_BY_DEFAULT: bool = False
     RUN_CUSTOM_MULTIPOINT: bool = False
     CUSTOM_MULTIPOINT_FUNCTION: str = None
     RETRACT_OBJECTIVE_BEFORE_MOVING_TO_LOADING_POSITION: bool = True
@@ -592,7 +594,7 @@ CONFIG = BaseConfig()
 def load_config(config_path, multipoint_function):
     global CONFIG
 
-    config_dir = Path(os.path.abspath(__file__))
+    config_dir = Path(os.path.abspath(__file__)).parent
 
 
     current_dir = Path(__file__).parent
