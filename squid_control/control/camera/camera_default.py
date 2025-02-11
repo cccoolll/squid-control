@@ -652,6 +652,7 @@ class Camera_Simulation(object):
             self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
             print(f"Channel {channel} not found, returning a random image")
         else:
+            # TODO: Implement the actual image retrieval logic from Artifact Manager
             # try:
             #     # Create an async function to handle the TileManager operations
             #     async def get_image_from_tiles():
