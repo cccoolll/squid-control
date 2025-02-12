@@ -27,28 +27,22 @@
         // Define the resolutions for each scale (adjust based on your Zarr data)  
         const resolutions = [  
             1,       // Scale 0 (most detailed)  
-            1 / 2,   // Scale 1  
-            1 / 4,   // Scale 2  
-            1 / 8,   // Scale 3  
-            1 / 16,  // Scale 4  
-            1 / 32,  // Scale 5  
-            1 / 64,  // Scale 6
-            1 / 128, // Scale 7
-            1 / 256, // Scale 8
-            1 / 512, // Scale 9
-            1 / 1024 // Scale 10 (least detailed)
+            1 / 4,   // Scale 1
+            1 / 16,  // Scale 2
+            1 / 64,  // Scale 3
+
         ];  
 
         // Define the extent of the image (adjust based on the size of scale 0)  
-        const imageWidth = 700; // Width of scale 10 
-        const imageHeight = 500; // Height of scale 10 
+        const imageWidth = 4000; // Width of scale 10 
+        const imageHeight = 4000; // Height of scale 10 
         const extent = [0, 0, imageWidth, imageHeight];  
 
         // Create a custom tile grid  
         const tileGrid = new ol.tilegrid.TileGrid({  
             extent: extent,  
             resolutions: resolutions, // Resolutions must be in descending order  
-            tileSize: 256, // Tile size (256x256 pixels)  
+            tileSize: 2048, // Tile size (2048x2048 pixels)  
         });  
 
         // Define the tile source with the custom tile grid  
