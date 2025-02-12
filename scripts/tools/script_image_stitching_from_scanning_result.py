@@ -127,7 +127,7 @@ def parse_image_filenames(image_folder):
     image_info.sort(key=lambda x: (x["region"], x["y_idx"], x["x_idx"]))
     return image_info
 
-def create_ome_ngff(output_folder, canvas_width, canvas_height, channels, pyramid_levels=7, chunk_size=(256, 256)):
+def create_ome_ngff(output_folder, canvas_width, canvas_height, channels, pyramid_levels=7, chunk_size=(2048, 2048)):
     """Create an OME-NGFF (zarr) file with a fixed canvas size and pyramid levels."""
     os.makedirs(output_folder, exist_ok=True)
     zarr_path = os.path.join(output_folder, "stitched_images.zarr")
@@ -180,7 +180,7 @@ def create_ome_ngff(output_folder, canvas_width, canvas_height, channels, pyrami
 
 def update_pyramid(datasets, channel, level, image, x_start, y_start):
     """Update a specific pyramid level with the given image."""
-    scale = 2 ** level
+    scale = 4 ** level
     scale_name = f"scale{level}"
 
     try:
@@ -362,11 +362,11 @@ def process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limit
 
 def main():
     # Paths and parameters
-    data_folder = "/media/reef/harddisk/wholeplate_2025-01-14_15-00-51.879783"
+    data_folder = "/media/reef/harddisk/20241112-hpa_2024-11-12_15-49-12.554140"
     image_folder = os.path.join(data_folder, "0")
     parameter_file = os.path.join(data_folder, "acquisition parameters.json")
     coordinates_file = os.path.join(image_folder, "coordinates-processed.csv")
-    output_folder = "/media/reef/harddisk/stitched_output_whole_view"
+    output_folder = "/media/reef/harddisk/stitched_output_whole_view_tile2048"
     os.makedirs(output_folder, exist_ok=True)
 
     # Load imaging parameters and coordinates
@@ -388,7 +388,7 @@ def main():
     max_dimension = max(canvas_width, canvas_height)
     max_levels = int(np.floor(np.log2(max_dimension)))
     print(f"Max dimension: {max_dimension}, max levels: {max_levels}")
-    pyramid_levels = 11
+    pyramid_levels = 4
 
     print(f"Using {pyramid_levels} pyramid levels for {canvas_width}x{canvas_height} canvas")
     # Parse image filenames and get unique channels
