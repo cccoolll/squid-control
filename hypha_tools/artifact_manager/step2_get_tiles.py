@@ -62,7 +62,7 @@ class TileManager:
         """List available files for a specific channel and scale"""
         try:
             dir_path = f"{channel}/scale{scale}"
-            files = await self.artifact_manager.list_files(ARTIFACT_ALIAS, dir_path=dir_path)
+            files = await self.artifact_manager.list_files(ARTIFACT_ALIAS, dir_path=dir_path, limit=3000)
             return files
         except Exception as e:
             print(f"Error listing files: {str(e)}")
@@ -191,7 +191,7 @@ async def example_usage():
     print(files[:10])
 
     # Example A: get a single tile (channel=BF_LED_matrix_full scale=7 tileX=5,tileY=5)
-    tile = await manager.get_tile("BF_LED_matrix_full", 0, 81, 105)
+    tile = await manager.get_tile("BF_LED_matrix_full", 0, 81, 55)
     if tile is not None:
         Image.fromarray(tile).save("example_tile.png")
         print("Saved example tile to example_tile.png")
