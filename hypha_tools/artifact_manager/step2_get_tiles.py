@@ -14,7 +14,7 @@ load_dotenv()
 
 SERVER_URL = "https://hypha.aicell.io"
 WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
-ARTIFACT_ALIAS = "microscopy-tiles"
+ARTIFACT_ALIAS = "microscopy-tiles-complete"
 
 def try_image_open(image_data: bytes) -> np.ndarray:
     """
@@ -185,19 +185,19 @@ async def example_usage():
     manager = TileManager()
     await manager.connect()
 
-    print("Listing a few files from BF_LED_matrix_full scale=7:")
-    files = await manager.list_files("BF_LED_matrix_full", 7)
+    print("Listing a few files from BF_LED_matrix_full scale=3:")
+    files = await manager.list_files("BF_LED_matrix_full", 3)
     print(files[:10])
 
     # Example A: get a single tile (channel=BF_LED_matrix_full scale=7 tileX=5,tileY=5)
-    tile = await manager.get_tile("BF_LED_matrix_full", 7, 5, 1)
+    tile = await manager.get_tile("BF_LED_matrix_full", 3, 5, 1)
     if tile is not None:
         Image.fromarray(tile).save("example_tile.png")
         print("Saved example tile to example_tile.png")
 
     # Example B: get a region (channel=BF_LED_matrix_full scale=7)
     #  e.g. top-left corner is (x_start=0, y_start=0), region size=512x512
-    region = await manager.get_region("BF_LED_matrix_full", 7, 0, 0, 2560, 2560)
+    region = await manager.get_region("BF_LED_matrix_full", 2, 10000, 10000, 5000, 5000)
     if region is not None:
         Image.fromarray(region).save("example_region.png")
         print("Saved example region to example_region.png")
