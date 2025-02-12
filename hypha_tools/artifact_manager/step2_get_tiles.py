@@ -83,7 +83,7 @@ class TileManager:
             """
             try:
                 # First, list available files to check if the tile exists
-                files = await self.list_files(channel, scale)
+                files = await self.list_files(channel, scale, limit=3000)
                 file_path = f"{channel}/scale{scale}/{y}.{x}"
 
                 if not any(f['name'] == f"{y}.{x}" for f in files):
