@@ -26,8 +26,8 @@ async def main():
     )
     print("Dataset added to the gallery.")
     #detele the json file
-    if os.path.exists("hypha_tools/artifact_manager/upload_record.json"):
-        os.remove("hypha_tools/artifact_manager/upload_record.json")
+    if os.path.exists("upload_record.json"):
+        os.remove("upload_record.json")
     
 
 asyncio.run(main())

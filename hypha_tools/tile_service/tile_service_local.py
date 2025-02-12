@@ -8,10 +8,10 @@ import zarr
 import numpy as np  
 import base64
 # Constants from streaming_imaging_map  
-ZARR_PATH = "/media/reef/harddisk/stitched_output_whole_view/stitched_images.zarr"  
+ZARR_PATH = "/media/reef/harddisk/stitched_output_whole_view_tile2048/stitched_images.zarr"  
 CHANNEL_NAME = "Fluorescence_561_nm"  
   
-def create_blank_tile(tile_size=256):  
+def create_blank_tile(tile_size=2048):  
     """Create a blank tile (all black) of the given size."""  
     blank_image = Image.new("L", (tile_size, tile_size), color=0)  
     buffer = io.BytesIO()  
@@ -49,7 +49,7 @@ def get_tile_from_zarr(zarr_path,channel_name, z=0, x=0, y=0):
         dataset = zarr_group[scale_key]  
   
         # Calculate the tile size (assuming 256x256 tiles)  
-        tile_size = 256  
+        tile_size = 2048 
   
         # Calculate the pixel range for the requested tile  
         x_start = x * tile_size  

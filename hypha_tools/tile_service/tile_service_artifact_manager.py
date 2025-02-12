@@ -20,7 +20,7 @@ class TileManager:
     def __init__(self):
         self.api = None
         self.artifact_manager = None
-        self.tile_size = 256
+        self.tile_size = 2048
         self.channels = [
             "BF_LED_matrix_full",
             "Fluorescence_405_nm_Ex",
