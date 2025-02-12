@@ -74,7 +74,7 @@ class TileManager:
 
             Args:
                 channel (str): Channel name (e.g., "BF_LED_matrix_full")
-                scale (int): Scale level (0-10)
+                scale (int): Scale level (0-3)
                 x (int): X coordinate of the tile
                 y (int): Y coordinate of the tile
 
@@ -185,12 +185,13 @@ async def example_usage():
     manager = TileManager()
     await manager.connect()
 
-    print("Listing a few files from BF_LED_matrix_full scale=3:")
-    files = await manager.list_files("BF_LED_matrix_full", 3)
+    print(f"Listing a few files from BF_LED_matrix_full scale 0:")
+    files = await manager.list_files("BF_LED_matrix_full", 0)
+    print(f"The number of the tiles: {len(files)}")
     print(files[:10])
 
     # Example A: get a single tile (channel=BF_LED_matrix_full scale=7 tileX=5,tileY=5)
-    tile = await manager.get_tile("BF_LED_matrix_full", 3, 5, 1)
+    tile = await manager.get_tile("BF_LED_matrix_full", 0, 81, 105)
     if tile is not None:
         Image.fromarray(tile).save("example_tile.png")
         print("Saved example tile to example_tile.png")

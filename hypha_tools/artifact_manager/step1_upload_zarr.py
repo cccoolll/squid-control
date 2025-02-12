@@ -12,7 +12,7 @@ load_dotenv()  # Loads environment variables, e.g. AGENT_LENS_WORKSPACE_TOKEN
 SERVER_URL = "https://hypha.aicell.io"
 WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
 ZARR_PATH = os.getenv("ZARR_PATH")
-ARTIFACT_ALIAS = "microscopy-tiles-complete"
+ARTIFACT_ALIAS = "microscopy-tiles-size-4000"
 SCALE_RANGE = range(0, 11)  # Upload only scales 3 through 10
 CONCURRENCY_LIMIT = 5   # Max number of concurrent uploads
 UPLOAD_RECORD_FILE = "upload_record.json"  # File to track uploaded files
