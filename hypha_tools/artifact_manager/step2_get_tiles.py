@@ -1,20 +1,22 @@
 # step2_get_tiles.py
 import os
+import io
 import asyncio
 import aiohttp
 import numpy as np
 from hypha_rpc import connect_to_server
 from dotenv import load_dotenv
 from PIL import Image
-import io
 import zarr
 import numcodecs
 import blosc
+
 load_dotenv()
 
 SERVER_URL = "https://hypha.aicell.io"
 WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
 ARTIFACT_ALIAS = "microscopy-tiles-complete"
+
 
 def try_image_open(image_data: bytes) -> np.ndarray:
     """
@@ -24,12 +26,15 @@ def try_image_open(image_data: bytes) -> np.ndarray:
     try:
         # Open the bytes as a Zarr array
         with io.BytesIO(image_data) as byte_stream:
-            store = zarr.ZipStore(byte_stream, mode='r')  # Use ZipStore with the BytesIO object
-            zarr_array = zarr.open(store, mode='r')
+            store = zarr.ZipStore(
+                byte_stream, mode="r"
+            )  # Use ZipStore with the BytesIO object
+            zarr_array = zarr.open(store, mode="r")
             return np.array(zarr_array)
     except Exception as e:
         print(f"Zarr decoding failed: {str(e)}")
         raise
+
 
 class TileManager:
     def __init__(self):
@@ -41,88 +46,98 @@ class TileManager:
             "Fluorescence_405_nm_Ex",
             "Fluorescence_488_nm_Ex",
             "Fluorescence_561_nm_Ex",
-            "Fluorescence_638_nm_Ex"
+            "Fluorescence_638_nm_Ex",
         ]
         self.compressor = numcodecs.Blosc(
-            cname='zstd',
-            clevel=5,
-            shuffle=blosc.SHUFFLE,
-            blocksize=0
+            cname="zstd", clevel=5, shuffle=blosc.SHUFFLE, blocksize=0
         )
+
     async def connect(self):
         """Connect to the Artifact Manager service"""
-        self.api = await connect_to_server({
-            "name": "test-client",
-            "server_url": SERVER_URL,
-            "token": WORKSPACE_TOKEN
-        })
+        self.api = await connect_to_server(
+            {"name": "test-client", "server_url": SERVER_URL, "token": WORKSPACE_TOKEN}
+        )
         self.artifact_manager = await self.api.get_service("public/artifact-manager")
 
     async def list_files(self, channel: str, scale: int):
         """List available files for a specific channel and scale"""
         try:
             dir_path = f"{channel}/scale{scale}"
-            files = await self.artifact_manager.list_files(ARTIFACT_ALIAS, dir_path=dir_path)
+            files = await self.artifact_manager.list_files(
+                ARTIFACT_ALIAS, dir_path=dir_path
+            )
             return files
         except Exception as e:
             print(f"Error listing files: {str(e)}")
             return []
 
     async def get_tile(self, channel: str, scale: int, x: int, y: int) -> np.ndarray:
-            """
-            Get a specific tile from the artifact manager.
+        """
+        Get a specific tile from the artifact manager.
 
-            Args:
-                channel (str): Channel name (e.g., "BF_LED_matrix_full")
-                scale (int): Scale level (0-3)
-                x (int): X coordinate of the tile
-                y (int): Y coordinate of the tile
+        Args:
+            channel (str): Channel name (e.g., "BF_LED_matrix_full")
+            scale (int): Scale level (0-3)
+            x (int): X coordinate of the tile
+            y (int): Y coordinate of the tile
 
-            Returns:
-                np.ndarray: The tile image as a numpy array
-            """
-            try:
-                file_path = f"{channel}/scale{scale}/{y}.{x}"
-                # Get the pre-signed URL for the file
-                get_url = await self.artifact_manager.get_file(
-                    ARTIFACT_ALIAS,
-                    file_path=file_path
-                )
+        Returns:
+            np.ndarray: The tile image as a numpy array
+        """
+        try:
+            file_path = f"{channel}/scale{scale}/{y}.{x}"
+            # Get the pre-signed URL for the file
+            get_url = await self.artifact_manager.get_file(
+                ARTIFACT_ALIAS, file_path=file_path
+            )
 
-                # Download the tile using aiohttp
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(get_url) as response:
-                        if response.status == 200:
-                            # Read the compressed binary data
-                            compressed_data = await response.read()
+            # Download the tile using aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(get_url) as response:
+                    if response.status == 200:
+                        # Read the compressed binary data
+                        compressed_data = await response.read()
 
-                            try:
-                                # Decompress the data using blosc
-                                decompressed_data = self.compressor.decode(compressed_data)
+                        try:
+                            # Decompress the data using blosc
+                            decompressed_data = self.compressor.decode(compressed_data)
 
-                                # Convert to numpy array with correct shape and dtype
-                                tile_data = np.frombuffer(decompressed_data, dtype=np.uint8)
-                                tile_data = tile_data.reshape((self.tile_size, self.tile_size))
+                            # Convert to numpy array with correct shape and dtype
+                            tile_data = np.frombuffer(decompressed_data, dtype=np.uint8)
+                            tile_data = tile_data.reshape(
+                                (self.tile_size, self.tile_size)
+                            )
 
-                                return tile_data
+                            return tile_data
 
-                            except Exception as e:
-                                #simple notification
-                                print(f"Error processing tile data")
-                                return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
-                        else:
-                            print(f"Didn't get file, path is {file_path}")
-                            return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
+                        except Exception:
+                            # simple notification
+                            print("Error processing tile data")
+                            return np.zeros(
+                                (self.tile_size, self.tile_size), dtype=np.uint8
+                            )
+                    else:
+                        print(f"Didn't get file, path is {file_path}")
+                        return np.zeros(
+                            (self.tile_size, self.tile_size), dtype=np.uint8
+                        )
 
-            except FileNotFoundError:
-                print(f"Didn't get file, path is {file_path}")
-                return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
-            except Exception as e:
-                print(f"Couldn't get tile {file_path}")
-                return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
-        
-    async def get_region(self, channel: str, scale: int, x_start: int, y_start: int,
-                         width: int, height: int) -> np.ndarray:
+        except FileNotFoundError:
+            print(f"Didn't get file, path is {file_path}")
+            return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
+        except Exception:
+            print(f"Couldn't get tile {file_path}")
+            return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
+
+    async def get_region(
+        self,
+        channel: str,
+        scale: int,
+        x_start: int,
+        y_start: int,
+        width: int,
+        height: int,
+    ) -> np.ndarray:
         """
         Get a rectangular region of tiles and stitch them together.
 
@@ -140,7 +155,7 @@ class TileManager:
         # 1) Calculate tile coordinates needed
         start_tile_x = x_start // self.tile_size
         start_tile_y = y_start // self.tile_size
-        end_tile_x = (x_start + width  - 1) // self.tile_size + 1
+        end_tile_x = (x_start + width - 1) // self.tile_size + 1
         end_tile_y = (y_start + height - 1) // self.tile_size + 1
 
         # 2) Collect all required tile fetch tasks
@@ -170,19 +185,22 @@ class TileManager:
                 # each tile is self.tile_size x self.tile_size
                 y_pos = row_i * self.tile_size
                 x_pos = col_i * self.tile_size
-                combined[y_pos:y_pos + self.tile_size, x_pos:x_pos + self.tile_size] = tile_img
+                combined[
+                    y_pos : y_pos + self.tile_size, x_pos : x_pos + self.tile_size
+                ] = tile_img
 
         # 6) Crop to requested region
         x_offset = x_start % self.tile_size
         y_offset = y_start % self.tile_size
-        cropped = combined[y_offset:y_offset + height, x_offset:x_offset + width]
+        cropped = combined[y_offset : y_offset + height, x_offset : x_offset + width]
         return cropped
+
 
 async def example_usage():
     manager = TileManager()
     await manager.connect()
 
-    print(f"Listing a few files from BF_LED_matrix_full scale 0:")
+    print("Listing a few files from BF_LED_matrix_full scale 0:")
     files = await manager.list_files("BF_LED_matrix_full", 0)
     print(f"The number of the tiles: {len(files)}")
     print(files[:10])
@@ -199,6 +217,7 @@ async def example_usage():
     if region is not None:
         Image.fromarray(region).save("example_region.png")
         print("Saved example region to example_region.png")
+
 
 if __name__ == "__main__":
     asyncio.run(example_usage())
