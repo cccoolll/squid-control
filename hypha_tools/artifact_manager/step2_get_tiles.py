@@ -62,7 +62,7 @@ class TileManager:
         """List available files for a specific channel and scale"""
         try:
             dir_path = f"{channel}/scale{scale}"
-            files = await self.artifact_manager.list_files(ARTIFACT_ALIAS, dir_path=dir_path, limit=3000)
+            files = await self.artifact_manager.list_files(ARTIFACT_ALIAS, dir_path=dir_path)
             return files
         except Exception as e:
             print(f"Error listing files: {str(e)}")
@@ -82,14 +82,7 @@ class TileManager:
                 np.ndarray: The tile image as a numpy array
             """
             try:
-                # First, list available files to check if the tile exists
-                files = await self.list_files(channel, scale)
                 file_path = f"{channel}/scale{scale}/{y}.{x}"
-
-                if not any(f['name'] == f"{y}.{x}" for f in files):
-                    print(f"Tile not found: {file_path}")
-                    return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
-
                 # Get the pre-signed URL for the file
                 get_url = await self.artifact_manager.get_file(
                     ARTIFACT_ALIAS,
@@ -114,14 +107,18 @@ class TileManager:
                                 return tile_data
 
                             except Exception as e:
-                                print(f"Error processing tile data: {str(e)}")
+                                #simple notification
+                                print(f"Error processing tile data")
                                 return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
                         else:
-                            print(f"Failed to download tile: {response.status}")
+                            print(f"Didn't get file, path is {file_path}")
                             return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
 
+            except FileNotFoundError:
+                print(f"Didn't get file, path is {file_path}")
+                return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
             except Exception as e:
-                print(f"Error getting tile {file_path}: {str(e)}")
+                print(f"Couldn't get tile {file_path}")
                 return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
         
     async def get_region(self, channel: str, scale: int, x_start: int, y_start: int,
