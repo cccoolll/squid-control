@@ -649,7 +649,7 @@ class Camera_Simulation(object):
         channel_name = channel_map.get(channel, None)
 
         if channel_name is None:
-            self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
+            self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
             print(f"Channel {channel} not found, returning a random image")
         else:
             async def get_image_from_tiles():

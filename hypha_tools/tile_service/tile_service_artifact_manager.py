@@ -13,7 +13,7 @@ import aiohttp
 # Constants
 SERVER_URL = "https://hypha.aicell.io"
 WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
-ARTIFACT_ALIAS = "microscopy-tiles"
+ARTIFACT_ALIAS = "microscopy-tiles-complete"
 DEFAULT_CHANNEL = "BF_LED_matrix_full"
 
 class TileManager:
