@@ -14,7 +14,7 @@ load_dotenv()
 
 SERVER_URL = "https://hypha.aicell.io"
 WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
-ARTIFACT_ALIAS = "microscopy-tiles"
+ARTIFACT_ALIAS = "microscopy-tiles-complete"
 
 def try_image_open(image_data: bytes) -> np.ndarray:
     """
@@ -35,7 +35,7 @@ class TileManager:
     def __init__(self):
         self.api = None
         self.artifact_manager = None
-        self.tile_size = 256  # Changed from 1000 to 256
+        self.tile_size = 2048
         self.channels = [
             "BF_LED_matrix_full",
             "Fluorescence_405_nm_Ex",
@@ -74,7 +74,7 @@ class TileManager:
 
             Args:
                 channel (str): Channel name (e.g., "BF_LED_matrix_full")
-                scale (int): Scale level (0-10)
+                scale (int): Scale level (0-3)
                 x (int): X coordinate of the tile
                 y (int): Y coordinate of the tile
 
@@ -82,14 +82,7 @@ class TileManager:
                 np.ndarray: The tile image as a numpy array
             """
             try:
-                # First, list available files to check if the tile exists
-                files = await self.list_files(channel, scale)
                 file_path = f"{channel}/scale{scale}/{y}.{x}"
-
-                if not any(f['name'] == f"{y}.{x}" for f in files):
-                    print(f"Tile not found: {file_path}")
-                    return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
-
                 # Get the pre-signed URL for the file
                 get_url = await self.artifact_manager.get_file(
                     ARTIFACT_ALIAS,
@@ -114,14 +107,18 @@ class TileManager:
                                 return tile_data
 
                             except Exception as e:
-                                print(f"Error processing tile data: {str(e)}")
+                                #simple notification
+                                print(f"Error processing tile data")
                                 return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
                         else:
-                            print(f"Failed to download tile: {response.status}")
+                            print(f"Didn't get file, path is {file_path}")
                             return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
 
+            except FileNotFoundError:
+                print(f"Didn't get file, path is {file_path}")
+                return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
             except Exception as e:
-                print(f"Error getting tile {file_path}: {str(e)}")
+                print(f"Couldn't get tile {file_path}")
                 return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
         
     async def get_region(self, channel: str, scale: int, x_start: int, y_start: int,
@@ -185,19 +182,20 @@ async def example_usage():
     manager = TileManager()
     await manager.connect()
 
-    print("Listing a few files from BF_LED_matrix_full scale=7:")
-    files = await manager.list_files("BF_LED_matrix_full", 7)
+    print(f"Listing a few files from BF_LED_matrix_full scale 0:")
+    files = await manager.list_files("BF_LED_matrix_full", 0)
+    print(f"The number of the tiles: {len(files)}")
     print(files[:10])
 
     # Example A: get a single tile (channel=BF_LED_matrix_full scale=7 tileX=5,tileY=5)
-    tile = await manager.get_tile("BF_LED_matrix_full", 7, 5, 1)
+    tile = await manager.get_tile("BF_LED_matrix_full", 0, 81, 55)
     if tile is not None:
         Image.fromarray(tile).save("example_tile.png")
         print("Saved example tile to example_tile.png")
 
     # Example B: get a region (channel=BF_LED_matrix_full scale=7)
     #  e.g. top-left corner is (x_start=0, y_start=0), region size=512x512
-    region = await manager.get_region("BF_LED_matrix_full", 7, 0, 0, 2560, 2560)
+    region = await manager.get_region("BF_LED_matrix_full", 2, 10000, 10000, 5000, 5000)
     if region is not None:
         Image.fromarray(region).save("example_region.png")
         print("Saved example region to example_region.png")

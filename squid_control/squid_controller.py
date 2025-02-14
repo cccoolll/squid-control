@@ -12,7 +12,7 @@ if CONFIG.SUPPORT_LASER_AUTOFOCUS:
     import squid_control.control.core_displacement_measurement as core_displacement_measurement
 
 import time
-
+import asyncio
 #using os to set current working directory
 #find the current path
 path=os.path.abspath(__file__)
@@ -344,17 +344,16 @@ class SquidController:
         # self.multipointController.start_new_experiment(action_ID)
         # self.multipointController.run_acquisition_reef(location_list=location_list)
         
-    def send_trigger_simulation(self, channel=0,intensity=100, exposure_time=100):
-            # Read current position
-            print('Getting simulated image')
-            current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
-            self.dz = current_z - SIMULATED_CAMERA.ORIN_Z
-            self.current_channel = channel
-            magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
-            self.current_expousre_time = exposure_time
-            self.current_intensity = intensity
-            self.camera.send_trigger( current_x,current_y,self.dz,self.pixel_size_xy, channel,intensity,exposure_time,magnification_factor)
-            print(f'For simulated camera,exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}, current position: {current_x},{current_y},{current_z}')
+    async def send_trigger_simulation(self, channel=0, intensity=100, exposure_time=100):
+        print('Getting simulated image')
+        current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
+        self.dz = current_z - SIMULATED_CAMERA.ORIN_Z
+        self.current_channel = channel
+        magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
+        self.current_expousre_time = exposure_time
+        self.current_intensity = intensity
+        await self.camera.send_trigger(current_x, current_y, self.dz, self.pixel_size_xy, channel, intensity, exposure_time, magnification_factor)
+        print(f'For simulated camera, exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}, current position: {current_x},{current_y},{current_z}')
    
     def do_autofocus(self):
         
@@ -537,26 +536,25 @@ class SquidController:
                 print('z return timeout, the program will exit')
                 exit()
 
-    def snap_image(self, channel=0,intensity=100, exposure_time=100):
+    async def snap_image(self, channel=0, intensity=100, exposure_time=100):
         self.camera.set_exposure_time(exposure_time)
-        self.liveController.set_illumination(channel,intensity)
+        self.liveController.set_illumination(channel, intensity)
         self.liveController.turn_on_illumination()
         while self.microcontroller.is_busy():
-            time.sleep(0.05)
-        
+            await asyncio.sleep(0.05)
+
         if self.is_simulation:
-            self.send_trigger_simulation(channel,intensity,exposure_time)
+            await self.send_trigger_simulation(channel, intensity, exposure_time)
         else:
             self.camera.send_trigger()
-        time.sleep(0.05)
-        
-        #self.liveController.set_illumination(0,0)
+        await asyncio.sleep(0.05)
+
         while self.microcontroller.is_busy():
-            time.sleep(0.005)
-        gray_img=self.camera.read_frame()
+            await asyncio.sleep(0.005)
+        gray_img = self.camera.read_frame()
         self.liveController.turn_off_illumination()
         while self.microcontroller.is_busy():
-            time.sleep(0.005)
+            await asyncio.sleep(0.005)
 
         return gray_img
     

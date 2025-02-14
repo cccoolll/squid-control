@@ -10,9 +10,9 @@ Description: Serve Zarr tiles using Flask and OpenLayers. To let user test the o
 app = Flask(__name__)  
   
 # Path to the folder containing Zarr files  
-ZARR_FOLDER = "/media/reef/harddisk/stitched_output_whole_view"  
+ZARR_FOLDER = "/media/reef/harddisk/stitched_output_whole_view_tile2048"  
 CHANNEL_NAME = "stitched_images"  # Fixed channel name  
-def create_blank_tile(tile_size=256):  
+def create_blank_tile(tile_size=2048):  
     """  
     Create a blank tile (all black) of the given size.  
     """  
@@ -54,8 +54,8 @@ def get_tile_from_zarr(zarr_path, z, x, y):
     # Get the dataset for the requested zoom level  
     dataset = zarr_group[scale_key]  
 
-    # Calculate the tile size (assuming 256x256 tiles)  
-    tile_size = 256  
+    # Calculate the tile size
+    tile_size = 2048
 
     # Calculate the pixel range for the requested tile  
     x_start = x * tile_size  

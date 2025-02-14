@@ -635,7 +635,7 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20):
+    async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20):
         self.frame_ID += 1
         self.timestamp = time.time()
 
@@ -649,54 +649,39 @@ class Camera_Simulation(object):
         channel_name = channel_map.get(channel, None)
 
         if channel_name is None:
-            self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
+            self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
             print(f"Channel {channel} not found, returning a random image")
         else:
-            # TODO: Implement the actual image retrieval logic from Artifact Manager
-            # try:
-            #     # Create an async function to handle the TileManager operations
-            #     async def get_image_from_tiles():
-            #         # Initialize TileManager if not already done
-            #         if not hasattr(self, 'tile_manager'):
-            #             self.tile_manager = TileManager()
-            #             print("Connecting to TileManager...")
-            #             await self.tile_manager.connect()
-            #             print("Connected to TileManager")
-            #         # Calculate pixel coordinates
-            #         pixel_x = int(x / pixel_size_um) * 1000
-            #         pixel_y = int(y / pixel_size_um) * 1000
+            async def get_image_from_tiles():
+                if not hasattr(self, 'tile_manager'):
+                    self.tile_manager = TileManager()
+                    print("Connecting to TileManager...")
+                    await self.tile_manager.connect()
+                    print("Connected to TileManager")
+                pixel_x = int(x / pixel_size_um) * 1000
+                pixel_y = int(y / pixel_size_um) * 1000
+                return await self.tile_manager.get_region(
+                    channel=channel_name,
+                    scale=0,
+                    x_start=max(0, pixel_x - self.Width // 2),
+                    y_start=max(0, pixel_y - self.Height // 2),
+                    width=self.Width,
+                    height=self.Height
+                )
 
-            #         # Get the region using TileManager
-            #         return await self.tile_manager.get_region(
-            #             channel=channel_name,
-            #             scale=0,  # Use highest resolution
-            #             x_start=max(0, pixel_x - self.Width // 2),
-            #             y_start=max(0, pixel_y - self.Height // 2),
-            #             width=self.Width,
-            #             height=self.Height
-            #         )
+            try:
+                self.image = await get_image_from_tiles()
+                if self.image is None:
+                    raise ValueError("No image returned from TileManager")
+                print(f"Successfully retrieved image from {channel_name} at {x},{y}")
+            except Exception as e:
+                print(f"Error getting image from TileManager: {str(e)}")
+                self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
 
-            #     # Run the async function in a new event loop
-            #     try:
-            #         self.image = asyncio.run(get_image_from_tiles())
-            #         if self.image is None:
-            #             raise ValueError("No image returned from TileManager")
-            #         print(f"Successfully retrieved image from {channel_name} at {x},{y}")
-            #     except Exception as e:
-            #         print(f"Error getting image from TileManager: {str(e)}")
-            #         self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
-
-            # except Exception as e:
-            #     print(f"Error in send_trigger: {str(e)}")
-            #     # get image from /example-data
-            self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
-
-        # Simulate intensity and exposure
         exposure_factor = exposure_time / 100
         intensity_factor = intensity / 60
         self.image = np.clip(self.image * exposure_factor * intensity_factor, 0, 255).astype(np.uint8)
 
-        # Process the image based on pixel format
         if self.pixel_format == "MONO8":
             self.current_frame = self.image
         elif self.pixel_format == "MONO12":
@@ -704,13 +689,11 @@ class Camera_Simulation(object):
         elif self.pixel_format == "MONO16":
             self.current_frame = (self.image.astype(np.uint16) * 256).astype(np.uint16)
 
-
-        # Apply focus effect if `dz` is not zero
         if dz != 0:
-            sigma = abs(dz) * 6  # Adjust for blur intensity
+            sigma = abs(dz) * 6
             self.current_frame = gaussian_filter(self.current_frame, sigma=sigma)
             print(f"The image is blurred with dz={dz}, sigma={sigma}")
-        
+
         if self.new_image_callback_external is not None and self.callback_is_enabled:
             self.new_image_callback_external(self)
                     

@@ -222,11 +222,11 @@ class Microscope:
         return {"success": True, "message": "Parameters updated successfully.", "updated_parameters": new_parameters}
 
 
-    def one_new_frame(self,exposure_time, channel, intensity, context=None):
+    async def one_new_frame(self, exposure_time, channel, intensity, context=None):
         """
         Get the current frame from the camera as a grayscale image.
         """
-        gray_img = self.squidController.snap_image(channel, intensity, exposure_time)
+        gray_img = await self.squidController.snap_image(channel, intensity, exposure_time)
 
         min_val = np.min(gray_img)
         max_val = np.max(gray_img)
@@ -245,7 +245,7 @@ class Microscope:
         
         #update the current illumination channel and intensity
         if channel == 0:
-            self.BF_intensity_exposure = [intensity,exposure_time]
+            self.BF_intensity_exposure = [intensity, exposure_time]
         elif channel == 11:
             self.F405_intensity_exposure = [intensity, exposure_time]
         elif channel == 12:
@@ -260,11 +260,11 @@ class Microscope:
         
         return buffer  
 
-    def snap(self, exposure_time, channel, intensity, context=None):
+    async def snap(self, exposure_time, channel, intensity, context=None):
         """
         Get the current frame from the camera as a grayscale image.
         """
-        gray_img = self.squidController.snap_image(channel, intensity, exposure_time)
+        gray_img = await self.squidController.snap_image(channel, intensity, exposure_time)
         print('The image is snapped')
         gray_img = gray_img.astype(np.uint8)
         # Resize the image to a standard size
@@ -280,7 +280,7 @@ class Microscope:
         
         #update the current illumination channel and intensity
         if channel == 0:
-            self.BF_intensity_exposure = [intensity,exposure_time]
+            self.BF_intensity_exposure = [intensity, exposure_time]
         elif channel == 11:
             self.F405_intensity_exposure = [intensity, exposure_time]
         elif channel == 12:
@@ -452,8 +452,8 @@ class Microscope:
         self.auto_focus(context)
         return "Auto-focus completed."
 
-    def snap_image_schema(self, config: SnapImageInput, context=None):
-        image_url = self.snap(config.exposure, config.channel, config.intensity, context)
+    async def snap_image_schema(self, config: SnapImageInput, context=None):
+        image_url = await self.snap(config.exposure, config.channel, config.intensity, context)
         return f"![Image]({image_url})"
 
     def navigate_to_well_schema(self, config: NavigateToWellInput, context=None):
@@ -549,9 +549,9 @@ class Microscope:
             {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
         )
         if self.is_simulation:
-            await self.start_hypha_service(server, service_id="microscope-control-squid-simulation")
-            datastore_id = 'data-store-simulated-microscope'
-            chatbot_id = "squid-control-chatbot-simulated-microscope"
+            await self.start_hypha_service(server, service_id="microscope-control-squid-simulation1")
+            datastore_id = 'data-store-simulated-microscope1'
+            chatbot_id = "squid-control-chatbot-simulated-microscope1"
         else:
             await self.start_hypha_service(server, service_id="microscope-control-squid-real-microscope")
             datastore_id = 'data-store-real-microscope'

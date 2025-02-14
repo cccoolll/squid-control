@@ -127,7 +127,7 @@ def parse_image_filenames(image_folder):
     image_info.sort(key=lambda x: (x["region"], x["y_idx"], x["x_idx"]))
     return image_info
 
-def create_ome_ngff(output_folder, canvas_width, canvas_height, channels, pyramid_levels=7, chunk_size=(256, 256)):
+def create_ome_ngff(output_folder, canvas_width, canvas_height, channels, pyramid_levels=7, chunk_size=(2048, 2048)):
     """Create an OME-NGFF (zarr) file with a fixed canvas size and pyramid levels."""
     os.makedirs(output_folder, exist_ok=True)
     zarr_path = os.path.join(output_folder, "stitched_images.zarr")
@@ -180,7 +180,7 @@ def create_ome_ngff(output_folder, canvas_width, canvas_height, channels, pyrami
 
 def update_pyramid(datasets, channel, level, image, x_start, y_start):
     """Update a specific pyramid level with the given image."""
-    scale = 2 ** level
+    scale = 4 ** level
     scale_name = f"scale{level}"
 
     try:
@@ -307,7 +307,7 @@ def process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limit
                 img_max = np.percentile(image, 99)
                 image = np.clip(image, img_min, img_max)
                 image = ((image - img_min) * 255 / (img_max - img_min)).astype(np.uint8)
-            #image = rotate_flip_image(image)
+            image = rotate_flip_image(image)
 
             # Calculate shift only for reference channel
             if channel == reference_channel:
@@ -360,18 +360,75 @@ def process_images(image_info, coordinates, datasets, pixel_size_xy, stage_limit
 
             del image
 
+def generate_coordinates_file(image_folder, config, wellplate_format):
+    """Generate coordinates file for 96-well plate sample data."""
+    wells = [f"{row}{col}" for row in "ABCDEFGH" for col in range(1, 13)]
+    coordinates = []
+
+    for well in wells:
+        well_x = wellplate_format.A1_X_MM + (int(well[1:]) - 1) * wellplate_format.WELL_SPACING_MM
+        well_y = wellplate_format.A1_Y_MM + (ord(well[0]) - ord('A')) * wellplate_format.WELL_SPACING_MM
+
+        for i in range(config["Nx"]):
+            for j in range(config["Ny"]):
+                x_mm = well_x + i * config["dx(mm)"]
+                y_mm = well_y + j * config["dy(mm)"]
+                coordinates.append({
+                    "region": well,
+                    "i": i,
+                    "j": j,
+                    "z_level": 0,
+                    "x (mm)": x_mm,
+                    "y (mm)": y_mm,
+                    "z (um)": 0,
+                    "time": "2024-11-12_15-49-16.656512"
+                })
+
+    coordinates_df = pd.DataFrame(coordinates)
+    coordinates_file = os.path.join(image_folder, "coordinates-processed.csv")
+    coordinates_df.to_csv(coordinates_file, index=False)
+    return coordinates_df
+
 def main():
     # Paths and parameters
-    data_folder = "/media/reef/harddisk/wholeplate_2025-01-14_15-00-51.879783"
+    data_folder = "/media/reef/harddisk/20241112-hpa_2024-11-12_15-49-12.554140"
     image_folder = os.path.join(data_folder, "0")
     parameter_file = os.path.join(data_folder, "acquisition parameters.json")
     coordinates_file = os.path.join(image_folder, "coordinates-processed.csv")
-    output_folder = "/media/reef/harddisk/stitched_output_whole_view"
+    output_folder = "/media/reef/harddisk/stitched_output_whole_view_tile2048"
     os.makedirs(output_folder, exist_ok=True)
 
     # Load imaging parameters and coordinates
     parameters = load_imaging_parameters(parameter_file)
-    coordinates = pd.read_csv(coordinates_file)
+    
+    # Check if coordinates file exists, if not generate it
+    if not os.path.exists(coordinates_file):
+        print("Coordinates file not found, generating...")
+        config = {
+            "dx(mm)": 0.9,
+            "Nx": 1,
+            "dy(mm)": 0.9,
+            "Ny": 1,
+            "dz(um)": 1.5,
+            "Nz": 1,
+            "dt(s)": 0.0,
+            "Nt": 1,
+            "with AF": True,
+            "with reflection AF": False,
+            "objective": {"magnification": 20, "NA": 0.4, "tube_lens_f_mm": 180, "name": "20x"},
+            "sensor_pixel_size_um": 1.85,
+            "tube_lens_mm": 50
+        }
+        class WELLPLATE_FORMAT_96:
+            NUMBER_OF_SKIP = 0
+            WELL_SIZE_MM = 6.21
+            WELL_SPACING_MM = 9
+            A1_X_MM = 14.3
+            A1_Y_MM = 11.36
+        
+        coordinates = generate_coordinates_file(image_folder, config, WELLPLATE_FORMAT_96)
+    else:
+        coordinates = pd.read_csv(coordinates_file)
 
     # Get pixel size and canvas size
     pixel_size_xy = get_pixel_size(parameters)
@@ -388,7 +445,7 @@ def main():
     max_dimension = max(canvas_width, canvas_height)
     max_levels = int(np.floor(np.log2(max_dimension)))
     print(f"Max dimension: {max_dimension}, max levels: {max_levels}")
-    pyramid_levels = 11
+    pyramid_levels = 4
 
     print(f"Using {pyramid_levels} pyramid levels for {canvas_width}x{canvas_height} canvas")
     # Parse image filenames and get unique channels
