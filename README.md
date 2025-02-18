@@ -50,6 +50,10 @@ To register a Hypha service for the microscope, follow these steps:
 
 This script will initialize the Hypha service for the microscope.
 
+###  Use Hypha Service for Microscope Control
+
+You can read the tutorial at [Hypha Tutorial](docs/hypha_tutorial.md) to learn how to use the Hypha service for microscope control.
+
 ## About
 
 <img style="width:60px;" src="./docs/assets/cephla_logo.svg"> Cephla Inc. 

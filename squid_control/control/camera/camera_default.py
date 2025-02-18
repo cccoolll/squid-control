@@ -11,7 +11,9 @@ except:
 from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting
 from scipy.ndimage import gaussian_filter
-
+import zarr
+from hypha_tools.artifact_manager.step2_get_tiles import TileManager
+import asyncio
 script_dir = os.path.dirname(__file__)
 
 def get_sn_by_model(model_name):
@@ -80,7 +82,7 @@ class Camera(object):
             + self.row_period_us * self.pixel_size_byte * (self.row_numbers - 1)
         )
 
-        self.pixel_format = None  # use the default pixel format
+        self.pixel_format = "MONO8"  # use the default pixel format
 
         self.is_live = False  # this determines whether a new frame received will be handled in the streamHandler
         # mainly for discarding the last frame received after stop_live() is called, where illumination is being turned off during exposure
@@ -474,7 +476,7 @@ class Camera_Simulation(object):
         self.gamma_lut = None
         self.contrast_lut = None
         self.color_correction_param = None
-
+        self.image = None
         self.rotate_image_angle = rotate_image_angle
         self.flip_image = flip_image
 
@@ -525,39 +527,16 @@ class Camera_Simulation(object):
         self.simulated_focus = 3.3
         self.channels = [0, 11, 12, 14, 13]
         self.image_paths = {
-            0: 'LED.bmp',
-            11: '405nm.png',
-            12: '488nm.png',
-            14: '561nm.png',
-            13: '638nm.png',
+            0: 'BF_LED_matrix_full.bmp',
+            11: 'Fluorescence_405_nm_Ex.bmp',
+            12: 'Fluorescence_488_nm_Ex.bmp',
+            14: 'Fluorescence_561_nm_Ex.bmp',
+            13: 'Fluorescence_638_nm_Ex.bmp',
         }
-        self.image_size= (2000,2000)
+        self.SERVER_URL = "https://hypha.aicell.io"
+        self.WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
+        self.ARTIFACT_ALIAS = "microscopy-tiles"
         
-        self.image_folder = os.getenv('IMAGE_DATA_FOR_SIMULATED_MICROSCOPE')
-        if not self.image_folder:
-            raise EnvironmentError("Please set IMAGE_DATA_FOR_SIMULATED_MICROSCOPE to the folder path.")
-
-        # Initialize fields of view and channels
-        self.fields_of_view = {}
-        self.current_fov = None
-
-        # Load available fields of view and channels
-        for filepath in glob.glob(os.path.join(self.image_folder, '*.bmp')):
-            filename = os.path.basename(filepath)
-            parts = filename.split('_')
-            if len(parts) >= 5:
-                fov_id = '_'.join(parts[:4])  # Capture the full FOV ID, e.g., "A3_1_0_0"
-                channel_name = '_'.join(parts[4:])  # Capture the full channel name, e.g., "BF_LED_matrix_full"
-                
-                if fov_id not in self.fields_of_view:
-                    self.fields_of_view[fov_id] = {}
-                self.fields_of_view[fov_id][channel_name] = filepath
-
-
-        # Choose a random initial FOV
-        self.current_fov = np.random.choice(list(self.fields_of_view.keys()))
-        print("Number of fields of view", len(self.fields_of_view))
-        print("current_fov", self.current_fov)
         
     def open(self, index=0):
         pass
@@ -565,8 +544,52 @@ class Camera_Simulation(object):
     def set_callback(self, function):
         self.new_image_callback_external = function
 
+# TODO: Implement the following methods for the simulated camera
+    def register_capture_callback_simulated(self, user_param, callback):
+        """
+        Register a callback function to be called with simulated camera data.
+
+        :param user_param: User parameter to pass to the callback
+        :param callback: Callback function to be called with the simulated data
+        """
+        self.user_param = user_param
+        self.capture_callback = callback
+
+    def simulate_capture_event(self):
+        """
+        Simulate a camera capture event and call the registered callback.
+        """
+        if self.capture_callback:
+            simulated_data = self.generate_simulated_data()
+            self.capture_callback(self.user_param, simulated_data)
+
+    def generate_simulated_data(self):
+        """
+        Generate simulated camera data.
+
+        :return: Simulated data
+        """
+        # Replace this with actual simulated data generation logic
+        return np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
+        
     def enable_callback(self):
-        self.callback_is_enabled = True
+        if self.callback_is_enabled == False:
+            # stop streaming
+            if self.is_streaming:
+                was_streaming = True
+                self.stop_streaming()
+            else:
+                was_streaming = False
+            # enable callback
+            user_param = None
+            self.register_capture_callback_simulated(user_param, self._on_frame_callback)
+            self.callback_is_enabled = True
+            # resume streaming if it was on
+            if was_streaming:
+                self.start_streaming()
+            self.callback_is_enabled = True
+        else:
+            pass
 
     def disable_callback(self):
         self.callback_is_enabled = False
@@ -612,14 +635,10 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    def send_trigger(self, dx=0, dy=0, dz=0, channel=0, intensity=100, exposure_time=100, magnification_factor=20):
+    def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20):
         self.frame_ID += 1
         self.timestamp = time.time()
 
-        # Switch field of view on stage movement
-        if dx != 0 or dy != 0:
-            self.current_fov = np.random.choice(list(self.fields_of_view.keys()))
-        
         channel_map = {
             0: 'BF_LED_matrix_full',
             11: 'Fluorescence_405_nm_Ex',
@@ -627,25 +646,56 @@ class Camera_Simulation(object):
             14: 'Fluorescence_561_nm_Ex',
             13: 'Fluorescence_638_nm_Ex'
         }
-        channel_name = channel_map.get(channel, 'random')  # Default to a random image if the channel is not in the map
-        # Load the image for the specified channel
-        image_filename = f"{self.current_fov}_{channel_name}.bmp"
-        image_path = os.path.join(self.image_folder, image_filename)
-        print("image_path", image_path)
-        
-        # Load the image if available; otherwise, generate random image data
-        if os.path.exists(image_path):
-            with Image.open(image_path) as img:
-                self.image = np.array(img)
-            self.image = (self.image - self.image.min()) / (self.image.max() - self.image.min()) * 255
+        channel_name = channel_map.get(channel, None)
+
+        if channel_name is None:
+            self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
+            print(f"Channel {channel} not found, returning a random image")
         else:
-            self.image = np.random.randint(0, 256, self.image_size, dtype=np.uint8)
+            # TODO: Implement the actual image retrieval logic from Artifact Manager
+            # try:
+            #     # Create an async function to handle the TileManager operations
+            #     async def get_image_from_tiles():
+            #         # Initialize TileManager if not already done
+            #         if not hasattr(self, 'tile_manager'):
+            #             self.tile_manager = TileManager()
+            #             print("Connecting to TileManager...")
+            #             await self.tile_manager.connect()
+            #             print("Connected to TileManager")
+            #         # Calculate pixel coordinates
+            #         pixel_x = int(x / pixel_size_um) * 1000
+            #         pixel_y = int(y / pixel_size_um) * 1000
+
+            #         # Get the region using TileManager
+            #         return await self.tile_manager.get_region(
+            #             channel=channel_name,
+            #             scale=0,  # Use highest resolution
+            #             x_start=max(0, pixel_x - self.Width // 2),
+            #             y_start=max(0, pixel_y - self.Height // 2),
+            #             width=self.Width,
+            #             height=self.Height
+            #         )
+
+            #     # Run the async function in a new event loop
+            #     try:
+            #         self.image = asyncio.run(get_image_from_tiles())
+            #         if self.image is None:
+            #             raise ValueError("No image returned from TileManager")
+            #         print(f"Successfully retrieved image from {channel_name} at {x},{y}")
+            #     except Exception as e:
+            #         print(f"Error getting image from TileManager: {str(e)}")
+            #         self.image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
+
+            # except Exception as e:
+            #     print(f"Error in send_trigger: {str(e)}")
+            #     # get image from /example-data
+            self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
 
         # Simulate intensity and exposure
         exposure_factor = exposure_time / 100
         intensity_factor = intensity / 60
         self.image = np.clip(self.image * exposure_factor * intensity_factor, 0, 255).astype(np.uint8)
-        
+
         # Process the image based on pixel format
         if self.pixel_format == "MONO8":
             self.current_frame = self.image
@@ -654,10 +704,12 @@ class Camera_Simulation(object):
         elif self.pixel_format == "MONO16":
             self.current_frame = (self.image.astype(np.uint16) * 256).astype(np.uint16)
 
+
         # Apply focus effect if `dz` is not zero
         if dz != 0:
             sigma = abs(dz) * 6  # Adjust for blur intensity
             self.current_frame = gaussian_filter(self.current_frame, sigma=sigma)
+            print(f"The image is blurred with dz={dz}, sigma={sigma}")
         
         if self.new_image_callback_external is not None and self.callback_is_enabled:
             self.new_image_callback_external(self)
@@ -666,7 +718,31 @@ class Camera_Simulation(object):
         return self.current_frame
 
     def _on_frame_callback(self, user_param, raw_image):
-        pass
+        if raw_image is None:
+            raw_image = np.random.randint(0, 256, (self.Height, self.Width), dtype=np.uint8)
+        if self.image_locked:
+            print("last image is still being processed, a frame is dropped")
+            return
+        if self.is_color:
+            rgb_image = raw_image.convert("RGB")
+            numpy_image = rgb_image.get_numpy_array()
+            if self.pixel_format == "BAYER_RG12":
+                numpy_image = numpy_image << 4
+        else:
+            numpy_image = raw_image.get_numpy_array()
+            if self.pixel_format == "MONO12":
+                numpy_image = numpy_image << 4
+        if numpy_image is None:
+            return
+        self.current_frame = numpy_image
+        self.frame_ID_software = self.frame_ID_software + 1
+        self.frame_ID = raw_image.get_frame_id()
+        if self.trigger_mode == TriggerModeSetting.HARDWARE:
+            if self.frame_ID_offset_hardware_trigger == None:
+                self.frame_ID_offset_hardware_trigger = self.frame_ID
+            self.frame_ID = self.frame_ID - self.frame_ID_offset_hardware_trigger
+        self.timestamp = time.time()
+        self.new_image_callback_external(self)  
 
     def set_ROI(self, offset_x=None, offset_y=None, width=None, height=None):
         pass
