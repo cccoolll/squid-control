@@ -1,4 +1,3 @@
-
 # Initialize chatpt vision
 from openai import AsyncOpenAI
 import base64
@@ -6,8 +5,6 @@ import httpx
 from PIL import Image
 from io import BytesIO
 import matplotlib.pyplot as plt
-
-
 
 
 async def aask(images, messages, max_tokens=1024):
@@ -22,9 +19,11 @@ async def aask(images, messages, max_tokens=1024):
         try:
             img = Image.open(BytesIO(response.content))
         except Exception as e:
-            raise ValueError(f"Failed to read image {image.title or ''} from {image.url}. Error: {e}")
+            raise ValueError(
+                f"Failed to read image {image.title or ''} from {image.url}. Error: {e}"
+            ) from e
         img_objs.append(img)
-    
+
     if len(img_objs) == 1:
         # plot the image with matplotlib
         plt.imshow(img_objs[0])
@@ -43,23 +42,22 @@ async def aask(images, messages, max_tokens=1024):
     fig.tight_layout()
     # if the image size (width or height) is smaller than 512, use the original size and aspect ratio
     # otherwise set the maximun width of the image to n*512 pixels, where n is the number of images; the maximum total width is 1024 pixels
-    fig_width = min(1024, len(img_objs)*512, fig.get_figwidth()*fig.dpi)
+    fig_width = min(1024, len(img_objs) * 512, fig.get_figwidth() * fig.dpi)
     # make sure the pixel size (not inches)
-    fig.set_size_inches(fig_width/fig.dpi, fig.get_figheight(), forward=True)
-    
+    fig.set_size_inches(fig_width / fig.dpi, fig.get_figheight(), forward=True)
+
     # save fig
     fig.savefig(buffer, format="png")
     buffer.seek(0)
     base64_image = base64.b64encode(buffer.read()).decode("utf-8")
     # append the image to the user message
-    user_message.append({
-        "type": "image_url",
-        "image_url": {
-            "url": f"data:image/png;base64,{base64_image}"
+    user_message.append(
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{base64_image}"},
         }
-    })
-    
-    
+    )
+
     for message in messages:
         assert isinstance(message, str), "Message must be a string."
         user_message.append({"type": "text", "text": message})
@@ -69,12 +67,9 @@ async def aask(images, messages, max_tokens=1024):
         messages=[
             {
                 "role": "system",
-                "content": "You are a helpful AI assistant that help user to inspect the provided images visually based on the context, make insightful comments and answer questions about the provided images."
+                "content": "You are a helpful AI assistant that help user to inspect the provided images visually based on the context, make insightful comments and answer questions about the provided images.",
             },
-            {
-                "role": "user",
-                "content": user_message
-            }
+            {"role": "user", "content": user_message},
         ],
         max_tokens=max_tokens,
     )

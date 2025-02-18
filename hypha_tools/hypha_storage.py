@@ -51,17 +51,17 @@ class HyphaDataStore:
             }
         return obj_id
 
-    def get(self, id: str):
+    def get(self, art_id: str):
         assert self._svc, "Please call `setup()` before using the store"
-        obj = self.storage.get(id)
+        obj = self.storage.get(art_id)
         return obj
 
     def http_get(self, scope, context=None):
         query_string = scope["query_string"]
-        id = parse_qs(query_string).get("id", [])[0]
-        obj = self.storage.get(id)
+        art_id = parse_qs(query_string).get("id", [])[0]
+        obj = self.storage.get(art_id)
         if obj is None:
-            return {"status": 404, "headers": {}, "body": "Not found: " + id}
+            return {"status": 404, "headers": {}, "body": "Not found: " + art_id}
 
         if obj["type"] == "file":
             data = obj["value"]
