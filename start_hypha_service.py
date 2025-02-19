@@ -470,14 +470,14 @@ class Microscope:
 
     def get_schema(self, context=None):
         return {
-            "move_by_distance": self.MoveByDistanceInput.schema(),
-            "move_to_position": self.MoveToPositionInput.schema(),
-            "home_stage": self.HomeStageInput.schema(),
-            "auto_focus": self.AutoFocusInput.schema(),
-            "snap_image": self.SnapImageInput.schema(),
-            "inspect_tool": self.InspectToolInput.schema(),
-            "move_to_loading_position": self.MoveToLoadingPositionInput.schema(),
-            "navigate_to_well": self.NavigateToWellInput.schema()
+            "move_by_distance": self.MoveByDistanceInput.model_json_schema(),
+            "move_to_position": self.MoveToPositionInput.model_json_schema(),
+            "home_stage": self.HomeStageInput.model_json_schema(),
+            "auto_focus": self.AutoFocusInput.model_json_schema(),
+            "snap_image": self.SnapImageInput.model_json_schema(),
+            "inspect_tool": self.InspectToolInput.model_json_schema(),
+            "move_to_loading_position": self.MoveToLoadingPositionInput.model_json_schema(),
+            "navigate_to_well": self.NavigateToWellInput.model_json_schema()
         }
 
     async def start_hypha_service(self, server, service_id):
