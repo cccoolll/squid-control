@@ -173,7 +173,6 @@ class AFSetting(BaseModel):
     MULTIPOINT_AUTOFOCUS_ENABLE_BY_DEFAULT: bool = False
 
 
-
 class TrackingSetting(BaseModel):
     SEARCH_AREA_RATIO: int = 10
     CROPPED_IMG_RATIO: int = 10
@@ -215,6 +214,7 @@ class FlipImageSetting(Enum):
     Horizontal = "Horizontal"
     Vertical = "Vertical"
     Both = "Both"
+
 
 class BaseConfig(BaseModel):
     class Config:
@@ -452,7 +452,7 @@ class BaseConfig(BaseModel):
     )
 
     # controller version
-    CONTROLLER_VERSION: str = 'Teensy'
+    CONTROLLER_VERSION: str = "Teensy"
 
     # How to read Spinnaker nodemaps, options are INDIVIDUAL or VALUE
     CHOSEN_READ: str = "INDIVIDUAL"
@@ -514,9 +514,8 @@ class BaseConfig(BaseModel):
     # Additional field to store options
     OPTIONS: dict = {}
 
-
     def write_config_to_txt(self, output_path):
-        with open(output_path, 'w') as file:
+        with open(output_path, "w") as file:
             for attribute, value in self.__dict__.items():
                 if isinstance(value, BaseModel):
                     file.write(f"[{attribute}]\n")
@@ -541,10 +540,15 @@ class BaseConfig(BaseModel):
         if config_files:
             if len(config_files) > 1:
                 if cached_config_file_path in config_files:
-                    print("defaulting to last cached config file at " + cached_config_file_path)
+                    print(
+                        "defaulting to last cached config file at "
+                        + cached_config_file_path
+                    )
                     config_files = [cached_config_file_path]
                 else:
-                    print("multiple machine configuration files found, the program will exit")
+                    print(
+                        "multiple machine configuration files found, the program will exit"
+                    )
                     exit()
             print("load machine-specific configuration")
             cfp = ConfigParser()
@@ -574,16 +578,22 @@ class BaseConfig(BaseModel):
             except Exception as e:
                 print(f"Error caching config file path: {e}")
         else:
-            print("configuration*.ini file not found, defaulting to legacy configuration")
+            print(
+                "configuration*.ini file not found, defaulting to legacy configuration"
+            )
             config_files = glob.glob("." + "/" + "configuration*.txt")
             if config_files:
                 if len(config_files) > 1:
-                    print("multiple machine configuration files found, the program will exit")
+                    print(
+                        "multiple machine configuration files found, the program will exit"
+                    )
                     exit()
                 print("load machine-specific configuration")
                 exec(open(config_files[0]).read())
             else:
-                print("machine-specific configuration not present, the program will exit")
+                print(
+                    "machine-specific configuration not present, the program will exit"
+                )
                 exit()
         return cached_config_file_path
 
@@ -596,14 +606,15 @@ def load_config(config_path, multipoint_function):
 
     config_dir = Path(os.path.abspath(__file__)).parent
 
-
     current_dir = Path(__file__).parent
     if not str(config_path).endswith(".ini"):
-        config_path = current_dir / ("../configurations/configuration_" + str(config_path) + ".ini")
+        config_path = current_dir / (
+            "../configurations/configuration_" + str(config_path) + ".ini"
+        )
 
-    CONFIG.CACHE_CONFIG_FILE_PATH = str(config_dir / 'cache_config_file_path.txt')
-    CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / 'channel_configurations.xml')
-    CONFIG.LAST_COORDS_PATH = str(config_dir / 'last_coords.txt')
+    CONFIG.CACHE_CONFIG_FILE_PATH = str(config_dir / "cache_config_file_path.txt")
+    CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / "channel_configurations.xml")
+    CONFIG.LAST_COORDS_PATH = str(config_dir / "last_coords.txt")
 
     if config_path and not os.path.exists(config_path):
         raise FileNotFoundError(f"Configuration file {config_path} not found.")
@@ -619,7 +630,9 @@ def load_config(config_path, multipoint_function):
         CONFIG.CUSTOM_MULTIPOINT_FUNCTION = multipoint_function
 
     if not (CONFIG.DEFAULT_SAVING_PATH.startswith(str(Path.home()))):
-        CONFIG.DEFAULT_SAVING_PATH = str(Path.home()) + "/" + CONFIG.DEFAULT_SAVING_PATH.strip("/")
+        CONFIG.DEFAULT_SAVING_PATH = (
+            str(Path.home()) + "/" + CONFIG.DEFAULT_SAVING_PATH.strip("/")
+        )
 
     if CONFIG.ENABLE_TRACKING:
         CONFIG.DEFAULT_DISPLAY_CROP = CONFIG.Tracking.DEFAULT_DISPLAY_CROP
@@ -655,17 +668,14 @@ def load_config(config_path, multipoint_function):
         CONFIG.A1_X_MM = 24.55
         CONFIG.A1_Y_MM = 23.01
 
-
     # Write configuration to txt file after reading
-    CONFIG.write_config_to_txt('config_parameters.txt')
+    CONFIG.write_config_to_txt("config_parameters.txt")
 
     try:
         if os.path.exists(cached_config_file_path):
             cf_editor_parser.read(cached_config_file_path)
     except:
         return False
-
-
 
 
 # For flexible plate format:
@@ -709,11 +719,9 @@ class WELLPLATE_FORMAT_6:
     A1_Y_MM = 23.01
 
 
-
-#For simulated camera
+# For simulated camera
 class SIMULATED_CAMERA:
     ORIN_X = 20
     ORIN_Y = 20
     ORIN_Z = 3.354
     MAGNIFICATION_FACTOR = 80
-    
