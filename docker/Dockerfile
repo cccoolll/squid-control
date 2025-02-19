@@ -19,7 +19,7 @@ COPY . .
 
 RUN mkdir -p /app/logs && \
     chmod 777 /app /app/logs && \
-    chown -R aria_agents:aria_agents /app /app/logs
+    chown -R squid-user:squid-user /app /app/logs
 
 # Add /app to the list of safe directories for Git
 RUN git config --global --add safe.directory /app
