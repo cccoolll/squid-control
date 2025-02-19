@@ -453,6 +453,7 @@ class BaseConfig(BaseModel):
 
     # controller version
     CONTROLLER_VERSION: str = "Teensy"
+    CONTROLLER_VERSION: str = "Teensy"
 
     # How to read Spinnaker nodemaps, options are INDIVIDUAL or VALUE
     CHOSEN_READ: str = "INDIVIDUAL"
@@ -544,8 +545,15 @@ class BaseConfig(BaseModel):
                         "defaulting to last cached config file at "
                         + cached_config_file_path
                     )
+                    print(
+                        "defaulting to last cached config file at "
+                        + cached_config_file_path
+                    )
                     config_files = [cached_config_file_path]
                 else:
+                    print(
+                        "multiple machine configuration files found, the program will exit"
+                    )
                     print(
                         "multiple machine configuration files found, the program will exit"
                     )
@@ -581,9 +589,15 @@ class BaseConfig(BaseModel):
             print(
                 "configuration*.ini file not found, defaulting to legacy configuration"
             )
+            print(
+                "configuration*.ini file not found, defaulting to legacy configuration"
+            )
             config_files = glob.glob("." + "/" + "configuration*.txt")
             if config_files:
                 if len(config_files) > 1:
+                    print(
+                        "multiple machine configuration files found, the program will exit"
+                    )
                     print(
                         "multiple machine configuration files found, the program will exit"
                     )
@@ -591,6 +605,9 @@ class BaseConfig(BaseModel):
                 print("load machine-specific configuration")
                 exec(open(config_files[0]).read())
             else:
+                print(
+                    "machine-specific configuration not present, the program will exit"
+                )
                 print(
                     "machine-specific configuration not present, the program will exit"
                 )
@@ -611,7 +628,13 @@ def load_config(config_path, multipoint_function):
         config_path = current_dir / (
             "../configurations/configuration_" + str(config_path) + ".ini"
         )
+        config_path = current_dir / (
+            "../configurations/configuration_" + str(config_path) + ".ini"
+        )
 
+    CONFIG.CACHE_CONFIG_FILE_PATH = str(config_dir / "cache_config_file_path.txt")
+    CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / "channel_configurations.xml")
+    CONFIG.LAST_COORDS_PATH = str(config_dir / "last_coords.txt")
     CONFIG.CACHE_CONFIG_FILE_PATH = str(config_dir / "cache_config_file_path.txt")
     CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / "channel_configurations.xml")
     CONFIG.LAST_COORDS_PATH = str(config_dir / "last_coords.txt")
@@ -630,6 +653,9 @@ def load_config(config_path, multipoint_function):
         CONFIG.CUSTOM_MULTIPOINT_FUNCTION = multipoint_function
 
     if not (CONFIG.DEFAULT_SAVING_PATH.startswith(str(Path.home()))):
+        CONFIG.DEFAULT_SAVING_PATH = (
+            str(Path.home()) + "/" + CONFIG.DEFAULT_SAVING_PATH.strip("/")
+        )
         CONFIG.DEFAULT_SAVING_PATH = (
             str(Path.home()) + "/" + CONFIG.DEFAULT_SAVING_PATH.strip("/")
         )
@@ -669,6 +695,7 @@ def load_config(config_path, multipoint_function):
         CONFIG.A1_Y_MM = 23.01
 
     # Write configuration to txt file after reading
+    CONFIG.write_config_to_txt("config_parameters.txt")
     CONFIG.write_config_to_txt("config_parameters.txt")
 
     try:
@@ -719,6 +746,7 @@ class WELLPLATE_FORMAT_6:
     A1_Y_MM = 23.01
 
 
+# For simulated camera
 # For simulated camera
 class SIMULATED_CAMERA:
     ORIN_X = 20
