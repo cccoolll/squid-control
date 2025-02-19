@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
 # Install Python dependencies
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install .
 
 # Run the application
 CMD ["python", "start_hypha_service.py", "--simulation"]
