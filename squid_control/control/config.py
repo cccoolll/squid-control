@@ -669,7 +669,8 @@ def load_config(config_path, multipoint_function):
         CONFIG.A1_Y_MM = 23.01
 
     # Write configuration to txt file after reading
-    CONFIG.write_config_to_txt("config_parameters.txt")
+    # CONFIG.write_config_to_txt('config_parameters.txt')
+
 
     try:
         if os.path.exists(cached_config_file_path):
