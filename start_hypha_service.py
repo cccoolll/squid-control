@@ -487,7 +487,7 @@ class Microscope:
         }
 
     async def start_hypha_service(self, server, service_id):
-        await server.register_service(
+        svc = await server.register_service(
             {
                 "name": "Microscope Control Service",
                 "id": service_id,
@@ -518,6 +518,11 @@ class Microscope:
         print(
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
+
+        print(f'You can use this service using the service id: {svc.id}')
+        id = svc.id.split(":")[1]
+
+        print(f"You can also test the service via the HTTP proxy: {self.server_url}/{server.config.workspace}/services/{id}")
 
     async def start_chatbot_service(self, server, service_id):
         chatbot_extension = {
