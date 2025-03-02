@@ -33,6 +33,7 @@ class SquidController:
         self.objectiveStore = core.ObjectiveStore()
         camera, camera_fc = get_camera(CONFIG.CAMERA_TYPE)
         self.is_simulation = is_simulation
+        self.is_busy = False
         # load objects
         if self.is_simulation:
             if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL:
@@ -330,7 +331,7 @@ class SquidController:
                 exit()
     
     
-    def plate_scan(self,well_plate_type='96', illuminate_channels=['BF LED matrix full'], do_contrast_autofocus=False,do_reflection_af=True, action_ID='testPlateScan'):
+    def plate_scan(self,well_plate_type='96', illuminate_channels=['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex'], do_contrast_autofocus=False,do_reflection_af=True, action_ID='testPlateScan'):
         self.move_to_scaning_position()
         self.scanCoordinates.get_selected_wells_to_coordinates()
         location_list = self.scanCoordinates.coordinates_mm
@@ -341,7 +342,11 @@ class SquidController:
         self.multipointController.set_NX(2)
         self.multipointController.set_NY(2)
         self.multipointController.start_new_experiment(action_ID)
+        self.is_busy = True
+        print('Starting plate scan')
         self.multipointController.run_acquisition(location_list=location_list)
+        print('Plate scan completed')
+        self.is_busy = False
         
     async def send_trigger_simulation(self, channel=0, intensity=100, exposure_time=100):
         print('Getting simulated image')

@@ -28,7 +28,7 @@ if ENV_FILE:
     dotenv.load_dotenv(ENV_FILE)  
 
 class Microscope:
-    def __init__(self, is_simulation):
+    def __init__(self, is_simulation, is_local):
         self.login_required = True
         self.current_x = 0
         self.current_y = 0
@@ -39,6 +39,7 @@ class Microscope:
         self.is_illumination_on = False
         self.chatbot_service_url = None
         self.is_simulation = is_simulation
+        self.is_local = is_local
         self.squidController = SquidController(is_simulation=is_simulation)
         self.dx = 1
         self.dy = 1
@@ -68,7 +69,7 @@ class Microscope:
         self.authorized_emails = self.load_authorized_emails(self.login_required)
         print(f"Authorized emails: {self.authorized_emails}")
         self.datastore = None
-        self.server_url = "https://hypha.aicell.io/"
+        self.server_url = "http://localhost:9527" if is_local else "https://hypha.aicell.io/"
 
     def load_authorized_emails(self, login_required=True):
         if login_required:
@@ -178,8 +179,9 @@ class Microscope:
         current_x, current_y, current_z, current_theta = self.squidController.navigationController.update_pos(microcontroller=self.squidController.microcontroller)
         is_illumination_on = self.squidController.liveController.illumination_on
         scan_channel = self.squidController.multipointController.selected_configurations
-
+        is_busy = self.squidController.is_busy
         self.parameters = {
+            'is_busy': is_busy,
             'current_x': current_x,
             'current_y': current_y,
             'current_z': current_z,
@@ -313,12 +315,12 @@ class Microscope:
         self.squidController.liveController.turn_off_illumination()
         print('Bright field illumination turned off.')
 
-    def scan_well_plate(self, context=None):
+    def scan_well_plate(self,well_pate_type="96",illuminate_channels=['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex'], do_contrast_autofocus=False,do_reflection_af=True, action_ID='testPlateScan', context=None):
         """
         Scan the well plate according to the pre-defined position list.
         """
         print("Start scanning well plate")
-        self.squidController.plate_scan(action_ID='Test')
+        self.squidController.plate_scan(well_pate_type,illuminate_channels,do_contrast_autofocus,do_reflection_af,action_ID)
 
     def set_illumination(self, channel, intensity, context=None):
         """
@@ -544,22 +546,31 @@ class Microscope:
         print(f"Extension service registered with id: {svc.id}, you can visit the service at:\n {self.chatbot_service_url}")
 
     async def setup(self):
-        try:  
-            token = os.environ.get("SQUID_WORKSPACE_TOKEN")  
-        except:  
-            token = await login({"server_url": self.server_url})
-            
-        server = await connect_to_server(
-            {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
-        )
-        if self.is_simulation:
-            await self.start_hypha_service(server, service_id="microscope-control-squid-simulation0")
-            datastore_id = 'data-store-simulated-microscope0'
-            chatbot_id = "squid-control-chatbot-simulated-microscope0"
+        if self.is_local:
+            #no toecken needed for local server
+            token = None
+            server = await connect_to_server(
+                {"server_url": self.server_url, "token": token,  "ping_interval": None}
+            )
         else:
-            await self.start_hypha_service(server, service_id="microscope-control-squid-real-microscope0")
-            datastore_id = 'data-store-real-microscope'
-            chatbot_id = "squid-control-chatbot-real-microscope0"
+            try:  
+                token = os.environ.get("SQUID_WORKSPACE_TOKEN")  
+            except:  
+                token = await login({"server_url": self.server_url})
+            
+            server = await connect_to_server(
+                {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
+            )
+        if self.is_simulation:
+            service_id_suffix = "_local" if self.is_local else ""
+            await self.start_hypha_service(server, service_id=f"microscope-control-squid-simulation0{service_id_suffix}")
+            datastore_id = f'data-store-simulated-microscope0{service_id_suffix}'
+            chatbot_id = f"squid-control-chatbot-simulated-microscope0{service_id_suffix}"
+        else:
+            service_id_suffix = "_local" if self.is_local else ""
+            await self.start_hypha_service(server, service_id=f"microscope-control-squid-real-microscope0{service_id_suffix}")
+            datastore_id = f'data-store-real-microscope{service_id_suffix}'
+            chatbot_id = f"squid-control-chatbot-real-microscope0{service_id_suffix}"
         self.datastore = HyphaDataStore()
         try:
             await self.datastore.setup(server, service_id=datastore_id)
@@ -589,6 +600,13 @@ if __name__ == "__main__":
         default=False,
         help="Run in simulation mode (default: True)"
     )
+    parser.add_argument(
+        "--local",
+        dest="local",
+        action="store_true",
+        default=False,
+        help="Run with local server URL (default: False)"
+    )
     parser.add_argument("--verbose", "-v", action="count")
     args = parser.parse_args()
 
@@ -597,7 +615,7 @@ if __name__ == "__main__":
     else:
         logging.basicConfig(level=logging.INFO)
 
-    microscope = Microscope(is_simulation=args.simulation)
+    microscope = Microscope(is_simulation=args.simulation, is_local=args.local)
 
     loop = asyncio.get_event_loop()
 
