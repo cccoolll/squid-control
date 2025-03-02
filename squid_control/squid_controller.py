@@ -330,19 +330,17 @@ class SquidController:
                 exit()
     
     
-    def plate_scan(self,well_plate_type='test', illuminate_channels=['BF LED matrix full'], do_autofocus=True, action_ID='testPlateScan'):
-        # start the acquisition loop
-        
-        #@TODO: finish the plate scan feature.
-        pass
-        # self.move_to_scaning_position()
-        # location_list = self.multipointController.get_location_list()
-        # self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)
-        # self.multipointController.set_selected_configurations(illuminate_channels)
-        # self.multipointController.do_autofocus = do_autofocus
-        # self.autofocusController.set_deltaZ(1.524)
-        # self.multipointController.start_new_experiment(action_ID)
-        # self.multipointController.run_acquisition_reef(location_list=location_list)
+    def plate_scan(self,well_plate_type='test', illuminate_channels=['BF LED matrix full'], do_contrast_autofocus=False,do_reflection_af=True, action_ID='testPlateScan'):
+        self.move_to_scaning_position()
+        self.scanCoordinates.get_selected_wells_to_coordinates()
+        location_list = self.scanCoordinates.coordinates_mm
+        self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)
+        self.multipointController.set_selected_configurations(illuminate_channels)
+        self.multipointController.do_autofocus = do_contrast_autofocus
+        self.multipointController.do_reflection_af = do_reflection_af
+        self.autofocusController.set_deltaZ(1.524)
+        self.multipointController.start_new_experiment(action_ID)
+        self.multipointController.run_acquisition(location_list=location_list)
         
     async def send_trigger_simulation(self, channel=0, intensity=100, exposure_time=100):
         print('Getting simulated image')

@@ -4120,7 +4120,7 @@ class ScanCoordinates(object):
     def add_well_selector(self, well_selector):
         self.well_selector = well_selector
 
-    def get_selected_wells(self):
+    def get_selected_wells_to_coordinates(self):
         # get selected wells from the widget
         selected_wells = self.well_selector.get_selected_wells()
         selected_wells = np.array(selected_wells)
