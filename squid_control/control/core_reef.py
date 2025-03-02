@@ -3839,6 +3839,7 @@ class ConfigurationManager(QObject):
     def __init__(self, filename=CONFIG.CHANNEL_CONFIGURATIONS_PATH):
         QObject.__init__(self)
         self.config_filename = filename
+        print(f"Illumination configurations file: {self.config_filename}")
         self.configurations = []
         self.read_configurations()
 

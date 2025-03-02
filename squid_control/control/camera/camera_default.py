@@ -635,7 +635,7 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20):
+    async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20, performace_mode=True):
         self.frame_ID += 1
         self.timestamp = time.time()
 
@@ -651,6 +651,10 @@ class Camera_Simulation(object):
         if channel_name is None:
             self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
             print(f"Channel {channel} not found, returning a random image")
+        
+        elif performace_mode:
+            self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
+            print(f"Using performance mode, example image for channel {channel}")
         else:
             async def get_image_from_tiles():
                 if not hasattr(self, 'tile_manager'):

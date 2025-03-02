@@ -318,7 +318,7 @@ class Microscope:
         Scan the well plate according to the pre-defined position list.
         """
         print("Start scanning well plate")
-        self.squidController.scan_well_plate(action_ID='Test')
+        self.squidController.plate_scan(action_ID='Test')
 
     def set_illumination(self, channel, intensity, context=None):
         """

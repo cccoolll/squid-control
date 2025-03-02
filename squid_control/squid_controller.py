@@ -330,7 +330,7 @@ class SquidController:
                 exit()
     
     
-    def plate_scan(self,well_plate_type='test', illuminate_channels=['BF LED matrix full'], do_contrast_autofocus=False,do_reflection_af=True, action_ID='testPlateScan'):
+    def plate_scan(self,well_plate_type='96', illuminate_channels=['BF LED matrix full'], do_contrast_autofocus=False,do_reflection_af=True, action_ID='testPlateScan'):
         self.move_to_scaning_position()
         self.scanCoordinates.get_selected_wells_to_coordinates()
         location_list = self.scanCoordinates.coordinates_mm
@@ -338,7 +338,8 @@ class SquidController:
         self.multipointController.set_selected_configurations(illuminate_channels)
         self.multipointController.do_autofocus = do_contrast_autofocus
         self.multipointController.do_reflection_af = do_reflection_af
-        self.autofocusController.set_deltaZ(1.524)
+        self.multipointController.set_NX(2)
+        self.multipointController.set_NY(2)
         self.multipointController.start_new_experiment(action_ID)
         self.multipointController.run_acquisition(location_list=location_list)
         
@@ -373,20 +374,7 @@ class SquidController:
         self.laserAutofocusController.initialize_auto()
     
     def measure_displacement(self):
-        self.laserAutofocusController.measure_displacement()
-        
-    def scan_well_plate(self, action_ID='01'):
-        # generate location list
-        # do focus , reflection focus/contrast autofocus
-        # start the acquisition loop
-        location_list = self.multipointController.get_location_list(rows=3,cols=3)
-        self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)
-        self.multipointController.set_selected_configurations(self.illuminate_channels_for_scan)
-        self.multipointController.do_autofocus = False
-        self.multipointController.do_reflection_af = True
-        self.multipointController.start_new_experiment(action_ID)
-        self.multipointController.run_acquisition(location_list=location_list)
-
+        self.laserAutofocusController.measure_displacement()     
         
     def platereader_move_to_well(self,row,column, wellplate_type='96'):
         if wellplate_type == '6':
