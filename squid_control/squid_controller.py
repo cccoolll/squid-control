@@ -104,7 +104,7 @@ class SquidController:
         self.microcontroller.configure_actuators()
 
         self.configurationManager = core.ConfigurationManager(
-            filename="./channel_configurations.xml"
+            filename="./uc2_fucci_illumination_configurations.xml"
         )
 
         self.streamHandler = core.StreamHandler(
