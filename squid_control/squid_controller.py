@@ -390,7 +390,7 @@ class SquidController:
         self.multipointController.run_acquisition(location_list=location_list)
 
         
-    def platereader_move_to_well(self,row,column, wellplate_type='24'):
+    def platereader_move_to_well(self,row,column, wellplate_type='96'):
         if wellplate_type == '6':
             wellplate_format = WELLPLATE_FORMAT_6
         elif wellplate_type == '24':

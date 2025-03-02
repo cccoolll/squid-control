@@ -4074,19 +4074,55 @@ class PlateReaderNavigationController(QObject):
     def home_y(self):
         self.microcontroller.home_y()
 
+class WellSelector:
+    def __init__(self, rows=8, columns=12):
+        self.rows = rows
+        self.columns = columns
+        self.selected_wells = []
+
+    def get_selected_wells(self):
+        list_of_selected_cells = []
+
+        if not self.selected_wells:
+            print("No wells selected, will call 'set_selected_wells' first")
+            self.selected_wells = self.set_selected_wells((0, 0), (self.rows, self.columns))
+            print("selected wells:", self.selected_wells)
+        for well in self.selected_wells:
+            row, col = well
+            list_of_selected_cells.append((row, col))
+        if list_of_selected_cells:
+            print("cells:", list_of_selected_cells)
+        else:
+            print("no cells")
+        return list_of_selected_cells
+
+    def set_selected_wells(self, start, stop):
+        """
+        Set the selected wells based on the start and stop coordinates
+        input:
+        start: tuple, (row, column)
+        stop: tuple, (row, column)
+
+        """
+        self.selected_wells = []
+        start_row, start_col = start
+        stop_row, stop_col = stop
+        for row in range(start_row, stop_row + 1):
+            for col in range(start_col, stop_col + 1):
+                self.selected_wells.append((row, col))
 
 class ScanCoordinates(object):
     def __init__(self):
         self.coordinates_mm = []
         self.name = []
-        self.well_selector = None
+        self.well_selector = WellSelector()
 
     def add_well_selector(self, well_selector):
         self.well_selector = well_selector
 
     def get_selected_wells(self):
         # get selected wells from the widget
-        selected_wells = self.well_selector.get_selected_cells()
+        selected_wells = self.well_selector.get_selected_wells()
         selected_wells = np.array(selected_wells)
         # clear the previous selection
         self.coordinates_mm = []

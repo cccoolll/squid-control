@@ -306,7 +306,7 @@ class BaseConfig(BaseModel):
 
     MAX_VELOCITY_X_MM: float = 30
     MAX_VELOCITY_Y_MM: float = 30
-    MAX_VELOCITY_Z_MM: float = 4
+    MAX_VELOCITY_Z_MM: float = 2
 
     MAX_ACCELERATION_X_MM: float = 500
     MAX_ACCELERATION_Y_MM: float = 500
@@ -423,7 +423,7 @@ class BaseConfig(BaseModel):
     Z_STACKING_CONFIG: str = "FROM CENTER"  # 'FROM BOTTOM', 'FROM TOP'
 
     # plate format
-    WELLPLATE_FORMAT: int = 384
+    WELLPLATE_FORMAT: int = 96
 
     # for 384 well plate
     X_MM_384_WELLPLATE_UPPERLEFT: int = 0
