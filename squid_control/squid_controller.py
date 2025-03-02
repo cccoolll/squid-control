@@ -622,13 +622,13 @@ class SquidController:
         self.navigationController.move_x(0.1) # temporary bug fix - move_x needs to be called before move_x_to if the stage has been moved by the joystick
         while self.microcontroller.is_busy():
             time.sleep(0.005)
-        self.navigationController.move_x_to(30)
+        self.navigationController.move_x_to(28)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
         self.navigationController.move_y(0.1) # temporary bug fix - move_y needs to be called before move_y_to if the stage has been moved by the joystick
         while self.microcontroller.is_busy():
             time.sleep(0.005)
-        self.navigationController.move_y_to(30)
+        self.navigationController.move_y_to(19)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
 

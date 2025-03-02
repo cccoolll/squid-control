@@ -20,6 +20,7 @@ from pydantic import Field, BaseModel
 from typing import List, Optional
 from hypha_tools.hypha_storage import HyphaDataStore
 from hypha_tools.chatbot.aask import aask
+import base64
 
 dotenv.load_dotenv()  
 ENV_FILE = dotenv.find_dotenv()  
@@ -233,6 +234,8 @@ class Microscope:
         if max_val > min_val:  # Avoid division by zero if the image is completely uniform
             gray_img = (gray_img - min_val) * (255 / (max_val - min_val))
             gray_img = gray_img.astype(np.uint8)  # Convert to 8-bit image
+            #resize to 512x512
+            resized_img = cv2.resize(gray_img, (512, 512))
         else:
             gray_img = np.zeros((512, 512), dtype=np.uint8)  # If no variation, return a black image
 
@@ -242,6 +245,7 @@ class Microscope:
         buffer = io.BytesIO()  
         gray_img.save(buffer, format="PNG")  
         buffer.seek(0) 
+        image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
         
         #update the current illumination channel and intensity
         if channel == 0:
@@ -258,7 +262,7 @@ class Microscope:
             self.F730_intensity_exposure = [intensity, exposure_time]
         self.get_status()
         
-        return buffer  
+        return image_base64  
 
     async def snap(self, exposure_time, channel, intensity, context=None):
         """
@@ -549,13 +553,13 @@ class Microscope:
             {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
         )
         if self.is_simulation:
-            await self.start_hypha_service(server, service_id="microscope-control-squid-simulation1")
-            datastore_id = 'data-store-simulated-microscope1'
-            chatbot_id = "squid-control-chatbot-simulated-microscope1"
+            await self.start_hypha_service(server, service_id="microscope-control-squid-simulation0")
+            datastore_id = 'data-store-simulated-microscope0'
+            chatbot_id = "squid-control-chatbot-simulated-microscope0"
         else:
-            await self.start_hypha_service(server, service_id="microscope-control-squid-real-microscope")
+            await self.start_hypha_service(server, service_id="microscope-control-squid-real-microscope0")
             datastore_id = 'data-store-real-microscope'
-            chatbot_id = "squid-control-chatbot-real-microscope"
+            chatbot_id = "squid-control-chatbot-real-microscope0"
         self.datastore = HyphaDataStore()
         try:
             await self.datastore.setup(server, service_id=datastore_id)
