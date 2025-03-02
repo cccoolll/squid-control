@@ -3577,7 +3577,7 @@ class WellSelector:
 
         if not self.selected_wells:
             print("No wells selected, will call 'set_selected_wells' first")
-            self.selected_wells = self.set_selected_wells((0, 0), (self.rows, self.columns))
+            self.set_selected_wells((0, 0), (self.rows, self.columns))
             print("selected wells:", self.selected_wells)
         for well in self.selected_wells:
             row, col = well
