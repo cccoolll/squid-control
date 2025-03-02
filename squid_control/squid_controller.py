@@ -384,7 +384,7 @@ class SquidController:
         location_list = self.multipointController.get_location_list(rows=3,cols=3)
         self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)
         self.multipointController.set_selected_configurations(self.illuminate_channels_for_scan)
-        self.multipointController.do_autofocus = True
+        self.multipointController.do_autofocus = False
         self.multipointController.do_reflection_af = True
         self.multipointController.start_new_experiment(action_ID)
         self.multipointController.run_acquisition(location_list=location_list)
