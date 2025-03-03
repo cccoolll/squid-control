@@ -331,8 +331,9 @@ class SquidController:
                 exit()
     
     
-    def plate_scan(self,well_plate_type='96', illuminate_channels=['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex'], do_contrast_autofocus=False,do_reflection_af=True, action_ID='testPlateScan'):
+    def plate_scan(self,well_plate_type='96', illuminate_channels=['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex'], do_contrast_autofocus=False,do_reflection_af=True, scanning_zone=[(0,0),(0,0)],action_ID='testPlateScan'):
         self.move_to_scaning_position()
+        self.scanCoordinates.well_selector.set_selected_wells(scanning_zone[0] , scanning_zone[1])
         self.scanCoordinates.get_selected_wells_to_coordinates()
         location_list = self.scanCoordinates.coordinates_mm
         self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)

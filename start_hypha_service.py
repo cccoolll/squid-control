@@ -69,7 +69,7 @@ class Microscope:
         self.authorized_emails = self.load_authorized_emails(self.login_required)
         print(f"Authorized emails: {self.authorized_emails}")
         self.datastore = None
-        self.server_url = "http://localhost:9527" if is_local else "https://hypha.aicell.io/"
+        self.server_url = "http://reef.dyn.scilifelab.se:9527" if is_local else "https://hypha.aicell.io/"
 
     def load_authorized_emails(self, login_required=True):
         if login_required:
@@ -315,12 +315,12 @@ class Microscope:
         self.squidController.liveController.turn_off_illumination()
         print('Bright field illumination turned off.')
 
-    def scan_well_plate(self,well_pate_type="96",illuminate_channels=['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex'], do_contrast_autofocus=False,do_reflection_af=True, action_ID='testPlateScan', context=None):
+    def scan_well_plate(self,well_pate_type="96",illuminate_channels=['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex'], do_contrast_autofocus=False,do_reflection_af=True,scanning_zone=[(0,0),(0,0)], action_ID='testPlateScan', context=None):
         """
         Scan the well plate according to the pre-defined position list.
         """
         print("Start scanning well plate")
-        self.squidController.plate_scan(well_pate_type,illuminate_channels,do_contrast_autofocus,do_reflection_af,action_ID)
+        self.squidController.plate_scan(well_pate_type,illuminate_channels,do_contrast_autofocus,do_reflection_af,scanning_zone,action_ID)
 
     def set_illumination(self, channel, intensity, context=None):
         """
