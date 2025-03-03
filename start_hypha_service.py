@@ -321,6 +321,7 @@ class Microscope:
         """
         print("Start scanning well plate")
         self.squidController.plate_scan(well_pate_type,illuminate_channels,do_contrast_autofocus,do_reflection_af,scanning_zone,action_ID)
+        print("Well plate scanning completed")
 
     def set_illumination(self, channel, intensity, context=None):
         """
