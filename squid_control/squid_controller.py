@@ -24,7 +24,7 @@ path_ini=Path(path_ini)
 
 load_config(path_ini, False)
 class SquidController:
-    fps_software_trigger= 100
+    fps_software_trigger= 10
 
     def __init__(self,is_simulation, *args, **kwargs):
         super().__init__(*args,**kwargs)

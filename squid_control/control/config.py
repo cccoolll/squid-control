@@ -360,7 +360,7 @@ class BaseConfig(BaseModel):
     }
     TUBE_LENS_MM: float = 50
     CAMERA_SENSOR: str = "IMX226"
-    DEFAULT_OBJECTIVE: str = "40x"
+    DEFAULT_OBJECTIVE: str = "20x"
     TRACKERS: List[str] = [
         "csrt",
         "kcf",
@@ -409,7 +409,7 @@ class BaseConfig(BaseModel):
     # for 384 well plate
     X_MM_384_WELLPLATE_UPPERLEFT: int = 0
     Y_MM_384_WELLPLATE_UPPERLEFT: int = 0
-    DEFAULT_Z_POS_MM: int = 2
+    DEFAULT_Z_POS_MM: int = 3.970
     X_ORIGIN_384_WELLPLATE_PIXEL: int = 177  # upper left of B2
     Y_ORIGIN_384_WELLPLATE_PIXEL: int = 141  # upper left of B2
     NUMBER_OF_SKIP_384: int = 1
@@ -460,7 +460,7 @@ class BaseConfig(BaseModel):
     SUPPORT_LASER_AUTOFOCUS: bool = True
     MAIN_CAMERA_MODEL: str = "MER2-1220-32U3M"
     FOCUS_CAMERA_MODEL: str = "MER2-630-60U3M"
-    FOCUS_CAMERA_EXPOSURE_TIME_MS: int = 2
+    FOCUS_CAMERA_EXPOSURE_TIME_MS: int = 0.2
     FOCUS_CAMERA_ANALOG_GAIN: int = 0
     LASER_AF_AVERAGING_N: int = 5
     LASER_AF_DISPLAY_SPOT_IMAGE: bool = False
