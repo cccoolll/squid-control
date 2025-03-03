@@ -3238,35 +3238,36 @@ class MultiPointController(QObject):
             except ValueError:
                 print("Invalid coordinates for focus map, aborting.")
                 return
-
-        self.thread = QThread()
+        
+        #self.thread = QThread()
         # create a worker object
-        self.processingHandler.start_processing()
-        self.processingHandler.start_uploading()
+        #self.processingHandler.start_processing()
+        #self.processingHandler.start_uploading()
         self.multiPointWorker = MultiPointWorker(self)
+        self.multiPointWorker.run()
         # move the worker to the thread
-        self.multiPointWorker.moveToThread(self.thread)
-        # connect signals and slots
-        self.thread.started.connect(self.multiPointWorker.run)
-        self.multiPointWorker.signal_detection_stats.connect(self.slot_detection_stats)
-        self.multiPointWorker.finished.connect(self._on_acquisition_completed)
-        self.multiPointWorker.finished.connect(self.multiPointWorker.deleteLater)
-        self.multiPointWorker.finished.connect(self.thread.quit)
-        self.multiPointWorker.image_to_display.connect(self.slot_image_to_display)
-        self.multiPointWorker.image_to_display_multi.connect(
-            self.slot_image_to_display_multi
-        )
-        self.multiPointWorker.spectrum_to_display.connect(self.slot_spectrum_to_display)
-        self.multiPointWorker.signal_current_configuration.connect(
-            self.slot_current_configuration, type=Qt.BlockingQueuedConnection
-        )
-        self.multiPointWorker.signal_register_current_fov.connect(
-            self.slot_register_current_fov
-        )
+        # self.multiPointWorker.moveToThread(self.thread)
+        # # connect signals and slots
+        # self.thread.started.connect(self.multiPointWorker.run)
+        # self.multiPointWorker.signal_detection_stats.connect(self.slot_detection_stats)
+        # self.multiPointWorker.finished.connect(self._on_acquisition_completed)
+        # self.multiPointWorker.finished.connect(self.multiPointWorker.deleteLater)
+        # self.multiPointWorker.finished.connect(self.thread.quit)
+        #self.multiPointWorker.image_to_display.connect(self.slot_image_to_display)
+        # self.multiPointWorker.image_to_display_multi.connect(
+        #     self.slot_image_to_display_multi
+        # )
+        # self.multiPointWorker.spectrum_to_display.connect(self.slot_spectrum_to_display)
+        # self.multiPointWorker.signal_current_configuration.connect(
+        #     self.slot_current_configuration, type=Qt.BlockingQueuedConnection
+        # )
+        # self.multiPointWorker.signal_register_current_fov.connect(
+        #     self.slot_register_current_fov
+        # )
         # self.thread.finished.connect(self.thread.deleteLater)
-        self.thread.finished.connect(self.thread.quit)
+        #self.thread.finished.connect(self.thread.quit)
         # start the thread
-        self.thread.start()
+        # self.thread.start()
 
     def _on_acquisition_completed(self):
         # restore the previous selected mode

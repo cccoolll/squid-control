@@ -92,25 +92,6 @@ class Microcontroller2Def(Enum):
     N_BYTES_POS = 4
 
 
-class MCU_PINS(Enum):
-    PWM1 = 5
-    PWM2 = 4
-    PWM3 = 22
-    PWM4 = 3
-    PWM5 = 23
-    PWM6 = 2
-    PWM7 = 1
-    PWM9 = 6
-    PWM10 = 7
-    PWM11 = 8
-    PWM12 = 9
-    PWM13 = 10
-    PWM14 = 15
-    PWM15 = 24
-    PWM16 = 25
-    AF_LASER = 15
-
-
 # class LIMIT_SWITCH_POLARITY(BaseModel):
 #     ACTIVE_LOW: int = 0
 #     ACTIVE_HIGH: int = 1
@@ -457,6 +438,24 @@ class BaseConfig(BaseModel):
     # How to read Spinnaker nodemaps, options are INDIVIDUAL or VALUE
     CHOSEN_READ: str = "INDIVIDUAL"
 
+    class MCU_PINS:
+        PWM1 = 5
+        PWM2 = 4
+        PWM3 = 22
+        PWM4 = 3
+        PWM5 = 23
+        PWM6 = 2
+        PWM7 = 1
+        PWM9 = 6
+        PWM10 = 7
+        PWM11 = 8
+        PWM12 = 9
+        PWM13 = 10
+        PWM14 = 15
+        PWM15 = 24
+        PWM16 = 25
+        AF_LASER = 15
+
     # laser autofocus
     SUPPORT_LASER_AUTOFOCUS: bool = True
     MAIN_CAMERA_MODEL: str = "MER2-1220-32U3M"
@@ -464,7 +463,7 @@ class BaseConfig(BaseModel):
     FOCUS_CAMERA_EXPOSURE_TIME_MS: int = 2
     FOCUS_CAMERA_ANALOG_GAIN: int = 0
     LASER_AF_AVERAGING_N: int = 5
-    LASER_AF_DISPLAY_SPOT_IMAGE: bool = True
+    LASER_AF_DISPLAY_SPOT_IMAGE: bool = False
     LASER_AF_CROP_WIDTH: int = 1536
     LASER_AF_CROP_HEIGHT: int = 256
     HAS_TWO_INTERFACES: bool = True
