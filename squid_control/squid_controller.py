@@ -263,7 +263,7 @@ class SquidController:
         if CONFIG.SUPPORT_LASER_AUTOFOCUS:
 
             # controllers
-            self.configurationManager_focus_camera = core.ConfigurationManager(filename='./squid_control/focus_camera_configurations.xml')
+            self.configurationManager_focus_camera = core.ConfigurationManager(filename='./uc2_fucci_illumination_configurations.xml')
             self.streamHandler_focus_camera = core.StreamHandler()
             self.liveController_focus_camera = core.LiveController(self.camera_focus,self.microcontroller,self.configurationManager_focus_camera,control_illumination=False,for_displacement_measurement=True)
             self.multipointController = core.MultiPointController(self.camera,self.navigationController,self.liveController,self.autofocusController,self.configurationManager,scanCoordinates=self.scanCoordinates,parent=self)
@@ -331,7 +331,7 @@ class SquidController:
                 exit()
     
     
-    def plate_scan(self,well_plate_type='96', illuminate_channels=['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex'], do_contrast_autofocus=False,do_reflection_af=True, scanning_zone=[(0,0),(0,0)],action_ID='testPlateScan'):
+    def plate_scan(self,well_plate_type='96', illuminate_channels=['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex'], do_contrast_autofocus=False,do_reflection_af=True, scanning_zone=[(0,0),(5,5)],action_ID='testPlateScan'):
         self.move_to_scaning_position()
         self.scanCoordinates.well_selector.set_selected_wells(scanning_zone[0] , scanning_zone[1])
         self.scanCoordinates.get_selected_wells_to_coordinates()

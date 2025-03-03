@@ -321,6 +321,7 @@ class LiveController(QObject):
     # illumination control
     def turn_on_illumination(self):
         self.microcontroller.turn_on_illumination()
+        print("illumination on")
         self.illumination_on = True
 
     def turn_off_illumination(self):

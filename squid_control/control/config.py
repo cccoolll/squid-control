@@ -330,7 +330,7 @@ class BaseConfig(BaseModel):
 
     DEFAULT_SAVING_PATH: str = str(Path.home()) + "/Downloads"
 
-    DEFAULT_PIXEL_FORMAT: str = "MONO12"
+    DEFAULT_PIXEL_FORMAT: str = "MONO8"
 
     DEFAULT_DISPLAY_CROP: int = (
         100  # value ranges from 1 to 100 - image display crop size
@@ -504,7 +504,7 @@ class BaseConfig(BaseModel):
 
     SHOW_DAC_CONTROL: bool = False
     CACHE_CONFIG_FILE_PATH: str = None
-    CHANNEL_CONFIGURATIONS_PATH: str = ""
+    CHANNEL_CONFIGURATIONS_PATH: str = "./focus_camera_configurations.xml"
     LAST_COORDS_PATH: str = ""
 
     # for check if the stage is moved
@@ -612,7 +612,7 @@ def load_config(config_path, multipoint_function):
         )
 
     CONFIG.CACHE_CONFIG_FILE_PATH = str(config_dir / "cache_config_file_path.txt")
-    CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / "channel_configurations.xml")
+    CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / "uc2_fucci_illumination_configurations.xml")
     CONFIG.LAST_COORDS_PATH = str(config_dir / "last_coords.txt")
 
     if config_path and not os.path.exists(config_path):
