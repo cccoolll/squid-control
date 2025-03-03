@@ -10,7 +10,7 @@ from squid_control.control.camera import TriggerModeSetting
 
 
 from queue import Queue
-from threading import Thread, Lock
+import threading
 import time
 import numpy as np
 import scipy
@@ -2832,28 +2832,27 @@ class MultiPointController(QObject):
                 )
             )
 
-    def run_acquisition(
-        self, location_list=None
-    ):  # @@@ to do: change name to run_experiment
-        print("start multipoint")
-        print(
-            str(self.Nt) + "_" + str(self.NX) + "_" + str(self.NY) + "_" + str(self.NZ)
-        )
+    def run_acquisition(self, location_list=None,scanCoordinates=None): 
+        print('start acuisition')
+        self.tile_stitchers = {}
+        print(str(self.Nt) + '_' + str(self.NX) + '_' + str(self.NY) + '_' + str(self.NZ))
         if location_list is not None:
-            print(location_list)
             self.location_list = location_list
         else:
             self.location_list = None
+        
+        if scanCoordinates is None:
+            self.scanCoordinates = None
 
         self.abort_acqusition_requested = False
 
-        self.configuration_before_running_multipoint = (
-            self.liveController.currentConfiguration
-        )
+        
+
+        self.configuration_before_running_multipoint = self.liveController.currentConfiguration
         # stop live
         if self.liveController.is_live:
             self.liveController_was_live_before_multipoint = True
-            self.liveController.stop_live()  # @@@ to do: also uncheck the live button
+            self.liveController.stop_live() # @@@ to do: also uncheck the live button
         else:
             self.liveController_was_live_before_multipoint = False
 
@@ -2865,10 +2864,7 @@ class MultiPointController(QObject):
             self.camera_callback_was_enabled_before_multipoint = False
 
         if self.usb_spectrometer != None:
-            if (
-                self.usb_spectrometer.streaming_started == True
-                and self.usb_spectrometer.streaming_paused == False
-            ):
+            if self.usb_spectrometer.streaming_started == True and self.usb_spectrometer.streaming_paused == False:
                 self.usb_spectrometer.pause_streaming()
                 self.usb_spectrometer_was_streaming = True
             else:
@@ -2876,82 +2872,23 @@ class MultiPointController(QObject):
 
         if self.parent is not None:
             try:
-                self.parent.imageDisplayTabs.setCurrentWidget(
-                    self.parent.imageArrayDisplayWindow.widget
-                )
+                self.parent.imageDisplayTabs.setCurrentWidget(self.parent.imageArrayDisplayWindow.widget)
             except:
                 pass
             try:
-                self.parent.recordTabWidget.setCurrentWidget(
-                    self.parent.statsDisplayWidget
-                )
+                self.parent.recordTabWidget.setCurrentWidget(self.parent.statsDisplayWidget)
             except:
                 pass
-
         # run the acquisition
         self.timestamp_acquisition_started = time.time()
-        # create a QThread object
-        if self.gen_focus_map and not self.do_reflection_af:
-            print("Generating focus map for multipoint grid")
-            starting_x_mm = self.navigationController.x_pos_mm
-            starting_y_mm = self.navigationController.y_pos_mm
-            fmap_Nx = max(2, self.NX)
-            fmap_Ny = max(2, self.NY)
-            fmap_dx = self.deltaX
-            fmap_dy = self.deltaY
-            if abs(fmap_dx) < 0.1 and fmap_dx != 0.0:
-                fmap_dx = 0.1 * fmap_dx / (abs(fmap_dx))
-            elif fmap_dx == 0.0:
-                fmap_dx = 0.1
-            if abs(fmap_dy) < 0.1 and fmap_dy != 0.0:
-                fmap_dy = 0.1 * fmap_dy / (abs(fmap_dy))
-            elif fmap_dy == 0.0:
-                fmap_dy = 0.1
-            try:
-                self.focus_map_storage = []
-                self.already_using_fmap = self.autofocusController.use_focus_map
-                for x, y, z in self.autofocusController.focus_map_coords:
-                    self.focus_map_storage.append((x, y, z))
-                coord1 = (starting_x_mm, starting_y_mm)
-                coord2 = (starting_x_mm + fmap_Nx * fmap_dx, starting_y_mm)
-                coord3 = (starting_x_mm, starting_y_mm + fmap_Ny * fmap_dy)
-                self.autofocusController.gen_focus_map(coord1, coord2, coord3)
-                self.autofocusController.set_focus_map_use(True)
-                self.navigationController.move_to(starting_x_mm, starting_y_mm)
-                self.navigationController.microcontroller.wait_till_operation_is_completed()
-            except ValueError:
-                print("Invalid coordinates for focus map, aborting.")
-                return
-        
-        #self.thread = QThread()
         # create a worker object
         #self.processingHandler.start_processing()
         #self.processingHandler.start_uploading()
         self.multiPointWorker = MultiPointWorker(self)
-        self.multiPointWorker.run()
-        # move the worker to the thread
-        # self.multiPointWorker.moveToThread(self.thread)
-        # # connect signals and slots
-        # self.thread.started.connect(self.multiPointWorker.run)
-        # self.multiPointWorker.signal_detection_stats.connect(self.slot_detection_stats)
-        # self.multiPointWorker.finished.connect(self._on_acquisition_completed)
-        # self.multiPointWorker.finished.connect(self.multiPointWorker.deleteLater)
-        # self.multiPointWorker.finished.connect(self.thread.quit)
-        #self.multiPointWorker.image_to_display.connect(self.slot_image_to_display)
-        # self.multiPointWorker.image_to_display_multi.connect(
-        #     self.slot_image_to_display_multi
-        # )
-        # self.multiPointWorker.spectrum_to_display.connect(self.slot_spectrum_to_display)
-        # self.multiPointWorker.signal_current_configuration.connect(
-        #     self.slot_current_configuration, type=Qt.BlockingQueuedConnection
-        # )
-        # self.multiPointWorker.signal_register_current_fov.connect(
-        #     self.slot_register_current_fov
-        # )
-        # self.thread.finished.connect(self.thread.deleteLater)
-        #self.thread.finished.connect(self.thread.quit)
-        # start the thread
-        # self.thread.start()
+        worker_thread = threading.Thread(target=self.multiPointWorker.run)
+        # Start the thread
+        worker_thread.start()
+        worker_thread.join()
 
     def _on_acquisition_completed(self):
         # restore the previous selected mode
