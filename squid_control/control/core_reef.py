@@ -2294,6 +2294,8 @@ class MultiPointWorker(QObject):
                                     )
                                 )
                                 self.signal_current_configuration.emit(config_AF)
+                                self.autofocusController.set_microscope_mode(config_AF)
+                                print(f"autofocus at {coordiante_name}{i}_{j}, configuration: {configuration_name_AF},{config_AF}")
                                 if (
                                     self.FOV_counter
                                     % CONFIG.Acquisition.NUMBER_OF_FOVS_PER_AF
@@ -2338,6 +2340,7 @@ class MultiPointWorker(QObject):
                                         )
                                     )
                                     self.signal_current_configuration.emit(config_AF)
+                                    self.liveController.set_microscope_mode(config_AF)
                                     self.autofocusController.autofocus()
                                     self.autofocusController.wait_till_autofocus_has_completed()
                                 # set the current plane as reference

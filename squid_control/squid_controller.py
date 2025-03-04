@@ -264,7 +264,7 @@ class SquidController:
         if CONFIG.SUPPORT_LASER_AUTOFOCUS:
 
             # controllers
-            self.configurationManager_focus_camera = core.ConfigurationManager(filename='./uc2_fucci_illumination_configurations.xml')
+            self.configurationManager_focus_camera = core.ConfigurationManager(filename='./focus_camera_configurations.xml')
             self.streamHandler_focus_camera = core.StreamHandler()
             self.liveController_focus_camera = core.LiveController(self.camera_focus,self.microcontroller,self.configurationManager_focus_camera,control_illumination=False,for_displacement_measurement=True)
             self.multipointController = core.MultiPointController(self.camera,self.navigationController,self.liveController,self.autofocusController,self.configurationManager,scanCoordinates=self.scanCoordinates,parent=self)
