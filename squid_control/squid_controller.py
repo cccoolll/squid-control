@@ -578,10 +578,10 @@ class SquidController:
         
 async def try_microscope():
     squid_controller = SquidController(is_simulation=False)
-    squid_controller.platereader_move_to_well('A',1)
-    image = await squid_controller.snap_image()
+    #squid_controller.platereader_move_to_well('A',1)
+    #image = await squid_controller.snap_image()
     # save image
-    cv2.imwrite('test_image.jpg', image)
+    #cv2.imwrite('test_image.jpg', image)
     squid_controller.plate_scan()
     squid_controller.close()
 

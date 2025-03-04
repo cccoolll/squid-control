@@ -2340,7 +2340,7 @@ class MultiPointWorker(QObject):
                                         )
                                     )
                                     self.signal_current_configuration.emit(config_AF)
-                                    self.liveController.set_microscope_mode(config_AF)
+                                    self.autofocusController.set_microscope_mode(config_AF)
                                     self.autofocusController.autofocus()
                                     self.autofocusController.wait_till_autofocus_has_completed()
                                 # set the current plane as reference
@@ -3567,7 +3567,7 @@ class LaserAutofocusController(QObject):
                         pixel_to_um = float(value_list[4])
                         x_reference = float(value_list[5])
                         self.initialize_manual(
-                            x_offset, y_offset, width, height, pixel_to_um, x_reference
+                            x_offset, y_offset, width, height, pixel_to_um, x_reference,write_to_cache=False
                         )
                         break
             except (FileNotFoundError, ValueError, IndexError) as e:
@@ -3609,6 +3609,9 @@ class LaserAutofocusController(QObject):
             x_reference - self.x_offset
         )  # self.x_reference is relative to the cropped region
         self.camera.set_ROI(self.x_offset, self.y_offset, self.width, self.height)
+        self.camera.set_exposure_time(CONFIG.FOCUS_CAMERA_EXPOSURE_TIME_MS)
+        self.camera.set_analog_gain(CONFIG.FOCUS_CAMERA_ANALOG_GAIN)
+
         self.is_initialized = True
 
     def initialize_auto(self):
