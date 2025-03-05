@@ -560,6 +560,7 @@ class Microscope:
                 "auto_focus": self.auto_focus_schema,
                 "snap_image": self.snap_image_schema,
                 "home_stage": self.home_stage_schema,
+                "return_stage": self.return_stage_schema,
                 "move_to_loading_position": self.move_to_loading_position,
                 "navigate_to_well": self.navigate_to_well_schema,
                 "inspect_tool": self.inspect_tool_schema,
