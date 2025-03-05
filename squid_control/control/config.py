@@ -628,10 +628,10 @@ def load_config(config_path, multipoint_function):
         CONFIG.RUN_CUSTOM_MULTIPOINT = True
         CONFIG.CUSTOM_MULTIPOINT_FUNCTION = multipoint_function
 
-    if not (CONFIG.DEFAULT_SAVING_PATH.startswith(str(Path.home()))):
-        CONFIG.DEFAULT_SAVING_PATH = (
-            str(Path.home()) + "/" + CONFIG.DEFAULT_SAVING_PATH.strip("/")
-        )
+    # if not (CONFIG.DEFAULT_SAVING_PATH.startswith(str(Path.home()))):
+    #     CONFIG.DEFAULT_SAVING_PATH = (
+    #         str(Path.home()) + "/" + CONFIG.DEFAULT_SAVING_PATH.strip("/")
+    #     )
 
     if CONFIG.ENABLE_TRACKING:
         CONFIG.DEFAULT_DISPLAY_CROP = CONFIG.Tracking.DEFAULT_DISPLAY_CROP
