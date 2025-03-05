@@ -413,6 +413,20 @@ class Microscope:
         """
         self.squidController.do_autofocus()
         print('The camera is auto-focused')
+    
+    @schema_function(skip_self=True)
+    def do_laser_autofocus(self, context=None):
+        """
+        Do reflection-based autofocus
+        Returns: A string message
+        """
+        try:
+            self.squidController.do_laser_autofocus()
+        except:
+            raise Exception("The laser autofocus failed.")
+        
+        print('The camera is auto-focused')
+        return 'The camera is auto-focused
 
     @schema_function(skip_self=True)
     def navigate_to_well(self, row: str=Field('A', description="Row number of the well position (e.g., 'A')"), col: int=Field(1, description="Column number of the well position"), wellplate_type: str=Field('24', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), context=None):
@@ -433,8 +447,7 @@ class Microscope:
         """
         print(f"chatbot_service_url: {self.chatbot_service_url}")
         return self.chatbot_service_url
-
-    # Chatbot extension
+    
     class MoveByDistanceInput(BaseModel):
         """Move the stage by a distance in x, y, z axis."""
         x: float = Field(0, description="Move the stage along X axis")
@@ -572,6 +585,7 @@ class Microscope:
                 "move_to_position": self.move_to_position,
                 "move_to_loading_position": self.move_to_loading_position,
                 "auto_focus": self.auto_focus,
+                "do_laser_autofocus": self.do_laser_autofocus,
                 "get_status": self.get_status,
                 "update_parameters_from_client": self.update_parameters_from_client,
                 "get_chatbot_url": self.get_chatbot_url,
