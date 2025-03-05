@@ -383,7 +383,7 @@ class SquidController:
     def measure_displacement(self):
         self.laserAutofocusController.measure_displacement()     
         
-    def platereader_move_to_well(self,row,column, wellplate_type='96'):
+    def move_to_well(self,row,column, wellplate_type='96'):
         if wellplate_type == '6':
             wellplate_format = WELLPLATE_FORMAT_6
         elif wellplate_type == '24':
@@ -510,7 +510,9 @@ class SquidController:
                 exit()
         self.navigationController.zero_x()
         self.slidePositionController.homing_done = True
-
+        print('home xy done')
+        
+    def return_stage(self):
         # move to scanning position
         self.navigationController.move_x(30)
         while self.microcontroller.is_busy():
@@ -527,7 +529,6 @@ class SquidController:
             time.sleep(0.005)
             if time.time() - t0 > 5:
                 print('z return timeout, the program will exit')
-                exit()
 
     async def snap_image(self, channel=0, intensity=100, exposure_time=100):
         self.camera.set_exposure_time(exposure_time)

@@ -351,6 +351,15 @@ class Microscope:
         self.squidController.home_stage()
         print('The stage moved to home position in z, y, and x axis')
         return 'The stage moved to home position in z, y, and x axis'
+    
+    def return_stage(self,context=None):
+        """
+        Return the stage to the initial position.
+        """
+        self.squidController.return_stage()
+        print('The stage moved to the initial position')
+        return 'The stage moved to the initial position'
+    
 
     def move_to_loading_position(self, context=None):
         """
@@ -372,7 +381,7 @@ class Microscope:
         """
         if wellplate_type is None:
             wellplate_type = '96'
-        self.squidController.platereader_move_to_well(row, col, wellplate_type)
+        self.squidController.move_to_well(row, col, wellplate_type)
         print(f'The stage moved to well position ({row},{col})')
 
     def get_chatbot_url(self, context=None):
@@ -423,6 +432,9 @@ class Microscope:
 
     class HomeStageInput(BaseModel):
         """Home the stage in z, y, and x axis."""
+
+    class ReturnStageInput(BaseModel):
+        """Return the stage to the initial position."""
 
     class ImageInfo(BaseModel):
         """Image information."""
@@ -475,11 +487,16 @@ class Microscope:
         response = self.home_stage(context)
         return {"result": response}
 
+    def return_stage_schema(self, context=None):
+        response = self.return_stage(context)
+        return {"result": response}
+
     def get_schema(self, context=None):
         return {
             "move_by_distance": self.MoveByDistanceInput.model_json_schema(),
             "move_to_position": self.MoveToPositionInput.model_json_schema(),
             "home_stage": self.HomeStageInput.model_json_schema(),
+            "return_stage": self.ReturnStageInput.model_json_schema(),
             "auto_focus": self.AutoFocusInput.model_json_schema(),
             "snap_image": self.SnapImageInput.model_json_schema(),
             "inspect_tool": self.InspectToolInput.model_json_schema(),
@@ -507,6 +524,8 @@ class Microscope:
                 "scan_well_plate": self.scan_well_plate,
                 "stop_scan": self.stop_scan,
                 "home_stage": self.home_stage,
+                "return_stage": self.return_stage,
+                "navigate_to_well": self.navigate_to_well,
                 "move_to_position": self.move_to_position,
                 "move_to_loading_position": self.move_to_loading_position,
                 "auto_focus": self.auto_focus,

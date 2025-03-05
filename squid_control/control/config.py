@@ -328,7 +328,7 @@ class BaseConfig(BaseModel):
     LED_MATRIX_G_FACTOR: float = 0
     LED_MATRIX_B_FACTOR: float = 1
 
-    DEFAULT_SAVING_PATH: str = str(Path.home()) + "/Downloads"
+    DEFAULT_SAVING_PATH: str = "/data/hypha"
 
     DEFAULT_PIXEL_FORMAT: str = "MONO8"
 
