@@ -109,10 +109,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def move_by_distance(self, x: float=Field(1.0, description="disntance through X axis, unit: milimeter"), y: float=Field(1.0, description="disntance through Y axis, unit: milimeter"), z: float=Field(1.0, description="disntance through Z axis, unit: milimeter"), context=None):
         """
-        Description:
-        Move the stage by a distances in x, y, z axis.
-        Returns:
-        dict: The result of the movement, incuding the initial and final positions.
+        Move the stage by a distances in x, y, z axis
+        Returns: Result information
         """
         is_success, x_pos, y_pos, z_pos, x_des, y_des, z_des = self.squidController.move_by_distance_limited(x, y, z)
         if is_success:
@@ -133,12 +131,10 @@ class Microscope:
             }
 
     @schema_function(skip_self=True)
-    def move_to_position(self, x:float=Field(1.0,description="Position through X axis, unit is milimeter"), y:float=Field(1.0,description="Position through Y axis, unit is milimeter"), z:float=Field(1.0,description="Position through Z axis, unit is milimeter"), context=None):
+    def move_to_position(self, x:float=Field(1.0,description="Unit: milimeter"), y:float=Field(1.0,description="Unit: milimeter"), z:float=Field(1.0,description="Unit: milimeter"), context=None):
         """
-        Description:
-        Move the stage to a position in x, y, z axis.
-        Returns:
-        dict: The result of the movement, incuding the initial and final positions.
+        Move the stage to a position in x, y, z axis
+        Returns: The result of the movement
         """
         self.get_status()
         initial_x = self.parameters['current_x']
@@ -185,10 +181,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def get_status(self, context=None):
         """
-        Description:
-        Get the current status of the microscope, including the current position, illumination status, and exposure time.
-        Returns:
-        dict: The current status of the microscope.
+        Get the current status of the microscope
+        Returns: Status of the microscope
         """
         current_x, current_y, current_z, current_theta = self.squidController.navigationController.update_pos(microcontroller=self.squidController.microcontroller)
         is_illumination_on = self.squidController.liveController.illumination_on
@@ -216,9 +210,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def update_parameters_from_client(self, new_parameters: dict=Field(description="the dictionary parameters user want to update"), context=None):
         """
-        Update the parameters from the client side.
-        Returns:
-            dict: Updated parameters in the microscope.
+        Update the parameters from the client side
+        Returns: Updated parameters in the microscope
         """
         if self.parameters is None:
             self.parameters = {}
@@ -240,12 +233,10 @@ class Microscope:
         return {"success": True, "message": "Parameters updated successfully.", "updated_parameters": new_parameters}
 
     @schema_function(skip_self=True)
-    async def one_new_frame(self, exposure_time: int=Field(100, description="Exposure time in milliseconds"), channel: int=Field(0, description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
+    async def one_new_frame(self, exposure_time: int=Field(100, description="Exposure time in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Light intensity"), context=None):
         """
-        Description:
-        Get the current frame from the camera as a grayscale image.
-        Returns:
-        str: The base64 encoded image.
+        Get an image from the microscope
+        Returns: A base64 encoded image
         """
         gray_img = await self.squidController.snap_image(channel, intensity, exposure_time)
 
@@ -285,12 +276,10 @@ class Microscope:
         return image_base64  
 
     @schema_function(skip_self=True)
-    async def snap(self, exposure_time: int=Field(100, description="Exposure time in milliseconds"), channel: int=Field(0, description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
+    async def snap(self, exposure_time: int=Field(100, description="Exposure time, in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
         """
-        Description:
-        Get the current frame from the camera as a grayscale image.
-        Returns:
-        str: the URL of the image.
+        Get an image from microscope
+        Returns:the URL of the image
         """
         gray_img = await self.squidController.snap_image(channel, intensity, exposure_time)
         print('The image is snapped')
@@ -326,10 +315,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def open_illumination(self, context=None):
         """
-        Description:
-        Turn on the bright field illumination, as for setting the illumination channel and intensity, please use the 'set_illumination' function.
-        Returns:
-        str: The message of the action.
+        Turn on the illumination
+        Returns: The message of the action
         """
         self.squidController.liveController.turn_on_illumination()
         print('Bright field illumination turned on.')
@@ -338,10 +325,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def close_illumination(self, context=None):
         """
-        Description:
-        Turn off the illumination.
-        Returns:
-        str: The message of the action.
+        Turn off the illumination
+        Returns: The message of the action
         """
         self.squidController.liveController.turn_off_illumination()
         print('Bright field illumination turned off.')
@@ -350,11 +335,11 @@ class Microscope:
     @schema_function(skip_self=True)
     def scan_well_plate(self, well_plate_type: str=Field("96", description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), illuminate_channels: List[str]=Field(default_factory=lambda: ['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex'], description="The channels to illuminate the well plate"), do_contrast_autofocus: bool=Field(False, description="Whether to do contrast based autofocus"), do_reflection_af: bool=Field(True, description="Whether to do reflection based autofocus"), scanning_zone: List[tuple]=Field(default_factory=lambda: [(0,0),(0,0)], description="The scanning zone of the well plate, for 91 well plate, it should be[(0,0),(7,11)] "), action_ID: str=Field('testPlateScan', description="The ID of the action"), context=None):
         """
-        Description:
-        Scan the well plate according to the pre-defined position list.
-        Returns:
-        str: The message of the action.
+        Scan the well plate according to the pre-defined position list
+        Returns: The message of the action
         """
+        if illuminate_channels is None:
+            illuminate_channels = ['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex']
         print("Start scanning well plate")
         self.squidController.plate_scan(well_plate_type,illuminate_channels,do_contrast_autofocus,do_reflection_af,scanning_zone,action_ID)
         print("Well plate scanning completed")
@@ -363,10 +348,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def set_illumination(self, channel: int=Field(0, description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
         """
-        Description:
-        Set the intensity of the bright field illumination.
-        Returns:
-        str: The message of the action.
+        Set the intensity of light source
+        Returns:A string message
         """
         self.squidController.liveController.set_illumination(channel, intensity)
         print(f'The intensity of the channel {channel} illumination is set to {intensity}.')
@@ -375,10 +358,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def set_camera_exposure(self, exposure_time: int=Field(100, description="Exposure time in milliseconds"), context=None):
         """
-        Description:
-        Set the exposure time of the camera.
-        Returns:
-        str: The message of the action.
+        Set the exposure time of the camera
+        Returns: A string message
         """
         self.squidController.camera.set_exposure_time(exposure_time)
         print(f'The exposure time of the camera is set to {exposure_time}.')
@@ -386,10 +367,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def stop_scan(self, context=None):
         """
-        Description:
         Stop the scanning of the well plate.
-        Returns:
-        str: The message of the action.
+        Returns: A string message
         """
         self.squidController.liveController.stop_live()
         self.multipointController.abort_acqusition_requested=True
@@ -399,10 +378,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def home_stage(self, context=None):
         """
-        Description:
-        Move the stage to home/zero position in z, y, and x axis. This will also release the sample, so it's very important to use this function before the robotic arm grabs the sample.
-        Returns:
-        str: The message of the action
+        Move the stage to home/zero position
+        Returns: A string message
         """
         self.squidController.home_stage()
         print('The stage moved to home position in z, y, and x axis')
@@ -411,10 +388,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def return_stage(self,context=None):
         """
-        Description:
-        Move the stage to the initial position.
-        Returns:
-        str: The message of the action
+        Move the stage to the initial position for imaging.
+        Returns: A string message
         """
         self.squidController.return_stage()
         print('The stage moved to the initial position')
@@ -423,10 +398,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def move_to_loading_position(self, context=None):
         """
-        Description:
-        Move the stage to the loading position. This postion is used for loading the sample.
-        Returns:
-        str: The message of the action
+        Move the stage to the loading position.
+        Returns: A  string message
         """
         self.squidController.slidePositionController.move_to_slide_loading_position()
         print('The stage moved to loading position')
@@ -435,10 +408,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def auto_focus(self, context=None):
         """
-        Description:
-        Perform the contrast-based autofocus of the camera.
-        Returns:
-        str: The message of the action
+        Do contrast-based autofocus
+        Returns: A string message
         """
         self.squidController.do_autofocus()
         print('The camera is auto-focused')
@@ -446,10 +417,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def navigate_to_well(self, row: str=Field('A', description="Row number of the well position (e.g., 'A')"), col: int=Field(1, description="Column number of the well position"), wellplate_type: str=Field('24', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), context=None):
         """
-        Description:
         Navigate to the specified well position in the well plate.
-        Returns:
-        str: The message of the action
+        Returns: A string message
         """
         if wellplate_type is None:
             wellplate_type = '96'
@@ -459,10 +428,8 @@ class Microscope:
     @schema_function(skip_self=True)
     def get_chatbot_url(self, context=None):
         """
-        Description:
         Get the URL of the chatbot service.
-        Returns:
-        str: The URL of the chatbot service.
+        Returns: A URL string
         """
         print(f"chatbot_service_url: {self.chatbot_service_url}")
         return self.chatbot_service_url
