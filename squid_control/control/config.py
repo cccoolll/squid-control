@@ -92,25 +92,6 @@ class Microcontroller2Def(Enum):
     N_BYTES_POS = 4
 
 
-class MCU_PINS(Enum):
-    PWM1 = 5
-    PWM2 = 4
-    PWM3 = 22
-    PWM4 = 3
-    PWM5 = 23
-    PWM6 = 2
-    PWM7 = 1
-    PWM9 = 6
-    PWM10 = 7
-    PWM11 = 8
-    PWM12 = 9
-    PWM13 = 10
-    PWM14 = 15
-    PWM15 = 24
-    PWM16 = 25
-    AF_LASER = 15
-
-
 # class LIMIT_SWITCH_POLARITY(BaseModel):
 #     ACTIVE_LOW: int = 0
 #     ACTIVE_HIGH: int = 1
@@ -306,7 +287,7 @@ class BaseConfig(BaseModel):
 
     MAX_VELOCITY_X_MM: float = 30
     MAX_VELOCITY_Y_MM: float = 30
-    MAX_VELOCITY_Z_MM: float = 4
+    MAX_VELOCITY_Z_MM: float = 2
 
     MAX_ACCELERATION_X_MM: float = 500
     MAX_ACCELERATION_Y_MM: float = 500
@@ -347,9 +328,9 @@ class BaseConfig(BaseModel):
     LED_MATRIX_G_FACTOR: float = 0
     LED_MATRIX_B_FACTOR: float = 1
 
-    DEFAULT_SAVING_PATH: str = str(Path.home()) + "/Downloads"
+    DEFAULT_SAVING_PATH: str = "/data/hypha"
 
-    DEFAULT_PIXEL_FORMAT: str = "MONO12"
+    DEFAULT_PIXEL_FORMAT: str = "MONO8"
 
     DEFAULT_DISPLAY_CROP: int = (
         100  # value ranges from 1 to 100 - image display crop size
@@ -379,7 +360,7 @@ class BaseConfig(BaseModel):
     }
     TUBE_LENS_MM: float = 50
     CAMERA_SENSOR: str = "IMX226"
-    DEFAULT_OBJECTIVE: str = "40x"
+    DEFAULT_OBJECTIVE: str = "20x"
     TRACKERS: List[str] = [
         "csrt",
         "kcf",
@@ -423,12 +404,12 @@ class BaseConfig(BaseModel):
     Z_STACKING_CONFIG: str = "FROM CENTER"  # 'FROM BOTTOM', 'FROM TOP'
 
     # plate format
-    WELLPLATE_FORMAT: int = 384
+    WELLPLATE_FORMAT: int = 96
 
     # for 384 well plate
     X_MM_384_WELLPLATE_UPPERLEFT: int = 0
     Y_MM_384_WELLPLATE_UPPERLEFT: int = 0
-    DEFAULT_Z_POS_MM: int = 2
+    DEFAULT_Z_POS_MM: int = 3.970
     X_ORIGIN_384_WELLPLATE_PIXEL: int = 177  # upper left of B2
     Y_ORIGIN_384_WELLPLATE_PIXEL: int = 141  # upper left of B2
     NUMBER_OF_SKIP_384: int = 1
@@ -457,14 +438,32 @@ class BaseConfig(BaseModel):
     # How to read Spinnaker nodemaps, options are INDIVIDUAL or VALUE
     CHOSEN_READ: str = "INDIVIDUAL"
 
+    class MCU_PINS:
+        PWM1 = 5
+        PWM2 = 4
+        PWM3 = 22
+        PWM4 = 3
+        PWM5 = 23
+        PWM6 = 2
+        PWM7 = 1
+        PWM9 = 6
+        PWM10 = 7
+        PWM11 = 8
+        PWM12 = 9
+        PWM13 = 10
+        PWM14 = 15
+        PWM15 = 24
+        PWM16 = 25
+        AF_LASER = 15
+
     # laser autofocus
     SUPPORT_LASER_AUTOFOCUS: bool = True
     MAIN_CAMERA_MODEL: str = "MER2-1220-32U3M"
     FOCUS_CAMERA_MODEL: str = "MER2-630-60U3M"
-    FOCUS_CAMERA_EXPOSURE_TIME_MS: int = 2
+    FOCUS_CAMERA_EXPOSURE_TIME_MS: int = 0.2
     FOCUS_CAMERA_ANALOG_GAIN: int = 0
     LASER_AF_AVERAGING_N: int = 5
-    LASER_AF_DISPLAY_SPOT_IMAGE: bool = True
+    LASER_AF_DISPLAY_SPOT_IMAGE: bool = False
     LASER_AF_CROP_WIDTH: int = 1536
     LASER_AF_CROP_HEIGHT: int = 256
     HAS_TWO_INTERFACES: bool = True
@@ -505,7 +504,7 @@ class BaseConfig(BaseModel):
 
     SHOW_DAC_CONTROL: bool = False
     CACHE_CONFIG_FILE_PATH: str = None
-    CHANNEL_CONFIGURATIONS_PATH: str = ""
+    CHANNEL_CONFIGURATIONS_PATH: str = "./focus_camera_configurations.xml"
     LAST_COORDS_PATH: str = ""
 
     # for check if the stage is moved
@@ -613,7 +612,7 @@ def load_config(config_path, multipoint_function):
         )
 
     CONFIG.CACHE_CONFIG_FILE_PATH = str(config_dir / "cache_config_file_path.txt")
-    CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / "channel_configurations.xml")
+    CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / "uc2_fucci_illumination_configurations.xml")
     CONFIG.LAST_COORDS_PATH = str(config_dir / "last_coords.txt")
 
     if config_path and not os.path.exists(config_path):
@@ -669,7 +668,7 @@ def load_config(config_path, multipoint_function):
         CONFIG.A1_Y_MM = 23.01
 
     # Write configuration to txt file after reading
-    # CONFIG.write_config_to_txt('config_parameters.txt')
+    CONFIG.write_config_to_txt('config_parameters.txt')
 
 
     try:

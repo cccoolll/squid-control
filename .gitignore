@@ -168,3 +168,4 @@ cython_debug/
 #.idea/
 
 upload_record.json
+config_parameters.txt

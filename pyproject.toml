@@ -27,7 +27,6 @@ dependencies = [
     "openai",
     "blosc",
     "aiohttp",
-    "torch",
 ]
 
 [project.optional-dependencies]

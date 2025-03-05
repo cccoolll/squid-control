@@ -8,13 +8,12 @@ import squid_control.control.utils as utils
 from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting
 
-import squid_control.control.tracking as tracking
-
 
 from queue import Queue
-from threading import Thread, Lock
+import threading
 import time
 import numpy as np
+import pyqtgraph as pg
 import scipy
 import scipy.signal
 import cv2
@@ -209,15 +208,7 @@ class StreamHandler(QObject):
                     image_cropped, camera.frame_ID, camera.timestamp
                 )
                 self.timestamp_last_track = time_now
-                
-            # TODO: If zoom scan is active, send to zoom scan controller
-            if True:
-                self.zoom_scan_controller.on_new_frame(
-                    image_cropped,
-                    camera.frame_ID,
-                    camera.timestamp
-                )
-        
+
             self.handler_busy = False
             camera.image_locked = False
 
@@ -248,6 +239,223 @@ class StreamHandler(QObject):
 
         self.handler_busy = False
     """
+class ImageSaver(QObject):
+
+    stop_recording = Signal()
+
+    def __init__(self, image_format=CONFIG.Acquisition.IMAGE_FORMAT):
+        QObject.__init__(self)
+        self.base_path = "./"
+        self.experiment_ID = ""
+        self.image_format = image_format
+        self.max_num_image_per_folder = 1000
+        self.queue = Queue(10)  # max 10 items in the queue
+        self.image_lock = threading.Lock()
+        self.stop_signal_received = False
+        self.thread = threading.Thread(target=self.process_queue)
+        self.thread.start()
+        self.counter = 0
+        self.recording_start_time = 0
+        self.recording_time_limit = -1
+
+    def process_queue(self):
+        while True:
+            # stop the thread if stop signal is received
+            if self.stop_signal_received:
+                return
+            # process the queue
+            try:
+                [image, frame_ID, timestamp] = self.queue.get(timeout=0.1)
+                self.image_lock.acquire(True)
+                folder_ID = int(self.counter / self.max_num_image_per_folder)
+                file_ID = int(self.counter % self.max_num_image_per_folder)
+                # create a new folder
+                if file_ID == 0:
+                    os.mkdir(
+                        os.path.join(self.base_path, self.experiment_ID, str(folder_ID))
+                    )
+
+                if image.dtype == np.uint16:
+                    # need to use tiff when saving 16 bit images
+                    saving_path = os.path.join(
+                        self.base_path,
+                        self.experiment_ID,
+                        str(folder_ID),
+                        str(file_ID) + "_" + str(frame_ID) + ".tiff",
+                    )
+                    iio.imwrite(saving_path, image)
+                else:
+                    saving_path = os.path.join(
+                        self.base_path,
+                        self.experiment_ID,
+                        str(folder_ID),
+                        str(file_ID) + "_" + str(frame_ID) + "." + self.image_format,
+                    )
+                    cv2.imwrite(saving_path, image)
+
+                self.counter = self.counter + 1
+                self.queue.task_done()
+                self.image_lock.release()
+            except:
+                pass
+
+    def enqueue(self, image, frame_ID, timestamp):
+        try:
+            self.queue.put_nowait([image, frame_ID, timestamp])
+            if (self.recording_time_limit > 0) and (
+                time.time() - self.recording_start_time >= self.recording_time_limit
+            ):
+                self.stop_recording.emit()
+            # when using self.queue.put(str_), program can be slowed down despite multithreading because of the block and the GIL
+        except:
+            print("imageSaver queue is full, image discarded")
+
+    def set_base_path(self, path):
+        self.base_path = path
+
+    def set_recording_time_limit(self, time_limit):
+        self.recording_time_limit = time_limit
+
+    def start_new_experiment(self, experiment_ID, add_timestamp=True):
+        if add_timestamp:
+            # generate unique experiment ID
+            self.experiment_ID = (
+                experiment_ID + "_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%-S.%f")
+            )
+        else:
+            self.experiment_ID = experiment_ID
+        self.recording_start_time = time.time()
+        # create a new folder
+        try:
+            os.mkdir(os.path.join(self.base_path, self.experiment_ID))
+            # to do: save configuration
+        except:
+            pass
+        # reset the counter
+        self.counter = 0
+
+    def close(self):
+        self.queue.join()
+        self.stop_signal_received = True
+        self.thread.join()
+
+
+class ImageSaver_Tracking(QObject):
+    def __init__(self, base_path, image_format="bmp"):
+        QObject.__init__(self)
+        self.base_path = base_path
+        self.image_format = image_format
+        self.max_num_image_per_folder = 1000
+        self.queue = Queue(100)  # max 100 items in the queue
+        self.image_lock = threading.Lock()
+        self.stop_signal_received = False
+        self.thread = threading.Thread(target=self.process_queue)
+        self.thread.start()
+
+    def process_queue(self):
+        while True:
+            # stop the thread if stop signal is received
+            if self.stop_signal_received:
+                return
+            # process the queue
+            try:
+                [image, frame_counter, postfix] = self.queue.get(timeout=0.1)
+                self.image_lock.acquire(True)
+                folder_ID = int(frame_counter / self.max_num_image_per_folder)
+                file_ID = int(frame_counter % self.max_num_image_per_folder)
+                # create a new folder
+                if file_ID == 0:
+                    os.mkdir(os.path.join(self.base_path, str(folder_ID)))
+                if image.dtype == np.uint16:
+                    saving_path = os.path.join(
+                        self.base_path,
+                        str(folder_ID),
+                        str(file_ID)
+                        + "_"
+                        + str(frame_counter)
+                        + "_"
+                        + postfix
+                        + ".tiff",
+                    )
+                    iio.imwrite(saving_path, image)
+                else:
+                    saving_path = os.path.join(
+                        self.base_path,
+                        str(folder_ID),
+                        str(file_ID)
+                        + "_"
+                        + str(frame_counter)
+                        + "_"
+                        + postfix
+                        + "."
+                        + self.image_format,
+                    )
+                    cv2.imwrite(saving_path, image)
+                self.queue.task_done()
+                self.image_lock.release()
+            except:
+                pass
+
+    def enqueue(self, image, frame_counter, postfix):
+        try:
+            self.queue.put_nowait([image, frame_counter, postfix])
+        except:
+            print("imageSaver queue is full, image discarded")
+
+    def close(self):
+        self.queue.join()
+        self.stop_signal_received = True
+        self.thread.join()
+
+
+"""
+class ImageSaver_MultiPointAcquisition(QObject):
+"""
+
+
+class ImageDisplay(QObject):
+
+    image_to_display = Signal(np.ndarray)
+
+    def __init__(self):
+        QObject.__init__(self)
+        self.queue = Queue(10)  # max 10 items in the queue
+        self.image_lock = threading.Lock()
+        self.stop_signal_received = False
+        self.thread = threading.Thread(target=self.process_queue)
+        self.thread.start()
+
+    def process_queue(self):
+        while True:
+            # stop the thread if stop signal is received
+            if self.stop_signal_received:
+                return
+            # process the queue
+            try:
+                [image, frame_ID, timestamp] = self.queue.get(timeout=0.1)
+                self.image_lock.acquire(True)
+                self.image_to_display.emit(image)
+                self.image_lock.release()
+                self.queue.task_done()
+            except:
+                pass
+
+    # def enqueue(self,image,frame_ID,timestamp):
+    def enqueue(self, image):
+        try:
+            self.queue.put_nowait([image, None, None])
+            # when using self.queue.put(str_) instead of try + nowait, program can be slowed down despite multithreading because of the block and the GIL
+            pass
+        except:
+            print("imageDisplay queue is full, image discarded")
+
+    def emit_directly(self, image):
+        self.image_to_display.emit(image)
+
+    def close(self):
+        self.queue.join()
+        self.stop_signal_received = True
+        self.thread.join()
 
 
 class Configuration:
@@ -323,6 +531,7 @@ class LiveController(QObject):
     # illumination control
     def turn_on_illumination(self):
         self.microcontroller.turn_on_illumination()
+        print("illumination on")
         self.illumination_on = True
 
     def turn_off_illumination(self):
@@ -1458,7 +1667,7 @@ class AutofocusWorker(QObject):
 
     finished = Signal()
     image_to_display = Signal(np.ndarray)
-    # signal_current_configuration = Signal(Configuration)
+    signal_current_configuration = Signal(Configuration)
 
     def __init__(self, autofocusController):
         QObject.__init__(self)
@@ -2085,6 +2294,8 @@ class MultiPointWorker(QObject):
                                     )
                                 )
                                 self.signal_current_configuration.emit(config_AF)
+                                self.autofocusController.set_microscope_mode(config_AF)
+                                print(f"autofocus at {coordiante_name}{i}_{j}, configuration: {configuration_name_AF},{config_AF}")
                                 if (
                                     self.FOV_counter
                                     % CONFIG.Acquisition.NUMBER_OF_FOVS_PER_AF
@@ -2129,6 +2340,7 @@ class MultiPointWorker(QObject):
                                         )
                                     )
                                     self.signal_current_configuration.emit(config_AF)
+                                    self.autofocusController.set_microscope_mode(config_AF)
                                     self.autofocusController.autofocus()
                                     self.autofocusController.wait_till_autofocus_has_completed()
                                 # set the current plane as reference
@@ -2242,7 +2454,10 @@ class MultiPointWorker(QObject):
 
                                 if "USB Spectrometer" not in config.name:
                                     # update the current configuration
+                                    print("current configuration: " + config.name)
                                     self.signal_current_configuration.emit(config)
+                                    self.wait_till_operation_is_completed()
+                                    self.liveController.set_microscope_mode(config)
                                     self.wait_till_operation_is_completed()
                                     # trigger acquisition (including turning on the illumination)
                                     if (
@@ -2627,322 +2842,6 @@ class MultiPointWorker(QObject):
         self.navigationController.enable_joystick_button_action = True
         print(time.time())
         print(time.time() - start)
-
-class ZoomScanController(QObject):
-    """
-    Controller class for 'zoom scan' functionality.
-    Handles UI-level logic, user inputs, and
-    spawns a Worker to do the actual scanning.
-    """
-
-    zoomScanFinished = Signal(np.ndarray)  # or send a stitched image or path
-    zoomScanProgress = Signal(float)       # progress as 0..100 %
-
-    def __init__(
-        self,
-        camera,
-        microcontroller,
-        navigationController,
-        liveController,
-        # Additional parameters:
-        rectangle=None,       # (x_min, y_min, x_max, y_max) in mm
-        overlap=0.1,          # e.g. 10% overlap
-        velocity_mm_s= 9.0,      # mm/s
-        store_images=True,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self.camera = camera
-        self.microcontroller = microcontroller
-        self.navigationController = navigationController
-        self.liveController = liveController
-        self.rectangle = rectangle
-        self.overlap = overlap
-        self.velocity_mm_s = velocity_mm_s
-        self.store_images = store_images
-
-        # This will be your scanning thread reference
-        self.thread = None
-        
-    def start_zoom_scan(self):
-        """
-        Sets up and starts the 'zoom scan' by creating a worker thread.
-        """
-        if not self.rectangle:
-            print("No rectangle set for ZoomScan. Aborting.")
-            return
-
-        self.thread = QThread()
-        self.zoomScanWorker = ZoomScanWorker(
-            camera=self.camera,
-            microcontroller=self.microcontroller,
-            navigationController=self.navigationController,
-            liveController=self.liveController,
-            rectangle=self.rectangle,
-            overlap=self.overlap,
-            velocity_mm_s=self.velocity_mm_s,
-            store_images=self.store_images,
-        )
-
-        # Connect signals
-        self.zoomScanWorker.finished.connect(self._on_worker_finished)
-        self.zoomScanWorker.progress.connect(self.zoomScanProgress)
-        self.zoomScanWorker.moveToThread(self.thread)
-        
-        # Connect StreamHandler signal to ZoomScanWorker slot
-        self.streamHandler.signal_new_frame_received.connect(self.zoomScanWorker.on_new_frame)
-
-        # Start the worker in the new thread
-        self.thread.started.connect(self.zoomScanWorker.run)
-        self.thread.start()
-
-    def _on_worker_finished(self, stitched_image):
-        """
-        Called when the zoom scanning is done.
-        """
-        # If stitched_image is an np.ndarray, do something with it
-        self.zoomScanFinished.emit(stitched_image)
-        
-        # Cleanup
-        self.zoomScanWorker.deleteLater()
-        self.thread.quit()
-        self.thread.wait()
-        self.thread = None
-
-    def stop_zoom_scan(self):
-        if self.thread and self.thread.isRunning():
-            self.zoomScanWorker.request_abort = True
-            self.thread.quit()
-            self.thread.wait(3000)  # 3 second timeout
-            if self.thread.isRunning():
-                self.thread.terminate()
-
-class ZoomScanWorker(QObject):
-    """
-    Worker/Thread class that moves the stage continuously,
-    streams images, and stitches them at the end.
-    """
-
-    finished = Signal(np.ndarray)  # Return stitched image
-    frame_ready = Signal(np.ndarray)
-    progress = Signal(float)       # 0..100 progress, optional
-
-    def __init__(
-        self,
-        camera,
-        microcontroller,
-        navigationController,
-        liveController,
-        rectangle,
-        overlap,
-        velocity_mm_s,
-        store_images=True,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self.camera = camera
-        self.microcontroller = microcontroller
-        self.navigationController = navigationController
-        self.liveController = liveController
-        self.streamHandler = StreamHandler()
-        self.x_min, self.y_min, self.x_max, self.y_max = rectangle
-        self.overlap = overlap
-        self.velocity_mm_s = velocity_mm_s
-        self.store_images = store_images
-
-        self.request_abort = False
-        self.scan_direction = 1
-
-        # For Camera streaming:
-        self.illumination_source = 1  # e.g., brightfield
-        self.illumination_intensity = 100  # 0..100
-        self.exposure_time = 1  # in ms
-        
-        # For storing frames:
-        self.captured_frames = []
-        self.frame_positions = [] # Store (x,y) positions for each frame
-
-    @Slot(np.ndarray, int, float)
-    def on_new_frame(self, image, frame_ID, timestamp):
-        if not self.request_abort:
-            self.captured_frames.append(image)
-            self.frame_ready.emit(image)
-            
-    def run(self):
-        """
-        Main scanning procedure:
-        1) Start camera streaming if not already.
-        2) Move to (x_min, y_min).
-        3) For each row, move continuously in X;
-            gather frames from the camera stream, storing them
-            with stage positions. Then proceed to next row, etc.
-        4) After done, run stitching routine.
-        5) Emit finished signal.
-        """
-        self._move_stage_to_start()
-        
-        # Possibly define step size (FOV_x * (1 - overlap)), etc.
-        # Or do continuous movement along each row:
-        num_rows = self._estimate_num_rows()
-        row_height = self._get_fov_height() * (1 - self.overlap)
-        # Clear any previous frames
-        self.captured_frames = []
-        for row_idx in range(num_rows):
-            # Check if user canceled
-            if self.request_abort:
-                break
-            
-            # Move stage to row’s Y
-            target_y = self.y_min + row_idx * row_height
-            self._move_stage_y(target_y)
-
-            # Acquire row
-            self._prepare_camera_and_illumination()
-            self._scan_one_row(row_idx, num_rows)
-            self.liveController.turn_off_illumination()
-            self.camera.disable_callback()
-            # Stitch frames of one row into one image
-        #     if not self.request_abort and len(self.captured_frames) > 1:
-        #         stitched = self._stitch_all()
-        #     else:
-        #         # If no frames or only one frame
-        #         stitched = np.array([])
-
-        # self.finished.emit(stitched)
-
-        # Stop streaming if needed
-        self.liveController.stop_live()
-
-
-
-    def _prepare_camera_and_illumination(self):
-        """
-        Ensure the camera is in continuous streaming mode & callbacks are on.
-        """
-        #Turn on LED for brightfield, set exposure time
-        self.liveController.set_illumination(self.illumination_source, self.illumination_intensity)
-        self.liveController.turn_on_illumination()
-        # Set up any needed trigger mode or streaming
-        if not self.camera.is_live:
-            # 1. Compute fps from velocity, fov, overlap
-            fov_width_mm = self._get_fov_width()
-            effective_fov = fov_width_mm * (1 - self.overlap)
-            required_fps = self.velocity_mm_s / effective_fov
-
-            # 2. Switch to software trigger
-            self.liveController.set_trigger_mode(TriggerModeSetting.SOFTWARE.value)
-            # 3. Set a suitably short exposure time first:
-            self.camera.set_exposure_time(self.exposure_time)
-            # 4. Now set the software trigger’s FPS
-            self.liveController.set_trigger_fps(required_fps)
-
-            # 5. Start the camera streaming with software trigger
-            self.liveController.start_live()
-            self.camera.start_streaming()
-
-
-
-        # Optionally set the camera’s fps, exposure, gain, etc.
-
-    def _move_stage_to_start(self):
-        """
-        Move to top-left corner (x_min, y_min).
-        """
-        self.navigationController.move_to(self.x_min, self.y_min)
-        self._wait_until_stage_idle()
-
-    def _scan_one_row(self, row_idx, num_rows):
-        """
-        Scan one row with continuous stage movement and synchronized image capture.
-        """
-
-
-        # Calculate movement parameters
-        distance_x = self.x_max - self.x_min
-        
-        if row_idx % 2 == 1:  # Bidirectional scanning
-            self.scan_direction = -1
-        else:
-            self.scan_direction = 1
-        
-        distance_x = self.scan_direction * distance_x
-        
-
-        # Start continuous movement
-        self.navigationController.move_x_continuous(distance_x, self.velocity_mm_s)
-
-        # Monitor progress while capturing frames
-        while self.microcontroller.is_busy():
-            if self.request_abort:
-                break
-            QThread.msleep(10)
-            self._emit_progress(row_idx, num_rows)
-
-        # Stop movement and streaming
-        #self.microcontroller.stop_x() TODO: There's no stop_x method
-        self.liveController.stop_live()
-
-
-    def _emit_progress(self, row_idx, num_rows):
-        row_fraction = row_idx / float(num_rows)
-        x_pos = self.navigationController.x_pos_mm
-        x_progress = abs(x_pos - self.x_min) / abs(self.x_max - self.x_min)
-        total_progress = (row_fraction + x_progress/num_rows) * 100
-        self.progress.emit(total_progress)
-
-    def _stitch_all(self):
-        """
-        Use OpenCV's Stitcher to merge all captured frames into one mosaic.
-        """
-
-        # Basic stitching approach:
-        stitcher = cv2.Stitcher.create(cv2.STITCHER_PANORAMA)
-        status, pano = stitcher.stitch(self.captured_frames)
-        if status == cv2.STITCHER_OK:
-            print("Stitching successful.")
-            return pano
-        else:
-            print("Stitching failed with code:", status)
-            return np.array([])
-
-    def _estimate_num_rows(self):
-        """
-        Simple approach: how many row steps from y_min to y_max
-        with given overlap?
-        """
-        total_distance_y = abs(self.y_max - self.y_min)
-        fov_y = self._get_fov_height()
-        effective_fov_y = fov_y * (1 - self.overlap)
-        # Number of steps
-        if effective_fov_y == 0:
-            return 1
-        return int(np.ceil(total_distance_y / effective_fov_y))
-    
-    def _get_fov_width(self):
-        """
-        You might read this from the camera or config. 
-        Placeholder:
-        """
-        return 1.0
-    def _get_fov_height(self):
-        """
-        You might read this from the camera or config. 
-        Placeholder:
-        """
-        return 1.0  # mm, example
-
-    def _move_stage_y(self, y_mm):
-        """
-        Move the stage in Y to y_mm, then wait.
-        """
-        self.navigationController.move_y_to(y_mm)
-        self._wait_until_stage_idle()
-
-    def _wait_until_stage_idle(self):
-        while self.microcontroller.is_busy():
-            if self.request_abort:
-                break
-            QThread.msleep(10)
         
 class MultiPointController(QObject):
 
@@ -3150,43 +3049,40 @@ class MultiPointController(QObject):
                 )
             )
 
-    def run_acquisition(
-        self, location_list=None
-    ):  # @@@ to do: change name to run_experiment
-        print("start multipoint")
-        print(
-            str(self.Nt) + "_" + str(self.NX) + "_" + str(self.NY) + "_" + str(self.NZ)
-        )
+    def run_acquisition(self, location_list=None, scanCoordinates=None): 
+        print('start acquisition')
+        self.tile_stitchers = {}
+        print(str(self.Nt) + '_' + str(self.NX) + '_' + str(self.NY) + '_' + str(self.NZ))
         if location_list is not None:
-            print(location_list)
             self.location_list = location_list
         else:
             self.location_list = None
+        
+        if scanCoordinates is None:
+            self.scanCoordinates = None
 
         self.abort_acqusition_requested = False
 
-        self.configuration_before_running_multipoint = (
-            self.liveController.currentConfiguration
-        )
-        # stop live
+        # Store current configuration to restore later
+        self.configuration_before_running_multipoint = self.liveController.currentConfiguration
+        
+        # Stop live view if active
         if self.liveController.is_live:
             self.liveController_was_live_before_multipoint = True
-            self.liveController.stop_live()  # @@@ to do: also uncheck the live button
+            self.liveController.stop_live()
         else:
             self.liveController_was_live_before_multipoint = False
 
-        # disable callback
+        # Disable camera callback
         if self.camera.callback_is_enabled:
             self.camera_callback_was_enabled_before_multipoint = True
             self.camera.disable_callback()
         else:
             self.camera_callback_was_enabled_before_multipoint = False
 
+        # Handle spectrometer if present
         if self.usb_spectrometer != None:
-            if (
-                self.usb_spectrometer.streaming_started == True
-                and self.usb_spectrometer.streaming_paused == False
-            ):
+            if self.usb_spectrometer.streaming_started == True and self.usb_spectrometer.streaming_paused == False:
                 self.usb_spectrometer.pause_streaming()
                 self.usb_spectrometer_was_streaming = True
             else:
@@ -3194,81 +3090,40 @@ class MultiPointController(QObject):
 
         if self.parent is not None:
             try:
-                self.parent.imageDisplayTabs.setCurrentWidget(
-                    self.parent.imageArrayDisplayWindow.widget
-                )
+                self.parent.imageDisplayTabs.setCurrentWidget(self.parent.imageArrayDisplayWindow.widget)
             except:
                 pass
             try:
-                self.parent.recordTabWidget.setCurrentWidget(
-                    self.parent.statsDisplayWidget
-                )
+                self.parent.recordTabWidget.setCurrentWidget(self.parent.statsDisplayWidget)
             except:
                 pass
-
-        # run the acquisition
+        
+        # Start acquisition
         self.timestamp_acquisition_started = time.time()
-        # create a QThread object
-        if self.gen_focus_map and not self.do_reflection_af:
-            print("Generating focus map for multipoint grid")
-            starting_x_mm = self.navigationController.x_pos_mm
-            starting_y_mm = self.navigationController.y_pos_mm
-            fmap_Nx = max(2, self.NX)
-            fmap_Ny = max(2, self.NY)
-            fmap_dx = self.deltaX
-            fmap_dy = self.deltaY
-            if abs(fmap_dx) < 0.1 and fmap_dx != 0.0:
-                fmap_dx = 0.1 * fmap_dx / (abs(fmap_dx))
-            elif fmap_dx == 0.0:
-                fmap_dx = 0.1
-            if abs(fmap_dy) < 0.1 and fmap_dy != 0.0:
-                fmap_dy = 0.1 * fmap_dy / (abs(fmap_dy))
-            elif fmap_dy == 0.0:
-                fmap_dy = 0.1
-            try:
-                self.focus_map_storage = []
-                self.already_using_fmap = self.autofocusController.use_focus_map
-                for x, y, z in self.autofocusController.focus_map_coords:
-                    self.focus_map_storage.append((x, y, z))
-                coord1 = (starting_x_mm, starting_y_mm)
-                coord2 = (starting_x_mm + fmap_Nx * fmap_dx, starting_y_mm)
-                coord3 = (starting_x_mm, starting_y_mm + fmap_Ny * fmap_dy)
-                self.autofocusController.gen_focus_map(coord1, coord2, coord3)
-                self.autofocusController.set_focus_map_use(True)
-                self.navigationController.move_to(starting_x_mm, starting_y_mm)
-                self.navigationController.microcontroller.wait_till_operation_is_completed()
-            except ValueError:
-                print("Invalid coordinates for focus map, aborting.")
-                return
+        
+        # Start processing
+        #self.processingHandler.start_processing()
+        #self.processingHandler.start_uploading()
 
-        self.thread = QThread()
-        # create a worker object
-        self.processingHandler.start_processing()
-        self.processingHandler.start_uploading()
+        # Create worker but run directly without thread
         self.multiPointWorker = MultiPointWorker(self)
-        # move the worker to the thread
-        self.multiPointWorker.moveToThread(self.thread)
-        # connect signals and slots
-        self.thread.started.connect(self.multiPointWorker.run)
-        self.multiPointWorker.signal_detection_stats.connect(self.slot_detection_stats)
-        self.multiPointWorker.finished.connect(self._on_acquisition_completed)
-        self.multiPointWorker.finished.connect(self.multiPointWorker.deleteLater)
-        self.multiPointWorker.finished.connect(self.thread.quit)
-        self.multiPointWorker.image_to_display.connect(self.slot_image_to_display)
-        self.multiPointWorker.image_to_display_multi.connect(
-            self.slot_image_to_display_multi
-        )
-        self.multiPointWorker.spectrum_to_display.connect(self.slot_spectrum_to_display)
-        self.multiPointWorker.signal_current_configuration.connect(
-            self.slot_current_configuration, type=Qt.BlockingQueuedConnection
-        )
-        self.multiPointWorker.signal_register_current_fov.connect(
-            self.slot_register_current_fov
-        )
-        # self.thread.finished.connect(self.thread.deleteLater)
-        self.thread.finished.connect(self.thread.quit)
-        # start the thread
-        self.thread.start()
+        
+        # Connect signals directly - they'll still work for direct method calls
+        #self.multiPointWorker.signal_detection_stats.connect(self.slot_detection_stats)
+        #self.multiPointWorker.image_to_display.connect(self.slot_image_to_display)
+        #self.multiPointWorker.image_to_display_multi.connect(self.slot_image_to_display_multi)
+        #self.multiPointWorker.spectrum_to_display.connect(self.slot_spectrum_to_display)
+        #self.multiPointWorker.signal_current_configuration.connect(self.slot_current_configuration)
+        #self.multiPointWorker.signal_register_current_fov.connect(self.slot_register_current_fov)
+        
+        try:
+            # Run the acquisition directly without threading
+            self.multiPointWorker.run()
+        except Exception as e:
+            print(f"Error in acquisition: {str(e)}")
+        finally:
+            # Always clean up properly
+            self._on_acquisition_completed()
 
     def _on_acquisition_completed(self):
         # restore the previous selected mode
@@ -3277,9 +3132,9 @@ class MultiPointController(QObject):
             for x, y, z in self.focus_map_storage:
                 self.autofocusController.focus_map_coords.append((x, y, z))
             self.autofocusController.use_focus_map = self.already_using_fmap
-        self.signal_current_configuration.emit(
-            self.configuration_before_running_multipoint
-        )
+        # self.signal_current_configuration.emit(
+        #     self.configuration_before_running_multipoint
+        # )
 
         # re-enable callback
         if self.camera_callback_was_enabled_before_multipoint:
@@ -3328,517 +3183,11 @@ class MultiPointController(QObject):
     def slot_register_current_fov(self, x_mm, y_mm):
         self.signal_register_current_fov.emit(x_mm, y_mm)
 
-
-class TrackingController(QObject):
-
-    signal_tracking_stopped = Signal()
-    image_to_display = Signal(np.ndarray)
-    image_to_display_multi = Signal(np.ndarray, int)
-    signal_current_configuration = Signal(Configuration)
-
-    def __init__(
-        self,
-        camera,
-        microcontroller,
-        navigationController,
-        configurationManager,
-        liveController,
-        autofocusController,
-        imageDisplayWindow,
-    ):
-        QObject.__init__(self)
-        self.camera = camera
-        self.microcontroller = microcontroller
-        self.navigationController = navigationController
-        self.configurationManager = configurationManager
-        self.liveController = liveController
-        self.autofocusController = autofocusController
-        #self.imageDisplayWindow = imageDisplayWindow
-        self.tracker = tracking.Tracker_Image()
-        # self.tracker_z = tracking.Tracker_Z()
-        # self.pid_controller_x = tracking.PID_Controller()
-        # self.pid_controller_y = tracking.PID_Controller()
-        # self.pid_controller_z = tracking.PID_Controller()
-
-        self.tracking_time_interval_s = 0
-
-        self.crop_width = CONFIG.Acquisition.CROP_WIDTH
-        self.crop_height = CONFIG.Acquisition.CROP_HEIGHT
-        self.display_resolution_scaling = (
-            CONFIG.Acquisition.IMAGE_DISPLAY_SCALING_FACTOR
-        )
-        self.counter = 0
-        self.experiment_ID = None
-        self.base_path = None
-        self.selected_configurations = []
-
-        self.flag_stage_tracking_enabled = True
-        self.flag_AF_enabled = False
-        self.flag_save_image = False
-        self.flag_stop_tracking_requested = False
-
-        self.pixel_size_um = None
-        self.objective = None
-
-    def start_tracking(self):
-
-        # save pre-tracking configuration
-        print("start tracking")
-        self.configuration_before_running_tracking = (
-            self.liveController.currentConfiguration
-        )
-
-        # stop live
-        if self.liveController.is_live:
-            self.was_live_before_tracking = True
-            self.liveController.stop_live()  # @@@ to do: also uncheck the live button
-        else:
-            self.was_live_before_tracking = False
-
-        # disable callback
-        if self.camera.callback_is_enabled:
-            self.camera_callback_was_enabled_before_tracking = True
-            self.camera.disable_callback()
-        else:
-            self.camera_callback_was_enabled_before_tracking = False
-
-        # hide roi selector
-        #self.imageDisplayWindow.hide_ROI_selector()
-
-        # run tracking
-        self.flag_stop_tracking_requested = False
-        # create a QThread object
-        try:
-            if self.thread.isRunning():
-                print("*** previous tracking thread is still running ***")
-                self.thread.terminate()
-                self.thread.wait()
-                print("*** previous tracking threaded manually stopped ***")
-        except:
-            pass
-        self.thread = QThread()
-        # create a worker object
-        self.trackingWorker = TrackingWorker(self)
-        # move the worker to the thread
-        self.trackingWorker.moveToThread(self.thread)
-        # connect signals and slots
-        self.thread.started.connect(self.trackingWorker.run)
-        self.trackingWorker.finished.connect(self._on_tracking_stopped)
-        self.trackingWorker.finished.connect(self.trackingWorker.deleteLater)
-        self.trackingWorker.finished.connect(self.thread.quit)
-        self.trackingWorker.image_to_display.connect(self.slot_image_to_display)
-        self.trackingWorker.image_to_display_multi.connect(
-            self.slot_image_to_display_multi
-        )
-        self.trackingWorker.signal_current_configuration.connect(
-            self.slot_current_configuration, type=Qt.BlockingQueuedConnection
-        )
-        # self.thread.finished.connect(self.thread.deleteLater)
-        self.thread.finished.connect(self.thread.quit)
-        # start the thread
-        self.thread.start()
-
-    def _on_tracking_stopped(self):
-
-        # restore the previous selected mode
-        self.signal_current_configuration.emit(
-            self.configuration_before_running_tracking
-        )
-
-        # re-enable callback
-        if self.camera_callback_was_enabled_before_tracking:
-            self.camera.enable_callback()
-            self.camera_callback_was_enabled_before_tracking = False
-
-        # re-enable live if it's previously on
-        if self.was_live_before_tracking:
-            self.liveController.start_live()
-
-        # show ROI selector
-        # self.imageDisplayWindow.show_ROI_selector()
-
-        # emit the acquisition finished signal to enable the UI
-        self.signal_tracking_stopped.emit()
-
-    def start_new_experiment(
-        self, experiment_ID
-    ):  # @@@ to do: change name to prepare_folder_for_new_experiment
-        # generate unique experiment ID
-        self.experiment_ID = (
-            experiment_ID + "_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%-S.%f")
-        )
-        self.recording_start_time = time.time()
-        # create a new folder
-        try:
-            os.mkdir(os.path.join(self.base_path, self.experiment_ID))
-            self.configurationManager.write_configuration(
-                os.path.join(self.base_path, self.experiment_ID) + "/configurations.xml"
-            )  # save the configuration for the experiment
-        except:
-            print("error in making a new folder")
-            pass
-
-    def set_selected_configurations(self, selected_configurations_name):
-        self.selected_configurations = []
-        for configuration_name in selected_configurations_name:
-            self.selected_configurations.append(
-                next(
-                    (
-                        config
-                        for config in self.configurationManager.configurations
-                        if config.name == configuration_name
-                    )
-                )
-            )
-
-    def toggle_stage_tracking(self, state):
-        self.flag_stage_tracking_enabled = state > 0
-        print("set stage tracking enabled to " + str(self.flag_stage_tracking_enabled))
-
-    def toggel_enable_af(self, state):
-        self.flag_AF_enabled = state > 0
-        print("set af enabled to " + str(self.flag_AF_enabled))
-
-    def toggel_save_images(self, state):
-        self.flag_save_image = state > 0
-        print("set save images to " + str(self.flag_save_image))
-
-    def set_base_path(self, path):
-        self.base_path = path
-
-    def stop_tracking(self):
-        self.flag_stop_tracking_requested = True
-        print("stop tracking requested")
-
-    def slot_image_to_display(self, image):
-        self.image_to_display.emit(image)
-
-    def slot_image_to_display_multi(self, image, illumination_source):
-        self.image_to_display_multi.emit(image, illumination_source)
-
-    def slot_current_configuration(self, configuration):
-        self.signal_current_configuration.emit(configuration)
-
-    def update_pixel_size(self, pixel_size_um):
-        self.pixel_size_um = pixel_size_um
-
-    def update_tracker_selection(self, tracker_str):
-        self.tracker.update_tracker_type(tracker_str)
-
-    def set_tracking_time_interval(self, time_interval):
-        self.tracking_time_interval_s = time_interval
-
-    def update_image_resizing_factor(self, image_resizing_factor):
-        self.image_resizing_factor = image_resizing_factor
-        print(
-            "update tracking image resizing factor to "
-            + str(self.image_resizing_factor)
-        )
-        self.pixel_size_um_scaled = self.pixel_size_um / self.image_resizing_factor
-
-    # PID-based tracking
-    """
-    def on_new_frame(self,image,frame_ID,timestamp):
-        # initialize the tracker when a new track is started
-        if self.tracking_frame_counter == 0:
-            # initialize the tracker
-            # initialize the PID controller
-            pass
-
-        # crop the image, resize the image 
-        # [to fill]
-
-        # get the location
-        [x,y] = self.tracker_xy.track(image)
-        z = self.track_z.track(image)
-
-        # get motion commands
-        dx = self.pid_controller_x.get_actuation(x)
-        dy = self.pid_controller_y.get_actuation(y)
-        dz = self.pid_controller_z.get_actuation(z)
-
-        # read current location from the microcontroller
-        current_stage_position = self.microcontroller.read_received_packet()
-
-        # save the coordinate information (possibly enqueue image for saving here to if a separate ImageSaver object is being used) before the next movement
-        # [to fill]
-
-        # generate motion commands
-        motion_commands = self.generate_motion_commands(self,dx,dy,dz)
-
-        # send motion commands
-        self.microcontroller.send_command(motion_commands)
-
-    def start_a_new_track(self):
-        self.tracking_frame_counter = 0
-    """
-
-
-class TrackingWorker(QObject):
-
-    finished = Signal()
-    image_to_display = Signal(np.ndarray)
-    image_to_display_multi = Signal(np.ndarray, int)
-    signal_current_configuration = Signal(Configuration)
-
-    def __init__(self, trackingController):
-        QObject.__init__(self)
-        self.trackingController = trackingController
-
-        self.camera = self.trackingController.camera
-        self.microcontroller = self.trackingController.microcontroller
-        self.navigationController = self.trackingController.navigationController
-        self.liveController = self.trackingController.liveController
-        self.autofocusController = self.trackingController.autofocusController
-        self.configurationManager = self.trackingController.configurationManager
-        self.imageDisplayWindow = self.trackingController.imageDisplayWindow
-        self.crop_width = self.trackingController.crop_width
-        self.crop_height = self.trackingController.crop_height
-        self.display_resolution_scaling = (
-            self.trackingController.display_resolution_scaling
-        )
-        self.counter = self.trackingController.counter
-        self.experiment_ID = self.trackingController.experiment_ID
-        self.base_path = self.trackingController.base_path
-        self.selected_configurations = self.trackingController.selected_configurations
-        self.tracker = trackingController.tracker
-
-        self.number_of_selected_configurations = len(self.selected_configurations)
-
-        # self.tracking_time_interval_s = self.trackingController.tracking_time_interval_s
-        # self.flag_stage_tracking_enabled = self.trackingController.flag_stage_tracking_enabled
-        # self.flag_AF_enabled = False
-        # self.flag_save_image = False
-        # self.flag_stop_tracking_requested = False
-
-        self.image_saver = ImageSaver_Tracking(
-            base_path=os.path.join(self.base_path, self.experiment_ID),
-            image_format="bmp",
-        )
-
-    def run(self):
-
-        tracking_frame_counter = 0
-        t0 = time.time()
-
-        # save metadata
-        self.txt_file = open(
-            os.path.join(self.base_path, self.experiment_ID, "metadata.txt"), "w+"
-        )
-        self.txt_file.write(
-            "t0: " + datetime.now().strftime("%Y-%m-%d_%H-%M-%-S.%f") + "\n"
-        )
-        self.txt_file.write("objective: " + self.trackingController.objective + "\n")
-        self.txt_file.close()
-
-        # create a file for logging
-        self.csv_file = open(
-            os.path.join(self.base_path, self.experiment_ID, "track.csv"), "w+"
-        )
-        self.csv_file.write(
-            "dt (s), x_stage (mm), y_stage (mm), z_stage (mm), x_image (mm), y_image(mm), image_filename\n"
-        )
-
-        # reset tracker
-        self.tracker.reset()
-
-        # get the manually selected roi
-        # init_roi = self.imageDisplayWindow.get_roi_bounding_box()
-        # self.tracker.set_roi_bbox(init_roi)
-
-        # tracking loop
-        while self.trackingController.flag_stop_tracking_requested == False:
-
-            print("tracking_frame_counter: " + str(tracking_frame_counter))
-            if tracking_frame_counter == 0:
-                is_first_frame = True
-            else:
-                is_first_frame = False
-
-            # timestamp
-            timestamp_last_frame = time.time()
-
-            # switch to the tracking config
-            config = self.selected_configurations[0]
-            self.signal_current_configuration.emit(config)
-            self.wait_till_operation_is_completed()
-
-            # do autofocus
-            if self.trackingController.flag_AF_enabled and tracking_frame_counter > 1:
-                # do autofocus
-                print(">>> autofocus")
-                self.autofocusController.autofocus()
-                self.autofocusController.wait_till_autofocus_has_completed()
-                print(">>> autofocus completed")
-
-            # get current position
-            x_stage = self.navigationController.x_pos_mm
-            y_stage = self.navigationController.y_pos_mm
-            z_stage = self.navigationController.z_pos_mm
-
-            # grab an image
-            config = self.selected_configurations[0]
-            if self.number_of_selected_configurations > 1:
-                self.signal_current_configuration.emit(config)
-                self.wait_till_operation_is_completed()
-                self.liveController.turn_on_illumination()  # keep illumination on for single configuration acqusition
-                self.wait_till_operation_is_completed()
-            t = time.time()
-            self.camera.send_trigger()
-            image = self.camera.read_frame()
-            if self.number_of_selected_configurations > 1:
-                self.liveController.turn_off_illumination()  # keep illumination on for single configuration acqusition
-            # image crop, rotation and flip
-            image = utils.crop_image(image, self.crop_width, self.crop_height)
-            image = np.squeeze(image)
-            image = utils.rotate_and_flip_image(
-                image,
-                rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
-                flip_image=CONFIG.FLIP_IMAGE,
-            )
-            # get image size
-            image_shape = image.shape
-            image_center = np.array([image_shape[1] * 0.5, image_shape[0] * 0.5])
-
-            # image the rest configurations
-            for config_ in self.selected_configurations[1:]:
-                self.signal_current_configuration.emit(config_)
-                self.wait_till_operation_is_completed()
-                self.liveController.turn_on_illumination()
-                self.wait_till_operation_is_completed()
-                self.camera.send_trigger()
-                image_ = self.camera.read_frame()
-                self.liveController.turn_off_illumination()
-                image_ = utils.crop_image(image_, self.crop_width, self.crop_height)
-                image_ = np.squeeze(image_)
-                image_ = utils.rotate_and_flip_image(
-                    image_,
-                    rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,
-                    flip_image=CONFIG.FLIP_IMAGE,
-                )
-                # display image
-                # self.image_to_display.emit(cv2.resize(image,(round(self.crop_width*self.display_resolution_scaling), round(self.crop_height*self.display_resolution_scaling)),cv2.INTER_LINEAR))
-                image_to_display_ = utils.crop_image(
-                    image_,
-                    round(
-                        self.crop_width * self.liveController.display_resolution_scaling
-                    ),
-                    round(
-                        self.crop_height
-                        * self.liveController.display_resolution_scaling
-                    ),
-                )
-                # self.image_to_display.emit(image_to_display_)
-                self.image_to_display_multi.emit(
-                    image_to_display_, config_.illumination_source
-                )
-                # save image
-                if self.trackingController.flag_save_image:
-                    if self.camera.is_color:
-                        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-                    self.image_saver.enqueue(
-                        image_, tracking_frame_counter, str(config_.name)
-                    )
-
-            # track
-            objectFound, centroid, rect_pts = self.tracker.track(
-                image, None, is_first_frame=is_first_frame
-            )
-            if objectFound == False:
-                print("")
-                break
-            in_plane_position_error_pixel = image_center - centroid
-            in_plane_position_error_mm = (
-                in_plane_position_error_pixel
-                * self.trackingController.pixel_size_um_scaled
-                / 1000
-            )
-            x_error_mm = in_plane_position_error_mm[0]
-            y_error_mm = in_plane_position_error_mm[1]
-
-            # # display the new bounding box and the image
-            # self.imageDisplayWindow.update_bounding_box(rect_pts)
-            # self.imageDisplayWindow.display_image(image)
-
-            # move
-            if self.trackingController.flag_stage_tracking_enabled:
-                x_correction_usteps = int(
-                    x_error_mm
-                    / (
-                        CONFIG.SCREW_PITCH_X_MM
-                        / CONFIG.FULLSTEPS_PER_REV_X
-                        / self.navigationController.x_microstepping
-                    )
-                )
-                y_correction_usteps = int(
-                    y_error_mm
-                    / (
-                        CONFIG.SCREW_PITCH_Y_MM
-                        / CONFIG.FULLSTEPS_PER_REV_Y
-                        / self.navigationController.y_microstepping
-                    )
-                )
-                self.microcontroller.move_x_usteps(
-                    CONFIG.TRACKING_MOVEMENT_SIGN_X * x_correction_usteps
-                )
-                self.microcontroller.move_y_usteps(
-                    CONFIG.TRACKING_MOVEMENT_SIGN_Y * y_correction_usteps
-                )
-
-            # save image
-            if self.trackingController.flag_save_image:
-                self.image_saver.enqueue(
-                    image, tracking_frame_counter, str(config.name)
-                )
-
-            # save position data
-            # self.csv_file.write('dt (s), x_stage (mm), y_stage (mm), z_stage (mm), x_image (mm), y_image(mm), image_filename\n')
-            self.csv_file.write(
-                str(t)
-                + ","
-                + str(x_stage)
-                + ","
-                + str(y_stage)
-                + ","
-                + str(z_stage)
-                + ","
-                + str(x_error_mm)
-                + ","
-                + str(y_error_mm)
-                + ","
-                + str(tracking_frame_counter)
-                + "\n"
-            )
-            if tracking_frame_counter % 100 == 0:
-                self.csv_file.flush()
-
-            # wait for movement to complete
-            self.wait_till_operation_is_completed()  # to do - make sure both x movement and y movement are complete
-
-            # wait till tracking interval has elapsed
-            while (
-                time.time() - timestamp_last_frame
-                < self.trackingController.tracking_time_interval_s
-            ):
-                time.sleep(0.005)
-
-            # increament counter
-            tracking_frame_counter = tracking_frame_counter + 1
-
-        # tracking terminated
-        self.csv_file.close()
-        self.image_saver.close()
-        self.finished.emit()
-
-    def wait_till_operation_is_completed(self):
-        while self.microcontroller.is_busy():
-            time.sleep(CONFIG.SLEEP_TIME_S)
-
-
 class ConfigurationManager(QObject):
     def __init__(self, filename=CONFIG.CHANNEL_CONFIGURATIONS_PATH):
         QObject.__init__(self)
         self.config_filename = filename
+        print(f"Illumination configurations file: {self.config_filename}")
         self.configurations = []
         self.read_configurations()
 
@@ -4074,19 +3423,55 @@ class PlateReaderNavigationController(QObject):
     def home_y(self):
         self.microcontroller.home_y()
 
+class WellSelector:
+    def __init__(self, rows=8, columns=12):
+        self.rows = rows
+        self.columns = columns
+        self.selected_wells = []  # Initialize as an empty list
+
+    def get_selected_wells(self):
+        list_of_selected_cells = []
+
+        if not self.selected_wells:
+            print("No wells selected, will call 'set_selected_wells' first")
+            self.set_selected_wells((0, 0), (self.rows, self.columns))
+            print("selected wells:", self.selected_wells)
+        for well in self.selected_wells:
+            row, col = well
+            list_of_selected_cells.append((row, col))
+        if list_of_selected_cells:
+            print("cells:", list_of_selected_cells)
+        else:
+            print("no cells")
+        return list_of_selected_cells
+
+    def set_selected_wells(self, start, stop):
+        """
+        Set the selected wells based on the start and stop coordinates
+        input:
+        start: tuple, (row, column)
+        stop: tuple, (row, column)
+
+        """
+        self.selected_wells = []
+        start_row, start_col = start
+        stop_row, stop_col = stop
+        for row in range(start_row, stop_row + 1):
+            for col in range(start_col, stop_col + 1):
+                self.selected_wells.append((row, col))
 
 class ScanCoordinates(object):
     def __init__(self):
         self.coordinates_mm = []
         self.name = []
-        self.well_selector = None
+        self.well_selector = WellSelector()
 
     def add_well_selector(self, well_selector):
         self.well_selector = well_selector
 
-    def get_selected_wells(self):
+    def get_selected_wells_to_coordinates(self):
         # get selected wells from the widget
-        selected_wells = self.well_selector.get_selected_cells()
+        selected_wells = self.well_selector.get_selected_wells()
         selected_wells = np.array(selected_wells)
         # clear the previous selection
         self.coordinates_mm = []
@@ -4182,7 +3567,7 @@ class LaserAutofocusController(QObject):
                         pixel_to_um = float(value_list[4])
                         x_reference = float(value_list[5])
                         self.initialize_manual(
-                            x_offset, y_offset, width, height, pixel_to_um, x_reference
+                            x_offset, y_offset, width, height, pixel_to_um, x_reference,write_to_cache=False
                         )
                         break
             except (FileNotFoundError, ValueError, IndexError) as e:
@@ -4224,6 +3609,9 @@ class LaserAutofocusController(QObject):
             x_reference - self.x_offset
         )  # self.x_reference is relative to the cropped region
         self.camera.set_ROI(self.x_offset, self.y_offset, self.width, self.height)
+        self.camera.set_exposure_time(CONFIG.FOCUS_CAMERA_EXPOSURE_TIME_MS)
+        self.camera.set_analog_gain(CONFIG.FOCUS_CAMERA_ANALOG_GAIN)
+
         self.is_initialized = True
 
     def initialize_auto(self):

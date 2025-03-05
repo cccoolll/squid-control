@@ -245,6 +245,7 @@ class Microcontroller:
     def turn_on_illumination(self):
         cmd = bytearray(self.tx_buffer_length)
         cmd[1] = CMD_SET.TURN_ON_ILLUMINATION
+        print("microcontroller: turn on illumination")
         self.send_command(cmd)
 
     def turn_off_illumination(self):
