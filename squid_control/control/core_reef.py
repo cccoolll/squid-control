@@ -2086,7 +2086,7 @@ class MultiPointWorker(QObject):
         self.signal_detection_stats.emit(self.detection_stats)
 
     def run(self):
-
+        self.time_point = 0 #NOTE: reset time point to 0
         self.start_time = time.perf_counter_ns()
         if self.camera.is_streaming == False:
             self.camera.start_streaming()
@@ -2125,6 +2125,7 @@ class MultiPointWorker(QObject):
                 break
             # run single time point
             self.run_single_time_point()
+            print("single time point done")
             self.time_point = self.time_point + 1
             # continous acquisition
             if self.dt == 0:
@@ -2149,11 +2150,12 @@ class MultiPointWorker(QObject):
                     if self.multiPointController.abort_acqusition_requested:
                         break
                     time.sleep(0.05)
-        self.processingHandler.processing_queue.join()
-        self.processingHandler.upload_queue.join()
+        #self.processingHandler.processing_queue.join()
+        #self.processingHandler.upload_queue.join()
         elapsed_time = time.perf_counter_ns() - self.start_time
         print("Time taken for acquisition/processing: " + str(elapsed_time / 10**9))
-        self.finished.emit()
+        #self.finished.emit()
+        
     def wait_till_operation_is_completed(self):
         while self.microcontroller.is_busy():
             time.sleep(CONFIG.SLEEP_TIME_S)
@@ -2842,6 +2844,7 @@ class MultiPointWorker(QObject):
         self.navigationController.enable_joystick_button_action = True
         print(time.time())
         print(time.time() - start)
+        return
         
 class MultiPointController(QObject):
 
