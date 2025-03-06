@@ -517,10 +517,10 @@ class SquidController:
         
     def return_stage(self):
         # move to scanning position
-        self.navigationController.move_x(30)
+        self.navigationController.move_x(30.26)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
-        self.navigationController.move_y(20)
+        self.navigationController.move_y(29.1)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
 
