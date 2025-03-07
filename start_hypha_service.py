@@ -281,7 +281,7 @@ class Microscope:
         Get an image from microscope
         Returns:the URL of the image
         """
-        gray_img = await self.squidController.snap_image(channel, intensity, exposure_time)
+        gray_img = self.squidController.snap_image(channel, intensity, exposure_time)
         print('The image is snapped')
         gray_img = gray_img.astype(np.uint8)
         # Resize the image to a standard size

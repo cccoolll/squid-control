@@ -349,6 +349,11 @@ class SquidController:
         self.multipointController.run_acquisition(location_list=location_list)
         print('Plate scan completed')
         self.is_busy = False
+    
+    def stop_plate_scan(self):
+        self.multipointController.abort_acqusition_requested = True
+        self.is_busy = False
+        print('Plate scan stopped')
         
     async def send_trigger_simulation(self, channel=0, intensity=100, exposure_time=100):
         print('Getting simulated image')
