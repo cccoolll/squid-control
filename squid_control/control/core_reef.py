@@ -2095,7 +2095,7 @@ class MultiPointWorker(QObject):
             # use scanCoordinates for well plates or regular multipoint scan
             if self.multiPointController.scanCoordinates != None:
                 # use scan coordinates for the scan
-                self.multiPointController.scanCoordinates.get_selected_wells()
+                self.multiPointController.scanCoordinates.get_selected_wells_to_coordinates()
                 self.scan_coordinates_mm = (
                     self.multiPointController.scanCoordinates.coordinates_mm
                 )
@@ -3052,17 +3052,13 @@ class MultiPointController(QObject):
                 )
             )
 
-    def run_acquisition(self, location_list=None, scanCoordinates=None): 
+    def run_acquisition(self, location_list=None): 
         print('start acquisition')
         self.tile_stitchers = {}
         print(str(self.Nt) + '_' + str(self.NX) + '_' + str(self.NY) + '_' + str(self.NZ))
         if location_list is not None:
             self.location_list = location_list
-        else:
-            self.location_list = None
         
-        if scanCoordinates is None:
-            self.scanCoordinates = None
 
         self.abort_acqusition_requested = False
 
@@ -3431,10 +3427,11 @@ class WellSelector:
         self.rows = rows
         self.columns = columns
         self.selected_wells = []  # Initialize as an empty list
+        self.selected_wells_names = []
 
     def get_selected_wells(self):
         list_of_selected_cells = []
-
+        self.selected_wells_names = []
         if not self.selected_wells:
             print("No wells selected, will call 'set_selected_wells' first")
             self.set_selected_wells((0, 0), (self.rows, self.columns))
@@ -3442,6 +3439,7 @@ class WellSelector:
         for well in self.selected_wells:
             row, col = well
             list_of_selected_cells.append((row, col))
+            self.selected_wells_names.append(chr(ord("A") + row) + str(col + 1))
         if list_of_selected_cells:
             print("cells:", list_of_selected_cells)
         else:
