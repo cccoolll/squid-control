@@ -2124,7 +2124,10 @@ class MultiPointWorker(QObject):
             if self.multiPointController.abort_acqusition_requested:
                 break
             # run single time point
-            self.run_single_time_point()
+            try:
+                self.run_single_time_point()
+            except Exception as e:
+                print("Error in run_single_time_point: " + str(e))
             print("single time point done")
             self.time_point = self.time_point + 1
             # continous acquisition
@@ -2385,6 +2388,7 @@ class MultiPointWorker(QObject):
                                     )
                                     print(
                                         "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! laser CONFIG.AF failed !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+                                        raise Exception("laser CONFIG.AF failed")
                                     )
 
                         if self.NZ > 1:
