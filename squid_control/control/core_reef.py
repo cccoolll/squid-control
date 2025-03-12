@@ -2387,9 +2387,9 @@ class MultiPointWorker(QObject):
                                         self.microscope.laserAutofocusController.image,
                                     )
                                     print(
-                                        "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! laser CONFIG.AF failed !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-                                        raise Exception("laser CONFIG.AF failed")
-                                    )
+                                        "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! laser CONFIG.AF failed !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                                    raise Exception("laser CONFIG.AF failed")
+                                    
 
                         if self.NZ > 1:
                             # move to bottom of the z stack
