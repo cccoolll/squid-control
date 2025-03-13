@@ -276,12 +276,12 @@ class Microscope:
         return image_base64  
 
     @schema_function(skip_self=True)
-    def snap(self, exposure_time: int=Field(100, description="Exposure time, in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
+    async def snap(self, exposure_time: int=Field(100, description="Exposure time, in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
         """
         Get an image from microscope
-        Returns:the URL of the image
+        Returns: the URL of the image
         """
-        gray_img = self.squidController.snap_image(channel, intensity, exposure_time)
+        gray_img = await self.squidController.snap_image(channel, intensity, exposure_time)
         print('The image is snapped')
         gray_img = gray_img.astype(np.uint8)
         # Resize the image to a standard size
