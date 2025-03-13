@@ -2232,6 +2232,7 @@ class MultiPointWorker(QObject):
                 if len(coordiante_mm) == 3:
                     time.sleep(CONFIG.SCAN_STABILIZATION_TIME_MS_Z / 1000)
                 # add '_' to the coordinate name
+                original_coordiante_name = coordiante_name
                 coordiante_name = coordiante_name + "_"
 
             self.x_scan_direction = 1
@@ -2632,7 +2633,7 @@ class MultiPointWorker(QObject):
                             # add the coordinate of the current location
                             new_row = pd.DataFrame(
                                 {
-                                    "region": coordiante_name,
+                                    "region": original_coordiante_name,
                                     "i": [self.NY - 1 - i if sgn_i == -1 else i],
                                     "j": [j if sgn_j == 1 else self.NX - 1 - j],
                                     "k": [k],
