@@ -222,5 +222,3 @@ async def example_usage():
 if __name__ == "__main__":
     asyncio.run(example_usage())
 
-# Created/Modified files during execution:
-print(["step2_get_tiles.py", "example_tile.png", "example_region.png"])

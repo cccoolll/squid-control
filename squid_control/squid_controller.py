@@ -332,11 +332,10 @@ class SquidController:
                 exit()
     
     
-    def plate_scan(self,well_plate_type='96', illuminate_channels=['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex'], do_contrast_autofocus=False,do_reflection_af=True, scanning_zone=[(0,0),(2,2)],action_ID='testPlateScan'):
+    def plate_scan(self, well_plate_type='96', illuminate_channels=['BF LED matrix full', 'Fluorescence 488 nm Ex', 'Fluorescence 561 nm Ex'], do_contrast_autofocus=False, do_reflection_af=True, scanning_zone=[(0,0),(2,2)], action_ID='testPlateScan'):
         self.move_to_scaning_position()
-        self.scanCoordinates.well_selector.set_selected_wells(scanning_zone[0] , scanning_zone[1])
+        self.scanCoordinates.well_selector.set_selected_wells(scanning_zone[0], scanning_zone[1])
         self.scanCoordinates.get_selected_wells_to_coordinates()
-        location_list = self.scanCoordinates.coordinates_mm
         self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)
         self.multipointController.set_selected_configurations(illuminate_channels)
         self.multipointController.do_autofocus = do_contrast_autofocus
@@ -346,9 +345,14 @@ class SquidController:
         self.multipointController.start_new_experiment(action_ID)
         self.is_busy = True
         print('Starting plate scan')
-        self.multipointController.run_acquisition(location_list=location_list)
+        self.multipointController.run_acquisition()
         print('Plate scan completed')
         self.is_busy = False
+    
+    def stop_plate_scan(self):
+        self.multipointController.abort_acqusition_requested = True
+        self.is_busy = False
+        print('Plate scan stopped')
         
     async def send_trigger_simulation(self, channel=0, intensity=100, exposure_time=100):
         print('Getting simulated image')
@@ -379,6 +383,9 @@ class SquidController:
         
     def init_laser_autofocus(self):
         self.laserAutofocusController.initialize_auto()
+
+    def do_laser_autofocus(self):
+        self.laserAutofocusController.move_to_target(0)
     
     def measure_displacement(self):
         self.laserAutofocusController.measure_displacement()     
@@ -514,10 +521,10 @@ class SquidController:
         
     def return_stage(self):
         # move to scanning position
-        self.navigationController.move_x(30)
+        self.navigationController.move_x(30.26)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
-        self.navigationController.move_y(20)
+        self.navigationController.move_y(29.1)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
 

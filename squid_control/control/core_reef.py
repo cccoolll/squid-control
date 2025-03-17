@@ -2086,7 +2086,7 @@ class MultiPointWorker(QObject):
         self.signal_detection_stats.emit(self.detection_stats)
 
     def run(self):
-
+        self.time_point = 0 #NOTE: reset time point to 0
         self.start_time = time.perf_counter_ns()
         if self.camera.is_streaming == False:
             self.camera.start_streaming()
@@ -2095,7 +2095,7 @@ class MultiPointWorker(QObject):
             # use scanCoordinates for well plates or regular multipoint scan
             if self.multiPointController.scanCoordinates != None:
                 # use scan coordinates for the scan
-                self.multiPointController.scanCoordinates.get_selected_wells()
+                self.multiPointController.scanCoordinates.get_selected_wells_to_coordinates()
                 self.scan_coordinates_mm = (
                     self.multiPointController.scanCoordinates.coordinates_mm
                 )
@@ -2124,7 +2124,11 @@ class MultiPointWorker(QObject):
             if self.multiPointController.abort_acqusition_requested:
                 break
             # run single time point
-            self.run_single_time_point()
+            try:
+                self.run_single_time_point()
+            except Exception as e:
+                print("Error in run_single_time_point: " + str(e))
+            print("single time point done")
             self.time_point = self.time_point + 1
             # continous acquisition
             if self.dt == 0:
@@ -2149,11 +2153,12 @@ class MultiPointWorker(QObject):
                     if self.multiPointController.abort_acqusition_requested:
                         break
                     time.sleep(0.05)
-        self.processingHandler.processing_queue.join()
-        self.processingHandler.upload_queue.join()
+        #self.processingHandler.processing_queue.join()
+        #self.processingHandler.upload_queue.join()
         elapsed_time = time.perf_counter_ns() - self.start_time
         print("Time taken for acquisition/processing: " + str(elapsed_time / 10**9))
-        self.finished.emit()
+        #self.finished.emit()
+        
     def wait_till_operation_is_completed(self):
         while self.microcontroller.is_busy():
             time.sleep(CONFIG.SLEEP_TIME_S)
@@ -2227,6 +2232,7 @@ class MultiPointWorker(QObject):
                 if len(coordiante_mm) == 3:
                     time.sleep(CONFIG.SCAN_STABILIZATION_TIME_MS_Z / 1000)
                 # add '_' to the coordinate name
+                original_coordiante_name = coordiante_name
                 coordiante_name = coordiante_name + "_"
 
             self.x_scan_direction = 1
@@ -2382,8 +2388,9 @@ class MultiPointWorker(QObject):
                                         self.microscope.laserAutofocusController.image,
                                     )
                                     print(
-                                        "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! laser CONFIG.AF failed !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-                                    )
+                                        "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! laser CONFIG.AF failed !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                                    raise Exception("laser CONFIG.AF failed")
+                                    
 
                         if self.NZ > 1:
                             # move to bottom of the z stack
@@ -2626,6 +2633,7 @@ class MultiPointWorker(QObject):
                             # add the coordinate of the current location
                             new_row = pd.DataFrame(
                                 {
+                                    "region": original_coordiante_name,
                                     "i": [self.NY - 1 - i if sgn_i == -1 else i],
                                     "j": [j if sgn_j == 1 else self.NX - 1 - j],
                                     "k": [k],
@@ -2842,6 +2850,7 @@ class MultiPointWorker(QObject):
         self.navigationController.enable_joystick_button_action = True
         print(time.time())
         print(time.time() - start)
+        return
         
 class MultiPointController(QObject):
 
@@ -3049,17 +3058,13 @@ class MultiPointController(QObject):
                 )
             )
 
-    def run_acquisition(self, location_list=None, scanCoordinates=None): 
+    def run_acquisition(self, location_list=None): 
         print('start acquisition')
         self.tile_stitchers = {}
         print(str(self.Nt) + '_' + str(self.NX) + '_' + str(self.NY) + '_' + str(self.NZ))
         if location_list is not None:
             self.location_list = location_list
-        else:
-            self.location_list = None
         
-        if scanCoordinates is None:
-            self.scanCoordinates = None
 
         self.abort_acqusition_requested = False
 
@@ -3428,10 +3433,11 @@ class WellSelector:
         self.rows = rows
         self.columns = columns
         self.selected_wells = []  # Initialize as an empty list
+        self.selected_wells_names = []
 
     def get_selected_wells(self):
         list_of_selected_cells = []
-
+        self.selected_wells_names = []
         if not self.selected_wells:
             print("No wells selected, will call 'set_selected_wells' first")
             self.set_selected_wells((0, 0), (self.rows, self.columns))
@@ -3439,6 +3445,7 @@ class WellSelector:
         for well in self.selected_wells:
             row, col = well
             list_of_selected_cells.append((row, col))
+            self.selected_wells_names.append(chr(ord("A") + row) + str(col + 1))
         if list_of_selected_cells:
             print("cells:", list_of_selected_cells)
         else:
