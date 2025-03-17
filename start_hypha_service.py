@@ -20,6 +20,9 @@ from pydantic import Field, BaseModel
 from typing import List, Optional
 from hypha_tools.hypha_storage import HyphaDataStore
 from hypha_tools.chatbot.aask import aask
+import base64
+from pydantic import Field
+from hypha_rpc.utils.schema import schema_function
 
 dotenv.load_dotenv()  
 ENV_FILE = dotenv.find_dotenv()  
@@ -27,7 +30,7 @@ if ENV_FILE:
     dotenv.load_dotenv(ENV_FILE)  
 
 class Microscope:
-    def __init__(self, is_simulation):
+    def __init__(self, is_simulation, is_local):
         self.login_required = True
         self.current_x = 0
         self.current_y = 0
@@ -38,6 +41,7 @@ class Microscope:
         self.is_illumination_on = False
         self.chatbot_service_url = None
         self.is_simulation = is_simulation
+        self.is_local = is_local
         self.squidController = SquidController(is_simulation=is_simulation)
         self.dx = 1
         self.dy = 1
@@ -67,7 +71,7 @@ class Microscope:
         self.authorized_emails = self.load_authorized_emails(self.login_required)
         print(f"Authorized emails: {self.authorized_emails}")
         self.datastore = None
-        self.server_url = "https://hypha.aicell.io/"
+        self.server_url = "http://reef.dyn.scilifelab.se:9527" if is_local else "https://hypha.aicell.io/"
 
     def load_authorized_emails(self, login_required=True):
         if login_required:
@@ -102,9 +106,11 @@ class Microscope:
             ), "You don't have permission to use the chatbot, please sign up and wait for approval"
         return "pong"
 
-    def move_by_distance(self, x, y, z, context=None):
+    @schema_function(skip_self=True)
+    def move_by_distance(self, x: float=Field(1.0, description="disntance through X axis, unit: milimeter"), y: float=Field(1.0, description="disntance through Y axis, unit: milimeter"), z: float=Field(1.0, description="disntance through Z axis, unit: milimeter"), context=None):
         """
-        Move the stage by a distance in x, y, z axis.
+        Move the stage by a distances in x, y, z axis
+        Returns: Result information
         """
         is_success, x_pos, y_pos, z_pos, x_des, y_des, z_des = self.squidController.move_by_distance_limited(x, y, z)
         if is_success:
@@ -124,9 +130,11 @@ class Microscope:
                 "attempted_position": {"x": x_des, "y": y_des, "z": z_des}
             }
 
-    def move_to_position(self, x, y, z, context=None):
+    @schema_function(skip_self=True)
+    def move_to_position(self, x:float=Field(1.0,description="Unit: milimeter"), y:float=Field(1.0,description="Unit: milimeter"), z:float=Field(1.0,description="Unit: milimeter"), context=None):
         """
-        Move the stage to a position in x, y, z axis.
+        Move the stage to a position in x, y, z axis
+        Returns: The result of the movement
         """
         self.get_status()
         initial_x = self.parameters['current_x']
@@ -170,15 +178,18 @@ class Microscope:
             "final_position": {"x": x_pos, "y": y_pos, "z": z_pos}
         }
 
+    @schema_function(skip_self=True)
     def get_status(self, context=None):
         """
-        Get the current status of the microscope.
+        Get the current status of the microscope
+        Returns: Status of the microscope
         """
         current_x, current_y, current_z, current_theta = self.squidController.navigationController.update_pos(microcontroller=self.squidController.microcontroller)
         is_illumination_on = self.squidController.liveController.illumination_on
         scan_channel = self.squidController.multipointController.selected_configurations
-
+        is_busy = self.squidController.is_busy
         self.parameters = {
+            'is_busy': is_busy,
             'current_x': current_x,
             'current_y': current_y,
             'current_z': current_z,
@@ -196,11 +207,11 @@ class Microscope:
         }
         return self.parameters
 
-    def update_parameters_from_client(self, new_parameters, context=None):
+    @schema_function(skip_self=True)
+    def update_parameters_from_client(self, new_parameters: dict=Field(description="the dictionary parameters user want to update"), context=None):
         """
-        Update the parameters from the client side.
-        Returns:
-            dict: Updated parameters in the microscope.
+        Update the parameters from the client side
+        Returns: Updated parameters in the microscope
         """
         if self.parameters is None:
             self.parameters = {}
@@ -221,10 +232,11 @@ class Microscope:
 
         return {"success": True, "message": "Parameters updated successfully.", "updated_parameters": new_parameters}
 
-
-    async def one_new_frame(self, exposure_time, channel, intensity, context=None):
+    @schema_function(skip_self=True)
+    async def one_new_frame(self, exposure_time: int=Field(100, description="Exposure time in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Light intensity"), context=None):
         """
-        Get the current frame from the camera as a grayscale image.
+        Get an image from the microscope
+        Returns: A base64 encoded image
         """
         gray_img = await self.squidController.snap_image(channel, intensity, exposure_time)
 
@@ -233,6 +245,8 @@ class Microscope:
         if max_val > min_val:  # Avoid division by zero if the image is completely uniform
             gray_img = (gray_img - min_val) * (255 / (max_val - min_val))
             gray_img = gray_img.astype(np.uint8)  # Convert to 8-bit image
+            #resize to 512x512
+            resized_img = cv2.resize(gray_img, (512, 512))
         else:
             gray_img = np.zeros((512, 512), dtype=np.uint8)  # If no variation, return a black image
 
@@ -242,6 +256,7 @@ class Microscope:
         buffer = io.BytesIO()  
         gray_img.save(buffer, format="PNG")  
         buffer.seek(0) 
+        image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
         
         #update the current illumination channel and intensity
         if channel == 0:
@@ -258,11 +273,13 @@ class Microscope:
             self.F730_intensity_exposure = [intensity, exposure_time]
         self.get_status()
         
-        return buffer  
+        return image_base64  
 
-    async def snap(self, exposure_time, channel, intensity, context=None):
+    @schema_function(skip_self=True)
+    async def snap(self, exposure_time: int=Field(100, description="Exposure time, in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
         """
-        Get the current frame from the camera as a grayscale image.
+        Get an image from microscope
+        Returns: the URL of the image
         """
         gray_img = await self.squidController.snap_image(channel, intensity, exposure_time)
         print('The image is snapped')
@@ -295,87 +312,142 @@ class Microscope:
             
         return data_url
 
+    @schema_function(skip_self=True)
     def open_illumination(self, context=None):
         """
-        Turn on the bright field illumination.
+        Turn on the illumination
+        Returns: The message of the action
         """
         self.squidController.liveController.turn_on_illumination()
         print('Bright field illumination turned on.')
+        return 'Bright field illumination turned on.'
 
+    @schema_function(skip_self=True)
     def close_illumination(self, context=None):
         """
-        Turn off the bright field illumination.
+        Turn off the illumination
+        Returns: The message of the action
         """
         self.squidController.liveController.turn_off_illumination()
         print('Bright field illumination turned off.')
+        return 'Bright field illumination turned off.'
 
-    def scan_well_plate(self, context=None):
+    @schema_function(skip_self=True)
+    def scan_well_plate(self, well_plate_type: str=Field("96", description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), illuminate_channels: List[str]=Field(default_factory=lambda: ['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex'], description="Light source to illuminate the well plate"), do_contrast_autofocus: bool=Field(False, description="Whether to do contrast based autofocus"), do_reflection_af: bool=Field(True, description="Whether to do reflection based autofocus"), scanning_zone: List[tuple]=Field(default_factory=lambda: [(0,0),(0,0)], description="The scanning zone of the well plate, for 91 well plate, it should be[(0,0),(7,11)] "), action_ID: str=Field('testPlateScan', description="The ID of the action"), context=None):
         """
-        Scan the well plate according to the pre-defined position list.
+        Scan the well plate according to the pre-defined position list
+        Returns: The message of the action
         """
+        if illuminate_channels is None:
+            illuminate_channels = ['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex']
         print("Start scanning well plate")
-        self.squidController.scan_well_plate(action_ID='Test')
+        self.squidController.plate_scan(well_plate_type, illuminate_channels, do_contrast_autofocus, do_reflection_af, scanning_zone, action_ID)
+        print("Well plate scanning completed")
+        return "Well plate scanning completed"
 
-    def set_illumination(self, channel, intensity, context=None):
+    @schema_function(skip_self=True)
+    def set_illumination(self, channel: int=Field(0, description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
         """
-        Set the intensity of the bright field illumination.
+        Set the intensity of light source
+        Returns:A string message
         """
         self.squidController.liveController.set_illumination(channel, intensity)
         print(f'The intensity of the channel {channel} illumination is set to {intensity}.')
-
-    def set_camera_exposure(self, exposure_time, context=None):
+        return f'The intensity of the channel {channel} illumination is set to {intensity}.'
+    
+    @schema_function(skip_self=True)
+    def set_camera_exposure(self, exposure_time: int=Field(100, description="Exposure time in milliseconds"), context=None):
         """
-        Set the exposure time of the camera.
+        Set the exposure time of the camera
+        Returns: A string message
         """
         self.squidController.camera.set_exposure_time(exposure_time)
         print(f'The exposure time of the camera is set to {exposure_time}.')
 
+    @schema_function(skip_self=True)
     def stop_scan(self, context=None):
         """
-        Stop the well plate scanning.
+        Stop the scanning of the well plate.
+        Returns: A string message
         """
         self.squidController.liveController.stop_live()
+        self.multipointController.abort_acqusition_requested=True
         print("Stop scanning well plate")
+        return "Stop scanning well plate"
 
+    @schema_function(skip_self=True)
     def home_stage(self, context=None):
         """
-        Home the stage in z, y, and x axis.
+        Move the stage to home/zero position
+        Returns: A string message
         """
         self.squidController.home_stage()
         print('The stage moved to home position in z, y, and x axis')
         return 'The stage moved to home position in z, y, and x axis'
-
+    
+    @schema_function(skip_self=True)
+    def return_stage(self,context=None):
+        """
+        Move the stage to the initial position for imaging.
+        Returns: A string message
+        """
+        self.squidController.return_stage()
+        print('The stage moved to the initial position')
+        return 'The stage moved to the initial position'
+    
+    @schema_function(skip_self=True)
     def move_to_loading_position(self, context=None):
         """
         Move the stage to the loading position.
+        Returns: A  string message
         """
         self.squidController.slidePositionController.move_to_slide_loading_position()
         print('The stage moved to loading position')
+        return 'The stage moved to loading position'
 
+    @schema_function(skip_self=True)
     def auto_focus(self, context=None):
         """
-        Auto focus the camera.
+        Do contrast-based autofocus
+        Returns: A string message
         """
         self.squidController.do_autofocus()
         print('The camera is auto-focused')
+    
+    @schema_function(skip_self=True)
+    def do_laser_autofocus(self, context=None):
+        """
+        Do reflection-based autofocus
+        Returns: A string message
+        """
+        try:
+            self.squidController.do_laser_autofocus()
+        except:
+            raise Exception("The laser autofocus failed.")
+        
+        print('The camera is auto-focused')
+        return 'The camera is auto-focused'
 
-    def navigate_to_well(self, row, col, wellplate_type, context=None):
+    @schema_function(skip_self=True)
+    def navigate_to_well(self, row: str=Field('A', description="Row number of the well position (e.g., 'A')"), col: int=Field(1, description="Column number of the well position"), wellplate_type: str=Field('24', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), context=None):
         """
         Navigate to the specified well position in the well plate.
+        Returns: A string message
         """
         if wellplate_type is None:
             wellplate_type = '96'
-        self.squidController.platereader_move_to_well(row, col, wellplate_type)
+        self.squidController.move_to_well(row, col, wellplate_type)
         print(f'The stage moved to well position ({row},{col})')
 
+    @schema_function(skip_self=True)
     def get_chatbot_url(self, context=None):
         """
-        Get the chatbot service URL. Since the url chatbot service is not fixed, we provide this function to get the chatbot service URL.
+        Get the URL of the chatbot service.
+        Returns: A URL string
         """
         print(f"chatbot_service_url: {self.chatbot_service_url}")
         return self.chatbot_service_url
-
-    # Chatbot extension
+    
     class MoveByDistanceInput(BaseModel):
         """Move the stage by a distance in x, y, z axis."""
         x: float = Field(0, description="Move the stage along X axis")
@@ -416,6 +488,9 @@ class Microscope:
 
     class HomeStageInput(BaseModel):
         """Home the stage in z, y, and x axis."""
+
+    class ReturnStageInput(BaseModel):
+        """Return the stage to the initial position."""
 
     class ImageInfo(BaseModel):
         """Image information."""
@@ -468,11 +543,16 @@ class Microscope:
         response = self.home_stage(context)
         return {"result": response}
 
+    def return_stage_schema(self, context=None):
+        response = self.return_stage(context)
+        return {"result": response}
+
     def get_schema(self, context=None):
         return {
             "move_by_distance": self.MoveByDistanceInput.model_json_schema(),
             "move_to_position": self.MoveToPositionInput.model_json_schema(),
             "home_stage": self.HomeStageInput.model_json_schema(),
+            "return_stage": self.ReturnStageInput.model_json_schema(),
             "auto_focus": self.AutoFocusInput.model_json_schema(),
             "snap_image": self.SnapImageInput.model_json_schema(),
             "inspect_tool": self.InspectToolInput.model_json_schema(),
@@ -481,7 +561,7 @@ class Microscope:
         }
 
     async def start_hypha_service(self, server, service_id):
-        await server.register_service(
+        svc = await server.register_service(
             {
                 "name": "Microscope Control Service",
                 "id": service_id,
@@ -500,9 +580,12 @@ class Microscope:
                 "scan_well_plate": self.scan_well_plate,
                 "stop_scan": self.stop_scan,
                 "home_stage": self.home_stage,
+                "return_stage": self.return_stage,
+                "navigate_to_well": self.navigate_to_well,
                 "move_to_position": self.move_to_position,
                 "move_to_loading_position": self.move_to_loading_position,
                 "auto_focus": self.auto_focus,
+                "do_laser_autofocus": self.do_laser_autofocus,
                 "get_status": self.get_status,
                 "update_parameters_from_client": self.update_parameters_from_client,
                 "get_chatbot_url": self.get_chatbot_url,
@@ -512,6 +595,11 @@ class Microscope:
         print(
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
+
+        print(f'You can use this service using the service id: {svc.id}')
+        id = svc.id.split(":")[1]
+
+        print(f"You can also test the service via the HTTP proxy: {self.server_url}/{server.config.workspace}/services/{id}")
 
     async def start_chatbot_service(self, server, service_id):
         chatbot_extension = {
@@ -529,6 +617,7 @@ class Microscope:
                 "auto_focus": self.auto_focus_schema,
                 "snap_image": self.snap_image_schema,
                 "home_stage": self.home_stage_schema,
+                "return_stage": self.return_stage_schema,
                 "move_to_loading_position": self.move_to_loading_position,
                 "navigate_to_well": self.navigate_to_well_schema,
                 "inspect_tool": self.inspect_tool_schema,
@@ -540,22 +629,31 @@ class Microscope:
         print(f"Extension service registered with id: {svc.id}, you can visit the service at:\n {self.chatbot_service_url}")
 
     async def setup(self):
-        try:  
-            token = os.environ.get("SQUID_WORKSPACE_TOKEN")  
-        except:  
-            token = await login({"server_url": self.server_url})
-            
-        server = await connect_to_server(
-            {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
-        )
-        if self.is_simulation:
-            await self.start_hypha_service(server, service_id="microscope-control-squid-simulation1")
-            datastore_id = 'data-store-simulated-microscope1'
-            chatbot_id = "squid-control-chatbot-simulated-microscope1"
+        if self.is_local:
+            #no toecken needed for local server
+            token = None
+            server = await connect_to_server(
+                {"server_url": self.server_url, "token": token,  "ping_interval": None}
+            )
         else:
-            await self.start_hypha_service(server, service_id="microscope-control-squid-real-microscope")
-            datastore_id = 'data-store-real-microscope'
-            chatbot_id = "squid-control-chatbot-real-microscope"
+            try:  
+                token = os.environ.get("SQUID_WORKSPACE_TOKEN")  
+            except:  
+                token = await login({"server_url": self.server_url})
+            
+            server = await connect_to_server(
+                {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
+            )
+        if self.is_simulation:
+            service_id_suffix = "_local" if self.is_local else ""
+            await self.start_hypha_service(server, service_id=f"microscope-control-squid-simulation-reef{service_id_suffix}")
+            datastore_id = f'data-store-simulated-microscope-reef{service_id_suffix}'
+            chatbot_id = f"squid-control-chatbot-simulated-microscope-reef{service_id_suffix}"
+        else:
+            service_id_suffix = "_local" if self.is_local else ""
+            await self.start_hypha_service(server, service_id=f"microscope-control-squid-real-microscope-reef{service_id_suffix}")
+            datastore_id = f'data-store-real-microscope{service_id_suffix}'
+            chatbot_id = f"squid-control-chatbot-real-microscope-reef{service_id_suffix}"
         self.datastore = HyphaDataStore()
         try:
             await self.datastore.setup(server, service_id=datastore_id)
@@ -585,6 +683,13 @@ if __name__ == "__main__":
         default=False,
         help="Run in simulation mode (default: True)"
     )
+    parser.add_argument(
+        "--local",
+        dest="local",
+        action="store_true",
+        default=False,
+        help="Run with local server URL (default: False)"
+    )
     parser.add_argument("--verbose", "-v", action="count")
     args = parser.parse_args()
 
@@ -593,7 +698,7 @@ if __name__ == "__main__":
     else:
         logging.basicConfig(level=logging.INFO)
 
-    microscope = Microscope(is_simulation=args.simulation)
+    microscope = Microscope(is_simulation=args.simulation, is_local=args.local)
 
     loop = asyncio.get_event_loop()
 
