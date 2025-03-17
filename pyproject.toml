@@ -37,7 +37,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent"
 ]
-scripts = { "squid-control" = "squid_control.__main__:main" }
 
 [project.optional-dependencies]
 all = [
