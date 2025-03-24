@@ -646,14 +646,14 @@ class Microscope:
             )
         if self.is_simulation:
             service_id_suffix = "_local" if self.is_local else ""
-            await self.start_hypha_service(server, service_id=f"microscope-control-squid-simulation-reef{service_id_suffix}")
-            datastore_id = f'data-store-simulated-microscope-reef{service_id_suffix}'
-            chatbot_id = f"squid-control-chatbot-simulated-microscope-reef{service_id_suffix}"
+            await self.start_hypha_service(server, service_id=f"microscope-control-squid-simulation-k8s{service_id_suffix}")
+            datastore_id = f'data-store-simulated-microscope-k8s{service_id_suffix}'
+            chatbot_id = f"squid-control-chatbot-simulated-microscope-k8s{service_id_suffix}"
         else:
             service_id_suffix = "_local" if self.is_local else ""
-            await self.start_hypha_service(server, service_id=f"microscope-control-squid-real-microscope-reef{service_id_suffix}")
+            await self.start_hypha_service(server, service_id=f"microscope-control-squid-real-microscope-k8s{service_id_suffix}")
             datastore_id = f'data-store-real-microscope{service_id_suffix}'
-            chatbot_id = f"squid-control-chatbot-real-microscope-reef{service_id_suffix}"
+            chatbot_id = f"squid-control-chatbot-real-microscope-k8s{service_id_suffix}"
         self.datastore = HyphaDataStore()
         try:
             await self.datastore.setup(server, service_id=datastore_id)
