@@ -429,7 +429,7 @@ class Microscope:
         return 'The camera is auto-focused'
 
     @schema_function(skip_self=True)
-    def navigate_to_well(self, row: str=Field('A', description="Row number of the well position (e.g., 'A')"), col: int=Field(1, description="Column number of the well position"), wellplate_type: str=Field('24', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), context=None):
+    def navigate_to_well(self, row: str=Field('A', description="Row number of the well position (e.g., 'A')"), col: int=Field(1, description="Column number of the well position"), wellplate_type: str=Field('96', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), context=None):
         """
         Navigate to the specified well position in the well plate.
         Returns: A string message

@@ -2389,7 +2389,7 @@ class MultiPointWorker(QObject):
                                     )
                                     print(
                                         "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! laser CONFIG.AF failed !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-                                    raise Exception("laser CONFIG.AF failed")
+                                    #raise Exception("laser CONFIG.AF failed")
                                     
 
                         if self.NZ > 1:
