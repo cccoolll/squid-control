@@ -136,6 +136,11 @@ class Microscope:
         """Reset the status of a specific task"""
         if task_name in self.task_status:
             self.task_status[task_name] = "not_started"
+    
+    def reset_all_task_status(self):
+        """Reset the status of all tasks"""
+        for task_name in self.task_status:
+            self.task_status[task_name] = "not_started"
 
     @schema_function(skip_self=True)
     def move_by_distance(self, x: float=Field(1.0, description="disntance through X axis, unit: milimeter"), y: float=Field(1.0, description="disntance through Y axis, unit: milimeter"), z: float=Field(1.0, description="disntance through Z axis, unit: milimeter"), context=None):
@@ -781,7 +786,8 @@ class Microscope:
                 "get_chatbot_url": self.get_chatbot_url,
                 # Add status functions
                 "get_task_status": self.get_task_status,
-                "reset_task_status": self.reset_task_status
+                "reset_task_status": self.reset_task_status,
+                "reset_all_task_status": self.reset_all_task_status
             },
         )
 
