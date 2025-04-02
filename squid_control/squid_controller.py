@@ -332,7 +332,7 @@ class SquidController:
                 exit()
     
     
-    def plate_scan(self, well_plate_type='96', illuminate_channels=['BF LED matrix full', 'Fluorescence 488 nm Ex', 'Fluorescence 561 nm Ex'], do_contrast_autofocus=False, do_reflection_af=True, scanning_zone=[(0,0),(2,2)], action_ID='testPlateScan'):
+    def plate_scan(self, well_plate_type='96', illuminate_channels=['BF LED matrix full', 'Fluorescence 488 nm Ex', 'Fluorescence 561 nm Ex'], do_contrast_autofocus=False, do_reflection_af=True, scanning_zone=[(0,0),(2,2)],Nx=3,Ny=3, action_ID='testPlateScan'):
         self.move_to_scaning_position()
         self.scanCoordinates.well_selector.set_selected_wells(scanning_zone[0], scanning_zone[1])
         self.scanCoordinates.get_selected_wells_to_coordinates()
@@ -340,8 +340,8 @@ class SquidController:
         self.multipointController.set_selected_configurations(illuminate_channels)
         self.multipointController.do_autofocus = do_contrast_autofocus
         self.multipointController.do_reflection_af = do_reflection_af
-        self.multipointController.set_NX(2)
-        self.multipointController.set_NY(2)
+        self.multipointController.set_NX(Nx)
+        self.multipointController.set_NY(Ny)
         self.multipointController.start_new_experiment(action_ID)
         self.is_busy = True
         print('Starting plate scan')
