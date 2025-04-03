@@ -73,7 +73,7 @@ class Microscope:
         self.datastore = None
         self.server_url = "http://reef.dyn.scilifelab.se:9527" if is_local else "https://hypha.aicell.io/"
         self.server = None
-        self.service_id = None
+        self.service_id = os.environ.get("MICROSCOPE_SERVICE_ID")
         # Add task status tracking
         self.task_status = {
             "move_by_distance": "not_started",
@@ -879,6 +879,8 @@ class Microscope:
         print(f"Extension service registered with id: {svc.id}, you can visit the service at:\n {self.chatbot_service_url}")
 
     async def setup(self):
+        if not self.service_id:
+            raise ValueError("MICROSCOPE_SERVICE_ID is not set in the environment variables.")
         if self.is_local:
             #no toecken needed for local server
             token = None
@@ -895,15 +897,13 @@ class Microscope:
                 {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
             )
         if self.is_simulation:
-            service_id_suffix = "_local" if self.is_local else ""
-            await self.start_hypha_service(server, service_id=f"microscope-control-squid-simulation-reef{service_id_suffix}")
-            datastore_id = f'data-store-simulated-microscope-reef{service_id_suffix}'
-            chatbot_id = f"squid-control-chatbot-simulated-microscope-reef{service_id_suffix}"
+            await self.start_hypha_service(server, service_id=self.service_id)
+            datastore_id = f'data-store-simulated-{self.service_id}'
+            chatbot_id = f"squid-control-chatbot-simulated-{self.service_id}"
         else:
-            service_id_suffix = "_local" if self.is_local else ""
-            await self.start_hypha_service(server, service_id=f"microscope-control-squid-real-microscope-reef{service_id_suffix}")
-            datastore_id = f'data-store-real-microscope{service_id_suffix}'
-            chatbot_id = f"squid-control-chatbot-real-microscope-reef{service_id_suffix}"
+            await self.start_hypha_service(server, service_id=self.service_id)
+            datastore_id = f'data-store-real-{self.service_id}'
+            chatbot_id = f"squid-control-chatbot-real-{self.service_id}"
         self.datastore = HyphaDataStore()
         try:
             await self.datastore.setup(server, service_id=datastore_id)
