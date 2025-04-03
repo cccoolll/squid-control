@@ -72,6 +72,8 @@ class Microscope:
         print(f"Authorized emails: {self.authorized_emails}")
         self.datastore = None
         self.server_url = "http://reef.dyn.scilifelab.se:9527" if is_local else "https://hypha.aicell.io/"
+        self.server = None
+        self.service_id = None
         # Add task status tracking
         self.task_status = {
             "move_by_distance": "not_started",
@@ -141,7 +143,14 @@ class Microscope:
         """Reset the status of all tasks"""
         for task_name in self.task_status:
             self.task_status[task_name] = "not_started"
-
+    @schema_function(skip_self=True)
+    def hello_world(self):
+        """Hello world"""
+        task_name = "hello_world"
+        self.task_status[task_name] = "started"
+        self.task_status[task_name] = "finished"
+        return "Hello world"
+    
     @schema_function(skip_self=True)
     def move_by_distance(self, x: float=Field(1.0, description="disntance through X axis, unit: milimeter"), y: float=Field(1.0, description="disntance through Y axis, unit: milimeter"), z: float=Field(1.0, description="disntance through Z axis, unit: milimeter"), context=None):
         """
@@ -755,7 +764,45 @@ class Microscope:
             "navigate_to_well": self.NavigateToWellInput.model_json_schema()
         }
 
+    async def check_service_health(self):
+        """Check if the service is healthy and rerun setup if needed"""
+        while True:
+            try:
+                # Try to get the service status
+                if self.service_id:
+                    service = await self.server.get_service(self.service_id)
+                    # Try a simple operation to verify service is working
+                    await service.hello_world()
+                    #print("Service health check passed")
+                else:
+                    print("Service ID not set, waiting for service registration")
+            except Exception as e:
+                print(f"Service health check failed: {e}")
+                print("Attempting to rerun setup...")
+                # Clean up Hypha service-related connections and variables
+                try:
+                    if self.server:
+                        await self.server.disconnect()
+                except Exception as disconnect_error:
+                    print(f"Error during disconnect: {disconnect_error}")
+                finally:
+                    self.server = None
+
+                while True:
+                    try:
+                        # Rerun the setup method
+                        await self.setup()
+                        print("Setup successful")
+                        break  # Exit the loop if setup is successful
+                    except Exception as setup_error:
+                        print(f"Failed to rerun setup: {setup_error}")
+                        await asyncio.sleep(30)  # Wait before retrying
+            
+            await asyncio.sleep(30)  # Check every half minute
+
     async def start_hypha_service(self, server, service_id):
+        self.server = server
+        self.service_id = service_id
         svc = await server.register_service(
             {
                 "name": "Microscope Control Service",
@@ -765,6 +812,7 @@ class Microscope:
                     "run_in_executor": True
                 },
                 "type": "echo",
+                "hello_world": self.hello_world,
                 "move_by_distance": self.move_by_distance,
                 "snap": self.snap,
                 "one_new_frame": self.one_new_frame,
@@ -799,6 +847,9 @@ class Microscope:
         id = svc.id.split(":")[1]
 
         print(f"You can also test the service via the HTTP proxy: {self.server_url}/{server.config.workspace}/services/{id}")
+
+        # Start the health check task
+        asyncio.create_task(self.check_service_health())
 
     async def start_chatbot_service(self, server, service_id):
         chatbot_extension = {
