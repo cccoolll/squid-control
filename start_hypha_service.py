@@ -29,6 +29,27 @@ ENV_FILE = dotenv.find_dotenv()
 if ENV_FILE:  
     dotenv.load_dotenv(ENV_FILE)  
 
+# Set up logging
+
+def setup_logging(log_file="squid_control_service.log", max_bytes=100000, backup_count=3):
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+
+    # Rotating file handler
+    file_handler = logging.handlers.RotatingFileHandler(log_file, maxBytes=max_bytes, backupCount=backup_count)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    return logger
+
+logger = setup_logging()
+
 class Microscope:
     def __init__(self, is_simulation, is_local):
         self.login_required = True
@@ -69,7 +90,7 @@ class Microscope:
             'F730_intensity_exposure': self.F730_intensity_exposure,
         }
         self.authorized_emails = self.load_authorized_emails(self.login_required)
-        print(f"Authorized emails: {self.authorized_emails}")
+        logger.info(f"Authorized emails: {self.authorized_emails}")
         self.datastore = None
         self.server_url = "http://reef.dyn.scilifelab.se:9527" if is_local else "https://hypha.aicell.io/"
         self.server = None
@@ -181,7 +202,7 @@ class Microscope:
                 }
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to move by distance: {e}")
+            logger.error(f"Failed to move by distance: {e}")
             return {
                 "success": False,
                 "message": f"Failed to move by distance: {e}"
@@ -243,7 +264,7 @@ class Microscope:
             }
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to move to position: {e}")
+            logger.error(f"Failed to move to position: {e}")
             return {
                 "success": False,
                 "message": f"Failed to move to position: {e}"
@@ -283,7 +304,7 @@ class Microscope:
             return self.parameters
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to get status: {e}")
+            logger.error(f"Failed to get status: {e}")
             return {}
 
     @schema_function(skip_self=True)
@@ -302,21 +323,21 @@ class Microscope:
             for key, value in new_parameters.items():
                 if key in self.parameters:
                     self.parameters[key] = value
-                    print(f"Updated {key} to {value}")
+                    logger.info(f"Updated {key} to {value}")
 
                     # Update the corresponding instance variable if it exists
                     if hasattr(self, key):
                         setattr(self, key, value)
                     else:
-                        print(f"Attribute {key} does not exist on self, skipping update.")
+                        logger.error(f"Attribute {key} does not exist on self, skipping update.")
                 else:
-                    print(f"Key {key} not found in parameters, skipping update.")
+                    logger.error(f"Key {key} not found in parameters, skipping update.")
 
             self.task_status[task_name] = "finished"
             return {"success": True, "message": "Parameters updated successfully.", "updated_parameters": new_parameters}
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to update parameters: {e}")
+            logger.error(f"Failed to update parameters: {e}")
             return {"success": False, "message": f"Failed to update parameters: {e}"}
 
     @schema_function(skip_self=True)
@@ -366,7 +387,7 @@ class Microscope:
             return image_base64  
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to get new frame: {e}")
+            logger.error(f"Failed to get new frame: {e}")
             return None
 
     @schema_function(skip_self=True)
@@ -379,7 +400,7 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             gray_img = await self.squidController.snap_image(channel, intensity, exposure_time)
-            print('The image is snapped')
+            logger.info('The image is snapped')
             gray_img = gray_img.astype(np.uint8)
             # Resize the image to a standard size
             resized_img = cv2.resize(gray_img, (2048, 2048))
@@ -390,7 +411,7 @@ class Microscope:
             # Store the PNG image
             file_id = self.datastore.put('file', png_image.tobytes(), 'snapshot.png', "Captured microscope image in PNG format")
             data_url = self.datastore.get_url(file_id)
-            print(f'The image is snapped and saved as {data_url}')
+            logger.info(f'The image is snapped and saved as {data_url}')
             
             #update the current illumination channel and intensity
             if channel == 0:
@@ -410,7 +431,7 @@ class Microscope:
             return data_url
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to snap image: {e}")
+            logger.error(f"Failed to snap image: {e}")
             return None
 
     @schema_function(skip_self=True)
@@ -423,12 +444,12 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             self.squidController.liveController.turn_on_illumination()
-            print('Bright field illumination turned on.')
+            logger.info('Bright field illumination turned on.')
             self.task_status[task_name] = "finished"
             return 'Bright field illumination turned on.'
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to open illumination: {e}")
+            logger.error(f"Failed to open illumination: {e}")
             return f"Failed to open illumination: {e}"
 
     @schema_function(skip_self=True)
@@ -441,12 +462,12 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             self.squidController.liveController.turn_off_illumination()
-            print('Bright field illumination turned off.')
+            logger.info('Bright field illumination turned off.')
             self.task_status[task_name] = "finished"
             return 'Bright field illumination turned off.'
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to close illumination: {e}")
+            logger.error(f"Failed to close illumination: {e}")
             return f"Failed to close illumination: {e}"
 
     @schema_function(skip_self=True)
@@ -460,14 +481,14 @@ class Microscope:
         try:
             if illuminate_channels is None:
                 illuminate_channels = ['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex']
-            print("Start scanning well plate")
+            logger.info("Start scanning well plate")
             self.squidController.plate_scan(well_plate_type, illuminate_channels, do_contrast_autofocus, do_reflection_af, scanning_zone, Nx, Ny, action_ID)
-            print("Well plate scanning completed")
+            logger.info("Well plate scanning completed")
             self.task_status[task_name] = "finished"
             return "Well plate scanning completed"
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to scan well plate: {e}")
+            logger.error(f"Failed to scan well plate: {e}")
             return f"Failed to scan well plate: {e}"
 
     @schema_function(skip_self=True)
@@ -480,12 +501,12 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             self.squidController.liveController.set_illumination(channel, intensity)
-            print(f'The intensity of the channel {channel} illumination is set to {intensity}.')
+            logger.info(f'The intensity of the channel {channel} illumination is set to {intensity}.')
             self.task_status[task_name] = "finished"
             return f'The intensity of the channel {channel} illumination is set to {intensity}.'
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to set illumination: {e}")
+            logger.error(f"Failed to set illumination: {e}")
             return f"Failed to set illumination: {e}"
     
     @schema_function(skip_self=True)
@@ -498,12 +519,12 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             self.squidController.camera.set_exposure_time(exposure_time)
-            print(f'The exposure time of the camera is set to {exposure_time}.')
+            logger.info(f'The exposure time of the camera is set to {exposure_time}.')
             self.task_status[task_name] = "finished"
             return f'The exposure time of the camera is set to {exposure_time}.'
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to set camera exposure: {e}")
+            logger.error(f"Failed to set camera exposure: {e}")
             return f"Failed to set camera exposure: {e}"
 
     @schema_function(skip_self=True)
@@ -517,12 +538,12 @@ class Microscope:
         try:
             self.squidController.liveController.stop_live()
             self.multipointController.abort_acqusition_requested=True
-            print("Stop scanning well plate")
+            logger.info("Stop scanning well plate")
             self.task_status[task_name] = "finished"
             return "Stop scanning well plate"
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to stop scan: {e}")
+            logger.error(f"Failed to stop scan: {e}")
             return f"Failed to stop scan: {e}"
 
     @schema_function(skip_self=True)
@@ -535,12 +556,12 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             self.squidController.home_stage()
-            print('The stage moved to home position in z, y, and x axis')
+            logger.info('The stage moved to home position in z, y, and x axis')
             self.task_status[task_name] = "finished"
             return 'The stage moved to home position in z, y, and x axis'
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to home stage: {e}")
+            logger.error(f"Failed to home stage: {e}")
             return f"Failed to home stage: {e}"
     
     @schema_function(skip_self=True)
@@ -553,12 +574,12 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             self.squidController.return_stage()
-            print('The stage moved to the initial position')
+            logger.info('The stage moved to the initial position')
             self.task_status[task_name] = "finished"
             return 'The stage moved to the initial position'
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to return stage: {e}")
+            logger.error(f"Failed to return stage: {e}")
             return f"Failed to return stage: {e}"
     
     @schema_function(skip_self=True)
@@ -571,12 +592,12 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             self.squidController.slidePositionController.move_to_slide_loading_position()
-            print('The stage moved to loading position')
+            logger.info('The stage moved to loading position')
             self.task_status[task_name] = "finished"
             return 'The stage moved to loading position'
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to move to loading position: {e}")
+            logger.error(f"Failed to move to loading position: {e}")
             return f"Failed to move to loading position: {e}"
 
     @schema_function(skip_self=True)
@@ -589,12 +610,12 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             self.squidController.do_autofocus()
-            print('The camera is auto-focused')
+            logger.info('The camera is auto-focused')
             self.task_status[task_name] = "finished"
             return 'The camera is auto-focused'
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to auto focus: {e}")
+            logger.error(f"Failed to auto focus: {e}")
             return f"Failed to auto focus: {e}"
     
     @schema_function(skip_self=True)
@@ -607,12 +628,12 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             self.squidController.do_laser_autofocus()
-            print('The camera is auto-focused')
+            logger.info('The camera is auto-focused')
             self.task_status[task_name] = "finished"
             return 'The camera is auto-focused'
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to do laser autofocus: {e}")
+            logger.error(f"Failed to do laser autofocus: {e}")
             return f"Failed to do laser autofocus: {e}"
 
     @schema_function(skip_self=True)
@@ -627,12 +648,12 @@ class Microscope:
             if wellplate_type is None:
                 wellplate_type = '96'
             self.squidController.move_to_well(row, col, wellplate_type)
-            print(f'The stage moved to well position ({row},{col})')
+            logger.info(f'The stage moved to well position ({row},{col})')
             self.task_status[task_name] = "finished"
             return f'The stage moved to well position ({row},{col})'
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to navigate to well: {e}")
+            logger.error(f"Failed to navigate to well: {e}")
             return f"Failed to navigate to well: {e}"
 
     @schema_function(skip_self=True)
@@ -644,12 +665,12 @@ class Microscope:
         task_name = "get_chatbot_url"
         self.task_status[task_name] = "started"
         try:
-            print(f"chatbot_service_url: {self.chatbot_service_url}")
+            logger.info(f"chatbot_service_url: {self.chatbot_service_url}")
             self.task_status[task_name] = "finished"
             return self.chatbot_service_url
         except Exception as e:
             self.task_status[task_name] = "failed"
-            print(f"Failed to get chatbot URL: {e}")
+            logger.error(f"Failed to get chatbot URL: {e}")
             return None
     
     class MoveByDistanceInput(BaseModel):
@@ -775,16 +796,16 @@ class Microscope:
                     await service.hello_world()
                     #print("Service health check passed")
                 else:
-                    print("Service ID not set, waiting for service registration")
+                    logger.info("Service ID not set, waiting for service registration")
             except Exception as e:
-                print(f"Service health check failed: {e}")
-                print("Attempting to rerun setup...")
+                logger.error(f"Service health check failed: {e}")
+                logger.info("Attempting to rerun setup...")
                 # Clean up Hypha service-related connections and variables
                 try:
                     if self.server:
                         await self.server.disconnect()
                 except Exception as disconnect_error:
-                    print(f"Error during disconnect: {disconnect_error}")
+                    logger.error(f"Error during disconnect: {disconnect_error}")
                 finally:
                     self.server = None
 
@@ -792,10 +813,10 @@ class Microscope:
                     try:
                         # Rerun the setup method
                         await self.setup()
-                        print("Setup successful")
+                        logger.info("Setup successful")
                         break  # Exit the loop if setup is successful
                     except Exception as setup_error:
-                        print(f"Failed to rerun setup: {setup_error}")
+                        logger.error(f"Failed to rerun setup: {setup_error}")
                         await asyncio.sleep(30)  # Wait before retrying
             
             await asyncio.sleep(30)  # Check every half minute
@@ -839,14 +860,14 @@ class Microscope:
             },
         )
 
-        print(
+        logger.info(
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
 
-        print(f'You can use this service using the service id: {svc.id}')
+        logger.info(f'You can use this service using the service id: {svc.id}')
         id = svc.id.split(":")[1]
 
-        print(f"You can also test the service via the HTTP proxy: {self.server_url}/{server.config.workspace}/services/{id}")
+        logger.info(f"You can also test the service via the HTTP proxy: {self.server_url}/{server.config.workspace}/services/{id}")
 
         # Start the health check task
         asyncio.create_task(self.check_service_health())
@@ -876,7 +897,7 @@ class Microscope:
 
         svc = await server.register_service(chatbot_extension)
         self.chatbot_service_url = f"https://bioimage.io/chat?server=https://chat.bioimage.io&extension={svc.id}&assistant=Skyler"
-        print(f"Extension service registered with id: {svc.id}, you can visit the service at:\n {self.chatbot_service_url}")
+        logger.info(f"Extension service registered with id: {svc.id}, you can visit the service at:\n {self.chatbot_service_url}")
 
     async def setup(self):
         if not self.service_id:
