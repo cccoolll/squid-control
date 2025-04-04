@@ -96,6 +96,7 @@ class Microscope:
         self.server_url = "http://reef.dyn.scilifelab.se:9527" if is_local else "https://hypha.aicell.io/"
         self.server = None
         self.service_id = os.environ.get("MICROSCOPE_SERVICE_ID")
+        self.setup_task = None  # Track the setup task
         # Add task status tracking
         self.task_status = {
             "move_by_distance": "not_started",
@@ -805,6 +806,10 @@ class Microscope:
                 try:
                     if self.server:
                         await self.server.disconnect()
+                        self.server = None
+                    if self.setup_task:
+                        self.setup_task.cancel()  # Cancel the previous setup task
+                        self.setup_task = None
                 except Exception as disconnect_error:
                     logger.error(f"Error during disconnect: {disconnect_error}")
                 finally:
@@ -813,7 +818,8 @@ class Microscope:
                 while True:
                     try:
                         # Rerun the setup method
-                        await self.setup()
+                        self.setup_task = asyncio.create_task(self.setup())
+                        await self.setup_task
                         logger.info("Setup successful")
                         break  # Exit the loop if setup is successful
                     except Exception as setup_error:
@@ -944,6 +950,7 @@ class Microscope:
             chatbot_token = await login({"server_url": chatbot_server_url})
         chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
         await self.start_chatbot_service(chatbot_server, chatbot_id)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Squid microscope control services for Hypha."
@@ -976,7 +983,8 @@ if __name__ == "__main__":
 
     async def main():
         try:
-            await microscope.setup()
+            microscope.setup_task = asyncio.create_task(microscope.setup())
+            await microscope.setup_task
         except Exception:
             traceback.print_exc()
 
