@@ -108,6 +108,7 @@ class Microscope:
             "open_illumination": "not_started",
             "close_illumination": "not_started",
             "scan_well_plate": "not_started",
+            "scan_well_plate_simulated": "not_started",
             "set_illumination": "not_started",
             "set_camera_exposure": "not_started",
             "stop_scan": "not_started",
@@ -498,6 +499,24 @@ class Microscope:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to scan well plate: {e}")
             return f"Failed to scan well plate: {e}"
+    
+    @schema_function(skip_self=True)
+    def scan_well_plate_simulated(self, context=None):
+        """
+        Scan the well plate according to the pre-defined position list
+        Returns: The message of the action
+        """
+        task_name = "scan_well_plate_simulated"
+        self.task_status[task_name] = "started"
+        try:
+            time.sleep(600)
+            self.task_status[task_name] = "finished"
+            return "Well plate scanning completed"
+        except Exception as e:
+            self.task_status[task_name] = "failed"
+            logger.error(f"Failed to scan well plate: {e}")
+            return f"Failed to scan well plate: {e}"
+
 
     @schema_function(skip_self=True)
     def set_illumination(self, channel: int=Field(0, description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
@@ -855,6 +874,7 @@ class Microscope:
                 "set_illumination": self.set_illumination,
                 "set_camera_exposure": self.set_camera_exposure,
                 "scan_well_plate": self.scan_well_plate,
+                "scan_well_plate_simulated": self.scan_well_plate_simulated,
                 "stop_scan": self.stop_scan,
                 "home_stage": self.home_stage,
                 "return_stage": self.return_stage,
