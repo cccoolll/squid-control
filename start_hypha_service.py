@@ -501,7 +501,7 @@ class Microscope:
             return f"Failed to scan well plate: {e}"
     
     @schema_function(skip_self=True)
-    def scan_well_plate_simulated(self, context=None, **kwargs):
+    def scan_well_plate_simulated(self, context=None):
         """
         Scan the well plate according to the pre-defined position list
         Returns: The message of the action
