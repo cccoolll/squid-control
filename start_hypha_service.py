@@ -93,7 +93,7 @@ class Microscope:
         self.authorized_emails = self.load_authorized_emails(self.login_required)
         logger.info(f"Authorized emails: {self.authorized_emails}")
         self.datastore = None
-        self.server_url = "http://reef.dyn.scilifelab.se:9520" if is_local else "https://hypha.aicell.io/"
+        self.server_url = "http://reef.dyn.scilifelab.se:9527" if is_local else "https://hypha.aicell.io/"
         self.server = None
         self.service_id = os.environ.get("MICROSCOPE_SERVICE_ID")
         self.setup_task = None  # Track the setup task
