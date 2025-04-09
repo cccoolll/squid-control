@@ -16,13 +16,25 @@ import asyncio
 #using os to set current working directory
 #find the current path
 path=os.path.abspath(__file__)
-#find the .ini file in the directory
-path_ini=os.path.join(os.path.dirname(path),'configuration_HCS_v2.ini')
-path_ini=Path(path_ini)
+# Get the directory where config.py is located
+config_dir = os.path.join(os.path.dirname(os.path.dirname(path)), 'squid_control/control')
+cache_file_path = os.path.join(config_dir, 'cache_config_file_path.txt')
 
+# Try to read the cached config path
+config_path = None
+if os.path.exists(cache_file_path):
+    try:
+        with open(cache_file_path, 'r') as f:
+            config_path = f.readline().strip()
+    except:
+        pass
 
+# If no cached path or file doesn't exist, use the default path
+if not config_path or not os.path.exists(config_path):
+    config_path = os.path.join(os.path.dirname(path), 'configuration_HCS_v2.ini')
 
-load_config(path_ini, False)
+print(f"Loading configuration from: {config_path}")
+load_config(config_path, False)
 class SquidController:
     fps_software_trigger= 10
 
