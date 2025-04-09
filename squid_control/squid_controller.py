@@ -16,13 +16,25 @@ import asyncio
 #using os to set current working directory
 #find the current path
 path=os.path.abspath(__file__)
-#find the .ini file in the directory
-path_ini=os.path.join(os.path.dirname(path),'configuration_HCS_v2.ini')
-path_ini=Path(path_ini)
+# Get the directory where config.py is located
+config_dir = os.path.join(os.path.dirname(os.path.dirname(path)), 'squid_control/control')
+cache_file_path = os.path.join(config_dir, 'cache_config_file_path.txt')
 
+# Try to read the cached config path
+config_path = None
+if os.path.exists(cache_file_path):
+    try:
+        with open(cache_file_path, 'r') as f:
+            config_path = f.readline().strip()
+    except:
+        pass
 
+# If no cached path or file doesn't exist, use the default path
+if not config_path or not os.path.exists(config_path):
+    config_path = os.path.join(os.path.dirname(path), 'configuration_HCS_v2.ini')
 
-load_config(path_ini, False)
+print(f"Loading configuration from: {config_path}")
+load_config(config_path, False)
 class SquidController:
     fps_software_trigger= 10
 
@@ -332,7 +344,7 @@ class SquidController:
                 exit()
     
     
-    def plate_scan(self, well_plate_type='96', illuminate_channels=['BF LED matrix full', 'Fluorescence 488 nm Ex', 'Fluorescence 561 nm Ex'], do_contrast_autofocus=False, do_reflection_af=True, scanning_zone=[(0,0),(2,2)], action_ID='testPlateScan'):
+    def plate_scan(self, well_plate_type='96', illuminate_channels=['BF LED matrix full', 'Fluorescence 488 nm Ex', 'Fluorescence 561 nm Ex'], do_contrast_autofocus=False, do_reflection_af=True, scanning_zone=[(0,0),(2,2)],Nx=3,Ny=3, action_ID='testPlateScan'):
         self.move_to_scaning_position()
         self.scanCoordinates.well_selector.set_selected_wells(scanning_zone[0], scanning_zone[1])
         self.scanCoordinates.get_selected_wells_to_coordinates()
@@ -340,8 +352,8 @@ class SquidController:
         self.multipointController.set_selected_configurations(illuminate_channels)
         self.multipointController.do_autofocus = do_contrast_autofocus
         self.multipointController.do_reflection_af = do_reflection_af
-        self.multipointController.set_NX(2)
-        self.multipointController.set_NY(2)
+        self.multipointController.set_NX(Nx)
+        self.multipointController.set_NY(Ny)
         self.multipointController.start_new_experiment(action_ID)
         self.is_busy = True
         print('Starting plate scan')

@@ -65,6 +65,7 @@ cover/
 
 # Django stuff:
 *.log
+*.log.*
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
@@ -169,3 +170,4 @@ cython_debug/
 
 upload_record.json
 config_parameters.txt
+configuration_HCS_v2.ini

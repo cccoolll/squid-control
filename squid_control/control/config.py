@@ -328,7 +328,7 @@ class BaseConfig(BaseModel):
     LED_MATRIX_G_FACTOR: float = 0
     LED_MATRIX_B_FACTOR: float = 1
 
-    DEFAULT_SAVING_PATH: str = "/data/hypha"
+    DEFAULT_SAVING_PATH: str = "/home/tao/remote_harddisk/u2os-treatment/"
 
     DEFAULT_PIXEL_FORMAT: str = "MONO8"
 
@@ -421,8 +421,8 @@ class BaseConfig(BaseModel):
     # B1 upper left corner in mm: x = 12.13 mm - 3.3 mm/2, y = 8.99 mm + 4.5 mm - 3.3 mm/2
     # B2 upper left corner in pixel: x = 177, y = 141
 
-    WELLPLATE_OFFSET_X_mm: float = 0  # x offset adjustment for using different plates
-    WELLPLATE_OFFSET_Y_mm: float = 0  # y offset adjustment for using different plates
+    WELLPLATE_OFFSET_X_MM: float = 0  # x offset adjustment for using different plates
+    WELLPLATE_OFFSET_Y_MM: float =0 # y offset adjustment for using different plates
 
     # for USB spectrometer
     N_SPECTRUM_PER_POINT: int = 5
@@ -610,14 +610,20 @@ def load_config(config_path, multipoint_function):
         config_path = current_dir / (
             "../configurations/configuration_" + str(config_path) + ".ini"
         )
+    
+    # Convert Path object to string if needed
+    config_path = str(config_path)
 
     CONFIG.CACHE_CONFIG_FILE_PATH = str(config_dir / "cache_config_file_path.txt")
     CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / "uc2_fucci_illumination_configurations.xml")
     CONFIG.LAST_COORDS_PATH = str(config_dir / "last_coords.txt")
 
-    if config_path and not os.path.exists(config_path):
+    # Check if configuration file exists
+    if not os.path.exists(config_path):
         raise FileNotFoundError(f"Configuration file {config_path} not found.")
-
+    
+    print(f"Reading configuration from: {config_path}")
+    
     cf_editor_parser = ConfigParser()
     cached_config_file_path = CONFIG.read_config(config_path)
     CONFIG.STAGE_POS_SIGN_X = CONFIG.STAGE_MOVEMENT_SIGN_X
@@ -667,15 +673,29 @@ def load_config(config_path, multipoint_function):
         CONFIG.A1_X_MM = 24.55
         CONFIG.A1_Y_MM = 23.01
 
+    # Apply additional configuration settings like wellplate_offset
+    if hasattr(CONFIG, 'WELLPLATE_OFFSET_X_MM'):
+        print(f"Applying wellplate offset X: {CONFIG.WELLPLATE_OFFSET_X_MM}")
+        if CONFIG.WELLPLATE_FORMAT in [384, 96, 24, 12, 6]:
+            CONFIG.A1_X_MM += CONFIG.WELLPLATE_OFFSET_X_MM
+    
+    if hasattr(CONFIG, 'WELLPLATE_OFFSET_Y_MM'):
+        print(f"Applying wellplate offset Y: {CONFIG.WELLPLATE_OFFSET_Y_MM}")
+        if CONFIG.WELLPLATE_FORMAT in [384, 96, 24, 12, 6]:
+            CONFIG.A1_Y_MM += CONFIG.WELLPLATE_OFFSET_Y_MM
+
     # Write configuration to txt file after reading
     CONFIG.write_config_to_txt('config_parameters.txt')
-
+    print("Configuration loaded and written to config_parameters.txt")
 
     try:
-        if os.path.exists(cached_config_file_path):
+        if cached_config_file_path and os.path.exists(cached_config_file_path):
             cf_editor_parser.read(cached_config_file_path)
-    except:
+    except Exception as e:
+        print(f"Error reading cached config: {e}")
         return False
+    
+    return True
 
 
 # For flexible plate format:
