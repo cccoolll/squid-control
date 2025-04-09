@@ -24,6 +24,7 @@ from hypha_tools.chatbot.aask import aask
 import base64
 from pydantic import Field
 from hypha_rpc.utils.schema import schema_function
+import signal
 
 dotenv.load_dotenv()  
 ENV_FILE = dotenv.find_dotenv()  
@@ -976,6 +977,16 @@ class Microscope:
             chatbot_token = await login({"server_url": chatbot_server_url})
         chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
         await self.start_chatbot_service(chatbot_server, chatbot_id)
+
+# Define a signal handler for graceful shutdown
+def signal_handler(sig, frame):
+    logger.info('Signal received, shutting down gracefully...')
+    microscope.squidController.close()
+    sys.exit(0)
+
+# Register the signal handler for SIGINT and SIGTERM
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
