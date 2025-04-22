@@ -935,6 +935,10 @@ class Microscope:
         logger.info(f"Extension service registered with id: {svc.id}, you can visit the service at:\n {self.chatbot_service_url}")
 
     async def setup(self):
+        data_store_token = os.environ.get("SQUID_WORKSPACE_TOKEN")
+        data_store_server = await connect_to_server(
+                {"server_url": "https://hypha.aicell.io", "token": data_store_token, "workspace": "squid-control", "ping_interval": None}
+            )
         if not self.service_id:
             raise ValueError("MICROSCOPE_SERVICE_ID is not set in the environment variables.")
         if self.is_local:
@@ -962,12 +966,12 @@ class Microscope:
             chatbot_id = f"squid-control-chatbot-real-{self.service_id}"
         self.datastore = HyphaDataStore()
         try:
-            await self.datastore.setup(server, service_id=datastore_id)
+            await self.datastore.setup(data_store_server, service_id=datastore_id)
         except TypeError as e:
             if "Future" in str(e):
                 # If config is a Future, wait for it to resolve
                 config = await asyncio.wrap_future(server.config)
-                await self.datastore.setup(server, service_id=datastore_id, config=config)
+                await self.datastore.setup(data_store_server, service_id=datastore_id, config=config)
             else:
                 raise e
     
