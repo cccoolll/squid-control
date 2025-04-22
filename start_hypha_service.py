@@ -939,17 +939,18 @@ class Microscope:
             raise ValueError("MICROSCOPE_SERVICE_ID is not set in the environment variables.")
         if self.is_local:
             token = os.environ.get("REEF_LOCAL_TOKEN")
+            workspace = os.environ.get("REEF_LOCAL_WORKSPACE")
             server = await connect_to_server(
-                {"server_url": self.server_url, "token": token,  "ping_interval": None}
+                {"server_url": self.server_url, "token": token, "workspace": workspace, "ping_interval": None}
             )
         else:
             try:  
-                token = os.environ.get("SQUID_WORKSPACE_TOKEN")  
+                token = os.environ.get("REEF_WORKSPACE_TOKEN")  
             except:  
                 token = await login({"server_url": self.server_url})
             
             server = await connect_to_server(
-                {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
+                {"server_url": self.server_url, "token": token, "workspace": "reef-imaging",  "ping_interval": None}
             )
         if self.is_simulation:
             await self.start_hypha_service(server, service_id=self.service_id)
