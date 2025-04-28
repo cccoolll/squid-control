@@ -213,10 +213,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to move by distance: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to move by distance: {e}"
-            }
+            raise e
 
     @schema_function(skip_self=True)
     def move_to_position(self, x:float=Field(1.0,description="Unit: milimeter"), y:float=Field(1.0,description="Unit: milimeter"), z:float=Field(1.0,description="Unit: milimeter"), context=None):
@@ -275,10 +272,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to move to position: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to move to position: {e}"
-            }
+            raise e
 
     @schema_function(skip_self=True)
     def get_status(self, context=None):
@@ -315,7 +309,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to get status: {e}")
-            return {}
+            raise e
 
     @schema_function(skip_self=True)
     def update_parameters_from_client(self, new_parameters: dict=Field(description="the dictionary parameters user want to update"), context=None):
@@ -348,7 +342,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to update parameters: {e}")
-            return {"success": False, "message": f"Failed to update parameters: {e}"}
+            raise e
 
     @schema_function(skip_self=True)
     async def one_new_frame(self, exposure_time: int=Field(100, description="Exposure time in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Light intensity"), context=None):
@@ -398,7 +392,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to get new frame: {e}")
-            return None
+            raise e
 
     @schema_function(skip_self=True)
     async def snap(self, exposure_time: int=Field(100, description="Exposure time, in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
@@ -442,7 +436,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to snap image: {e}")
-            return None
+            raise e
 
     @schema_function(skip_self=True)
     def open_illumination(self, context=None):
@@ -460,7 +454,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to open illumination: {e}")
-            return f"Failed to open illumination: {e}"
+            raise e
 
     @schema_function(skip_self=True)
     def close_illumination(self, context=None):
@@ -478,7 +472,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to close illumination: {e}")
-            return f"Failed to close illumination: {e}"
+            raise e
 
     @schema_function(skip_self=True)
     def scan_well_plate(self, well_plate_type: str=Field("96", description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), illuminate_channels: List[str]=Field(default_factory=lambda: ['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex'], description="Light source to illuminate the well plate"), do_contrast_autofocus: bool=Field(False, description="Whether to do contrast based autofocus"), do_reflection_af: bool=Field(True, description="Whether to do reflection based autofocus"), scanning_zone: List[tuple]=Field(default_factory=lambda: [(0,0),(0,0)], description="The scanning zone of the well plate, for 91 well plate, it should be[(0,0),(7,11)] "), Nx: int=Field(3, description="Number of columns to scan"), Ny: int=Field(3, description="Number of rows to scan"), action_ID: str=Field('testPlateScan', description="The ID of the action"), context=None):
@@ -499,7 +493,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to scan well plate: {e}")
-            return f"Failed to scan well plate: {e}"
+            raise e
     
     @schema_function(skip_self=True)
     def scan_well_plate_simulated(self, context=None):
@@ -516,7 +510,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to scan well plate: {e}")
-            return f"Failed to scan well plate: {e}"
+            raise e
 
 
     @schema_function(skip_self=True)
@@ -535,7 +529,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to set illumination: {e}")
-            return f"Failed to set illumination: {e}"
+            raise e
     
     @schema_function(skip_self=True)
     def set_camera_exposure(self, exposure_time: int=Field(100, description="Exposure time in milliseconds"), context=None):
@@ -553,7 +547,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to set camera exposure: {e}")
-            return f"Failed to set camera exposure: {e}"
+            raise e
 
     @schema_function(skip_self=True)
     def stop_scan(self, context=None):
@@ -572,7 +566,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to stop scan: {e}")
-            return f"Failed to stop scan: {e}"
+            raise e
 
     @schema_function(skip_self=True)
     def home_stage(self, context=None):
@@ -590,7 +584,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to home stage: {e}")
-            return f"Failed to home stage: {e}"
+            raise e
     
     @schema_function(skip_self=True)
     def return_stage(self,context=None):
@@ -608,7 +602,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to return stage: {e}")
-            return f"Failed to return stage: {e}"
+            raise e
     
     @schema_function(skip_self=True)
     def move_to_loading_position(self, context=None):
@@ -626,7 +620,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to move to loading position: {e}")
-            return f"Failed to move to loading position: {e}"
+            raise e
 
     @schema_function(skip_self=True)
     def auto_focus(self, context=None):
@@ -644,7 +638,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to auto focus: {e}")
-            return f"Failed to auto focus: {e}"
+            raise e
     
     @schema_function(skip_self=True)
     def do_laser_autofocus(self, context=None):
@@ -662,7 +656,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to do laser autofocus: {e}")
-            return f"Failed to do laser autofocus: {e}"
+            raise e
 
     @schema_function(skip_self=True)
     def navigate_to_well(self, row: str=Field('A', description="Row number of the well position (e.g., 'A')"), col: int=Field(1, description="Column number of the well position"), wellplate_type: str=Field('96', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), context=None):
@@ -682,7 +676,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to navigate to well: {e}")
-            return f"Failed to navigate to well: {e}"
+            raise e
 
     @schema_function(skip_self=True)
     def get_chatbot_url(self, context=None):
@@ -699,7 +693,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to get chatbot URL: {e}")
-            return None
+            raise e
     
     class MoveByDistanceInput(BaseModel):
         """Move the stage by a distance in x, y, z axis."""
