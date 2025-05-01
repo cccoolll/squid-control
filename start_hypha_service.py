@@ -893,6 +893,9 @@ class Microscope:
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
 
+        # Register health probes for Kubernetes
+        await self.register_service_probes(server)
+        
         logger.info(f'You can use this service using the service id: {svc.id}')
         id = svc.id.split(":")[1]
 
@@ -976,6 +979,63 @@ class Microscope:
             chatbot_token = await login({"server_url": chatbot_server_url})
         chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
         await self.start_chatbot_service(chatbot_server, chatbot_id)
+
+    async def register_service_probes(self, server):
+        """Register readiness and liveness probes for Kubernetes health checks"""
+        
+        async def is_service_healthy():
+            try:
+                # Check microscope service
+                microscope_svc = await server.get_service(self.service_id)
+                if microscope_svc is None:
+                    raise RuntimeError("Microscope service not found")
+                
+                # Test microscope hello_world functionality
+                result = await microscope_svc.hello_world()
+                if result != "Hello world":
+                    raise RuntimeError(f"Microscope service returned unexpected response: {result}")
+                
+                # Check datastore service
+                datastore_id = f'data-store-{"simulated" if self.is_simulation else "real"}-{self.service_id}'
+                datastore_svc = await server.get_service(datastore_id)
+                if datastore_svc is None:
+                    raise RuntimeError("Datastore service not found")
+                
+                # Check chatbot service
+                chatbot_id = f"squid-control-chatbot-{'simulated' if self.is_simulation else 'real'}-{self.service_id}"
+                
+                # We need to check the chatbot server, not the main server
+                chatbot_server_url = "https://chat.bioimage.io"
+                try:
+                    chatbot_token = os.environ.get("WORKSPACE_TOKEN_CHATBOT")
+                    if not chatbot_token:
+                        logger.warning("Chatbot token not found, skipping chatbot health check")
+                    else:
+                        chatbot_server = await connect_to_server({
+                            "server_url": chatbot_server_url, 
+                            "token": chatbot_token,
+                            "ping_interval": None
+                        })
+                        chatbot_svc = await chatbot_server.get_service(chatbot_id)
+                        if chatbot_svc is None:
+                            raise RuntimeError("Chatbot service not found")
+                except Exception as chatbot_error:
+                    logger.error(f"Error checking chatbot service: {str(chatbot_error)}")
+                    # We don't want to fail the entire health check if only the chatbot is down
+                    # Just log the error
+                
+                logger.info("All services are healthy")
+                return {"status": "ok", "message": "All services are healthy"}
+            except Exception as e:
+                logger.error(f"Health check failed: {str(e)}")
+                raise RuntimeError(f"Service health check failed: {str(e)}")
+        
+        logger.info("Registering health probes for Kubernetes")
+        await server.register_probes({
+            "readiness": is_service_healthy,
+            "liveness": is_service_healthy
+        })
+        logger.info("Health probes registered successfully")
 
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):
