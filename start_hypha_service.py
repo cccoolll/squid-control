@@ -946,12 +946,12 @@ class Microscope:
             )
         else:
             try:  
-                token = os.environ.get("REEF_WORKSPACE_TOKEN")  
+                token = os.environ.get("SQUID_WORKSPACE_TOKEN")  
             except:  
                 token = await login({"server_url": self.server_url})
             
             server = await connect_to_server(
-                {"server_url": self.server_url, "token": token, "workspace": "reef-imaging",  "ping_interval": None}
+                {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
             )
         if self.is_simulation:
             await self.start_hypha_service(server, service_id=self.service_id)
