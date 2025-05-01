@@ -1032,8 +1032,8 @@ class Microscope:
         
         logger.info("Registering health probes for Kubernetes")
         await server.register_probes({
-            "readiness": is_service_healthy,
-            "liveness": is_service_healthy
+            f"readiness-{self.service_id}": is_service_healthy,
+            f"liveness-{self.service_id}": is_service_healthy
         })
         logger.info("Health probes registered successfully")
 
