@@ -803,7 +803,7 @@ class Microscope:
             "auto_focus": self.AutoFocusInput.model_json_schema(),
             "snap_image": self.SnapImageInput.model_json_schema(),
             "inspect_tool": self.InspectToolInput.model_json_schema(),
-            "move_to_loading_position": self.MoveToLoadingPositionInput.model_json_schema(),
+            "load_position": self.MoveToLoadingPositionInput.model_json_schema(),
             "navigate_to_well": self.NavigateToWellInput.model_json_schema()
         }
 
@@ -921,7 +921,7 @@ class Microscope:
                 "snap_image": self.snap_image_schema,
                 "home_stage": self.home_stage_schema,
                 "return_stage": self.return_stage_schema,
-                "move_to_loading_position": self.move_to_loading_position,
+                "load_position": self.move_to_loading_position,
                 "navigate_to_well": self.navigate_to_well_schema,
                 "inspect_tool": self.inspect_tool_schema,
             }
