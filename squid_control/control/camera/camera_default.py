@@ -677,7 +677,8 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20, performace_mode=False):
+    async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.333, channel=0, intensity=100, exposure_time=100, magnification_factor=20, performace_mode=False):
+        print(f"Sending trigger with x={x}, y={y}, dz={dz}, pixel_size_um={pixel_size_um}, channel={channel}, intensity={intensity}, exposure_time={exposure_time}, magnification_factor={magnification_factor}, performace_mode={performace_mode}")
         self.frame_ID += 1
         self.timestamp = time.time()
 

@@ -301,7 +301,7 @@ class SquidController:
         self.current_channel = 0
         self.current_expousre_time = 100
         self.current_intensity = 100
-        self.pixel_size_xy = 0.1665
+        self.pixel_size_xy = 0.333
         self.get_pixel_size()
 
 
