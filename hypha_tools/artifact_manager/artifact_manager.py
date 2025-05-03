@@ -350,12 +350,12 @@ ARTIFACT_ALIAS = "image-map-20250429-treatment-zip"
 DEFAULT_CHANNEL = "BF_LED_matrix_full"
 
 # New class to replace TileManager using Zarr for efficient access
-class ZarrTileManager:
+class ZarrImageManager:
     def __init__(self):
         self.artifact_manager = None
         self.artifact_manager_server = None
         self.workspace = "agent-lens"  # Default workspace
-        self.tile_size = 256  # Default chunk size for Zarr
+        self.chunk_size = 256  # Default chunk size for Zarr
         self.channels = [
             "BF_LED_matrix_full",
             "Fluorescence_405_nm_Ex",
@@ -376,7 +376,7 @@ class ZarrTileManager:
                 raise ValueError("Workspace token not provided")
             
             self.artifact_manager_server = await connect_to_server({
-                "name": "zarr-tile-client",
+                "name": "zarr-image-client",
                 "server_url": server_url,
                 "token": token,
             })
@@ -387,7 +387,7 @@ class ZarrTileManager:
             # Initialize aiohttp session for any HTTP requests
             self.session = aiohttp.ClientSession()
             
-            print("ZarrTileManager connected successfully")
+            print("ZarrImageManager connected successfully")
             return True
         except Exception as e:
             print(f"Error connecting to artifact manager: {str(e)}")
@@ -396,7 +396,7 @@ class ZarrTileManager:
             return False
 
     async def close(self):
-        """Close the tile manager and cleanup resources"""
+        """Close the image manager and cleanup resources"""
         self.is_running = False
         
         # Close the cached Zarr groups
@@ -458,9 +458,9 @@ class ZarrTileManager:
             print(traceback.format_exc())
             return None
 
-    async def get_tile_np_data(self, dataset_id, timestamp, channel, scale, x, y):
+    async def get_region_np_data(self, dataset_id, timestamp, channel, scale, x, y):
         """
-        Get a tile as numpy array using Zarr for efficient access
+        Get a region as numpy array using Zarr for efficient access
         
         Args:
             dataset_id (str): The dataset ID (workspace/artifact_alias)
@@ -471,7 +471,7 @@ class ZarrTileManager:
             y (int): Y coordinate
             
         Returns:
-            np.ndarray: Tile data as numpy array
+            np.ndarray: Region data as numpy array
         """
         try:
             # Use default timestamp if none provided
@@ -480,68 +480,67 @@ class ZarrTileManager:
             # Get or create the zarr group
             zarr_group = await self.get_zarr_group(dataset_id, timestamp, channel)
             if not zarr_group:
-                return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
+                return np.zeros((self.chunk_size, self.chunk_size), dtype=np.uint8)
             
             # Navigate to the right array in the Zarr hierarchy
-            # The exact path will depend on your Zarr structure
             try:
                 # Assuming a structure like zarr_group['scale{scale}']
                 # You might need to adjust this path based on your actual Zarr structure
                 scale_array = zarr_group[f'scale{scale}'] 
                 
-                # Get the specific chunk/tile - adjust slicing as needed
-                tile_data = scale_array[y*self.tile_size:(y+1)*self.tile_size, 
-                                       x*self.tile_size:(x+1)*self.tile_size]
+                # Get the specific chunk/region - adjust slicing as needed
+                region_data = scale_array[y*self.chunk_size:(y+1)*self.chunk_size, 
+                                       x*self.chunk_size:(x+1)*self.chunk_size]
                 
                 # Make sure we have a properly shaped array
-                if tile_data.shape != (self.tile_size, self.tile_size):
+                if region_data.shape != (self.chunk_size, self.chunk_size):
                     # Resize or pad if necessary
-                    result = np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
-                    h, w = tile_data.shape
-                    result[:min(h, self.tile_size), :min(w, self.tile_size)] = tile_data[:min(h, self.tile_size), :min(w, self.tile_size)]
+                    result = np.zeros((self.chunk_size, self.chunk_size), dtype=np.uint8)
+                    h, w = region_data.shape
+                    result[:min(h, self.chunk_size), :min(w, self.chunk_size)] = region_data[:min(h, self.chunk_size), :min(w, self.chunk_size)]
                     return result
                 
-                return tile_data
+                return region_data
             except KeyError as e:
                 print(f"Error accessing Zarr array path: {e}")
                 # Try an alternative path structure if needed
                 try:
                     # Alternative path structure if your zarr is organized differently
-                    tile_data = zarr_group[y, x]  # Simplified example
-                    return tile_data
+                    region_data = zarr_group[y, x]  # Simplified example
+                    return region_data
                 except Exception:
-                    return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
+                    return np.zeros((self.chunk_size, self.chunk_size), dtype=np.uint8)
         except Exception as e:
-            print(f"Error getting tile data: {e}")
+            print(f"Error getting region data: {e}")
             import traceback
             print(traceback.format_exc())
-            return np.zeros((self.tile_size, self.tile_size), dtype=np.uint8)
+            return np.zeros((self.chunk_size, self.chunk_size), dtype=np.uint8)
 
-    async def get_tile_bytes(self, dataset_id, timestamp, channel, scale, x, y):
-        """Serve a tile as PNG bytes"""
+    async def get_region_bytes(self, dataset_id, timestamp, channel, scale, x, y):
+        """Serve a region as PNG bytes"""
         try:
             # Use default timestamp if none provided
             timestamp = timestamp or self.default_timestamp
             
-            # Get tile data as numpy array
-            tile_data = await self.get_tile_np_data(dataset_id, timestamp, channel, scale, x, y)
+            # Get region data as numpy array
+            region_data = await self.get_region_np_data(dataset_id, timestamp, channel, scale, x, y)
             
             # Convert to PNG bytes
-            image = Image.fromarray(tile_data)
+            image = Image.fromarray(region_data)
             buffer = io.BytesIO()
             image.save(buffer, format="PNG")
             return buffer.getvalue()
         except Exception as e:
-            print(f"Error in get_tile_bytes: {str(e)}")
-            blank_image = Image.new("L", (self.tile_size, self.tile_size), color=0)
+            print(f"Error in get_region_bytes: {str(e)}")
+            blank_image = Image.new("L", (self.chunk_size, self.chunk_size), color=0)
             buffer = io.BytesIO()
             blank_image.save(buffer, format="PNG")
             return buffer.getvalue()
 
-    async def get_tile_base64(self, dataset_id, timestamp, channel, scale, x, y):
-        """Serve a tile as base64 string"""
+    async def get_region_base64(self, dataset_id, timestamp, channel, scale, x, y):
+        """Serve a region as base64 string"""
         # Use default timestamp if none provided
         timestamp = timestamp or self.default_timestamp
         
-        tile_bytes = await self.get_tile_bytes(dataset_id, timestamp, channel, scale, x, y)
-        return base64.b64encode(tile_bytes).decode('utf-8')
+        region_bytes = await self.get_region_bytes(dataset_id, timestamp, channel, scale, x, y)
+        return base64.b64encode(region_bytes).decode('utf-8')

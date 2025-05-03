@@ -12,7 +12,7 @@ from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting
 from scipy.ndimage import gaussian_filter
 import zarr
-from hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager, ZarrTileManager
+from hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager, ZarrImageManager
 import asyncio
 script_dir = os.path.dirname(__file__)
 
@@ -531,7 +531,7 @@ class Camera_Simulation(object):
             14: 'Fluorescence_561_nm_Ex.bmp',
             13: 'Fluorescence_638_nm_Ex.bmp',
         }
-        # Configuration for ZarrTileManager
+        # Configuration for ZarrImageManager
         self.SERVER_URL = "https://hypha.aicell.io"
         self.WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
         self.ARTIFACT_ALIAS = "image-map-20250429-treatment-zip"
@@ -622,10 +622,10 @@ class Camera_Simulation(object):
         Clean up Zarr-related resources to prevent resource leaks
         """
         try:
-            if hasattr(self, 'zarr_tile_manager') and self.zarr_tile_manager:
-                await self.zarr_tile_manager.close()
-                self.zarr_tile_manager = None
-                print("ZarrTileManager closed successfully")
+            if hasattr(self, 'zarr_image_manager') and self.zarr_image_manager:
+                await self.zarr_image_manager.close()
+                self.zarr_image_manager = None
+                print("ZarrImageManager closed successfully")
                 
             if hasattr(self, 'artifact_manager') and self.artifact_manager:
                 # Close the artifact manager if it has a close method
@@ -699,11 +699,11 @@ class Camera_Simulation(object):
             print(f"Using performance mode, example image for channel {channel}")
         else:
             async def get_image_from_zarr():
-                if not hasattr(self, 'zarr_tile_manager'):
-                    self.zarr_tile_manager = ZarrTileManager()
-                    print("Connecting to ZarrTileManager...")
-                    await self.zarr_tile_manager.connect(workspace_token=self.WORKSPACE_TOKEN, server_url=self.SERVER_URL)
-                    print("Connected to ZarrTileManager")
+                if not hasattr(self, 'zarr_image_manager'):
+                    self.zarr_image_manager = ZarrImageManager()
+                    print("Connecting to ZarrImageManager...")
+                    await self.zarr_image_manager.connect(workspace_token=self.WORKSPACE_TOKEN, server_url=self.SERVER_URL)
+                    print("Connected to ZarrImageManager")
                 
                 # Convert microscope coordinates (mm) to pixel coordinates
                 pixel_x = int(x / pixel_size_um) * 1000
@@ -721,10 +721,10 @@ class Camera_Simulation(object):
                     # First attempt: Try to use direct Zarr group access for better performance
                     if not hasattr(self, 'artifact_manager'):
                         self.artifact_manager = SquidArtifactManager()
-                        await self.artifact_manager.connect_server(self.zarr_tile_manager.artifact_manager_server)
+                        await self.artifact_manager.connect_server(self.zarr_image_manager.artifact_manager_server)
                     
                     # Extract workspace and artifact_alias from the dataset_id
-                    workspace, artifact_alias = dataset_id.split('/')
+                    workspace, artifact_alias = "agent-lens", dataset_id
                     
                     # Get the Zarr group
                     zarr_group = await self.artifact_manager.get_zarr_group(
@@ -759,57 +759,57 @@ class Camera_Simulation(object):
                         return region_data
                 
                 except Exception as e:
-                    print(f"Direct Zarr access failed: {str(e)}. Falling back to tile-based approach.")
-                    # Continue with the tile-based approach if direct access fails
+                    print(f"Direct Zarr access failed: {str(e)}. Falling back to chunk-based approach.")
+                    # Continue with the chunk-based approach if direct access fails
                 
                 # Initialize a numpy array to hold the region data
                 region_data = np.zeros((self.Height, self.Width), dtype=np.uint8)
                 
-                # Determine how many tiles we need to fetch to fill the region
-                tile_size = self.zarr_tile_manager.tile_size
-                tiles_x = (self.Width + tile_size - 1) // tile_size
-                tiles_y = (self.Height + tile_size - 1) // tile_size
+                # Determine how many chunks we need to fetch to fill the region
+                chunk_size = self.zarr_image_manager.chunk_size
+                chunks_x = (self.Width + chunk_size - 1) // chunk_size
+                chunks_y = (self.Height + chunk_size - 1) // chunk_size
                 
-                print(f"Fetching {tiles_x}x{tiles_y} tiles for region at ({x_start}, {y_start}) with size {self.Width}x{self.Height}")
+                print(f"Fetching {chunks_x}x{chunks_y} chunks for region at ({x_start}, {y_start}) with size {self.Width}x{self.Height}")
                 
-                # Fetch tiles and assemble the region
-                for ty in range(tiles_y):
-                    for tx in range(tiles_x):
-                        # Calculate the tile coordinates
-                        tile_x = x_start // tile_size + tx
-                        tile_y = y_start // tile_size + ty
+                # Fetch chunks and assemble the region
+                for ty in range(chunks_y):
+                    for tx in range(chunks_x):
+                        # Calculate the chunk coordinates
+                        chunk_x = x_start // chunk_size + tx
+                        chunk_y = y_start // chunk_size + ty
                         
-                        # Fetch the tile data
-                        tile_data = await self.zarr_tile_manager.get_tile_np_data(
+                        # Fetch the chunk data
+                        chunk_data = await self.zarr_image_manager.get_region_np_data(
                             dataset_id, 
                             timestamp, 
                             channel_name, 
                             0,  # scale level - 0 is highest resolution
-                            tile_x, 
-                            tile_y
+                            chunk_x, 
+                            chunk_y
                         )
                         
-                        # Calculate the position of this tile within the region
-                        region_x = tx * tile_size
-                        region_y = ty * tile_size
+                        # Calculate the position of this chunk within the region
+                        region_x = tx * chunk_size
+                        region_y = ty * chunk_size
                         
-                        # Calculate the offset within the first tile
-                        offset_x = x_start % tile_size if tx == 0 else 0
-                        offset_y = y_start % tile_size if ty == 0 else 0
+                        # Calculate the offset within the first chunk
+                        offset_x = x_start % chunk_size if tx == 0 else 0
+                        offset_y = y_start % chunk_size if ty == 0 else 0
                         
-                        # Calculate how much of the tile to copy
-                        copy_width = min(tile_size - offset_x, self.Width - region_x)
-                        copy_height = min(tile_size - offset_y, self.Height - region_y)
+                        # Calculate how much of the chunk to copy
+                        copy_width = min(chunk_size - offset_x, self.Width - region_x)
+                        copy_height = min(chunk_size - offset_y, self.Height - region_y)
                         
                         if copy_width <= 0 or copy_height <= 0:
                             continue
                         
-                        # Copy the tile data to the region
+                        # Copy the chunk data to the region
                         try:
                             region_data[region_y:region_y+copy_height, region_x:region_x+copy_width] = \
-                                tile_data[offset_y:offset_y+copy_height, offset_x:offset_x+copy_width]
+                                chunk_data[offset_y:offset_y+copy_height, offset_x:offset_x+copy_width]
                         except Exception as e:
-                            print(f"Error copying tile data: {e}")
+                            print(f"Error copying chunk data: {e}")
                 
                 return region_data
 
@@ -817,10 +817,10 @@ class Camera_Simulation(object):
                 # Use the zarrr-based approach to get the image
                 self.image = await get_image_from_zarr()
                 if self.image is None or self.image.size == 0:
-                    raise ValueError("No image returned from ZarrTileManager")
+                    raise ValueError("No image returned from ZarrImageManager")
                 print(f"Successfully retrieved image from {channel_name} at {x},{y}")
             except Exception as e:
-                print(f"Error getting image from ZarrTileManager: {str(e)}")
+                print(f"Error getting image from ZarrImageManager: {str(e)}")
                 self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
 
         exposure_factor = exposure_time / 100

@@ -1030,7 +1030,7 @@ class Microscope:
                     if test_result is None:
                         raise RuntimeError(f"Failed to list files from gallery {gallery_id}")
                         
-                    # Check if we got a valid response (should be a list, even if empty)
+                    # Check if we got a valid response (should be a lif empty)
                     if not isinstance(test_result, list):
                         raise RuntimeError(f"Unexpected response format from artifact manager: {type(test_result)}")
                         
