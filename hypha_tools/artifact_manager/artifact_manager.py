@@ -46,17 +46,6 @@ class SquidArtifactManager:
         self.server = server
         self._svc = await server.get_service("public/artifact-manager")
 
-    def _artifact_alias(self, name):
-        """
-        Generate an alias for the artifact.
-
-        Args:
-            name (str): The artifact name.
-
-        Returns:
-            str: The artifact alias.
-        """
-        return f"agent-lens-{name}"
 
     def _artifact_id(self, workspace, name):
         """
@@ -69,7 +58,7 @@ class SquidArtifactManager:
         Returns:
             str: The artifact ID.
         """
-        return f"{workspace}/{self._artifact_alias(name)}"
+        return f"{workspace}/{name}"
 
     async def create_vector_collection(
         self, workspace, name, manifest, config, overwrite=False, exists_ok=False
@@ -418,7 +407,7 @@ class ZarrImageManager:
         cache_key = f"{dataset_id}:{timestamp}:{channel}"
         
         if cache_key in self.zarr_groups_cache:
-            print(f"Using cached Zarr group for {cache_key}")
+            #print(f"Using cached Zarr group for {cache_key}")
             return self.zarr_groups_cache[cache_key]
         
         try:
