@@ -25,6 +25,7 @@ import base64
 from pydantic import Field
 from hypha_rpc.utils.schema import schema_function
 import signal
+from hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
 
 dotenv.load_dotenv()  
 ENV_FILE = dotenv.find_dotenv()  
@@ -1001,6 +1002,43 @@ class Microscope:
                 if datastore_svc is None:
                     raise RuntimeError("Datastore service not found")
                 
+                # Check artifact manager connection
+                try:
+                    # Create temporary artifact manager for health check if needed
+                    if not hasattr(self.squidController.camera, 'artifact_manager') or not self.squidController.camera.artifact_manager:
+                        artifact_manager = SquidArtifactManager()
+                        
+                        # Connect to the server using the same workspace token
+                        from hypha_rpc import connect_to_server
+                        api_server = await connect_to_server({
+                            "server_url": self.server_url,
+                            "token": os.environ.get("AGENT_LENS_WORKSPACE_TOKEN"),
+                            "workspace": "agent-lens",
+                            "ping_interval": None
+                        })
+                        
+                        await artifact_manager.connect_server(api_server)
+                        logger.info("Connected to artifact manager for health check")
+                    else:
+                        # Use existing artifact manager
+                        artifact_manager = self.squidController.camera.artifact_manager
+                    
+                    # Test artifact manager functionality
+                    gallery_id = "agent-lens/image-map-20250429-treatment-zip"
+                    test_result = await artifact_manager._svc.list_files(gallery_id)
+                    
+                    if test_result is None:
+                        raise RuntimeError(f"Failed to list files from gallery {gallery_id}")
+                        
+                    # Check if we got a valid response (should be a list, even if empty)
+                    if not isinstance(test_result, list):
+                        raise RuntimeError(f"Unexpected response format from artifact manager: {type(test_result)}")
+                        
+                    logger.info("Artifact manager connection is healthy")
+                except Exception as artifact_error:
+                    logger.error(f"Artifact manager health check failed: {str(artifact_error)}")
+                    raise RuntimeError(f"Artifact manager health check failed: {str(artifact_error)}")
+                
                 # Check chatbot service
                 chatbot_id = f"squid-control-chatbot-{'simulated' if self.is_simulation else 'real'}-{self.service_id}"
                 
@@ -1028,6 +1066,8 @@ class Microscope:
                 return {"status": "ok", "message": "All services are healthy"}
             except Exception as e:
                 logger.error(f"Health check failed: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
                 raise RuntimeError(f"Service health check failed: {str(e)}")
         
         logger.info("Registering health probes for Kubernetes")
