@@ -12,7 +12,7 @@ from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting
 from scipy.ndimage import gaussian_filter
 import zarr
-from hypha_tools.artifact_manager.step2_get_tiles import TileManager
+from hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager, ZarrTileManager
 import asyncio
 script_dir = os.path.dirname(__file__)
 
@@ -461,8 +461,6 @@ class Camera(object):
 
 class Camera_Simulation(object):
 
-
-
     def __init__(
         self, sn=None, is_global_shutter=False, rotate_image_angle=None, flip_image=None
     ):
@@ -533,10 +531,11 @@ class Camera_Simulation(object):
             14: 'Fluorescence_561_nm_Ex.bmp',
             13: 'Fluorescence_638_nm_Ex.bmp',
         }
+        # Configuration for ZarrTileManager
         self.SERVER_URL = "https://hypha.aicell.io"
         self.WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
-        self.ARTIFACT_ALIAS = "microscopy-tiles"
-        
+        self.ARTIFACT_ALIAS = "image-map-20250429-treatment-zip"
+        self.DEFAULT_TIMESTAMP = "2025-04-29_16-38-27"  # Default timestamp for the dataset
         
     def open(self, index=0):
         pass
@@ -598,8 +597,51 @@ class Camera_Simulation(object):
         pass
 
     def close(self):
+        self.cleanup_zarr_resources()
         pass
-
+        
+    def cleanup_zarr_resources(self):
+        """
+        Synchronous wrapper for async cleanup method
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Create a new event loop if the current one is already running
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                new_loop.run_until_complete(self._cleanup_zarr_resources_async())
+                new_loop.close()
+            else:
+                loop.run_until_complete(self._cleanup_zarr_resources_async())
+        except Exception as e:
+            print(f"Error in cleanup_zarr_resources: {e}")
+        
+    async def _cleanup_zarr_resources_async(self):
+        """
+        Clean up Zarr-related resources to prevent resource leaks
+        """
+        try:
+            if hasattr(self, 'zarr_tile_manager') and self.zarr_tile_manager:
+                await self.zarr_tile_manager.close()
+                self.zarr_tile_manager = None
+                print("ZarrTileManager closed successfully")
+                
+            if hasattr(self, 'artifact_manager') and self.artifact_manager:
+                # Close the artifact manager if it has a close method
+                if hasattr(self.artifact_manager, 'close'):
+                    await self.artifact_manager.close()
+                self.artifact_manager = None
+                print("ArtifactManager closed successfully")
+        except Exception as e:
+            print(f"Error closing Zarr resources: {e}")
+            
+    async def cleanup_zarr_resources(self):
+        """
+        Legacy method for backward compatibility
+        """
+        await self._cleanup_zarr_resources_async()
+            
     def set_exposure_time(self, exposure_time):
         pass
 
@@ -635,7 +677,7 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20, performace_mode=True):
+    async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20, performace_mode=False):
         self.frame_ID += 1
         self.timestamp = time.time()
 
@@ -656,30 +698,129 @@ class Camera_Simulation(object):
             self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
             print(f"Using performance mode, example image for channel {channel}")
         else:
-            async def get_image_from_tiles():
-                if not hasattr(self, 'tile_manager'):
-                    self.tile_manager = TileManager()
-                    print("Connecting to TileManager...")
-                    await self.tile_manager.connect()
-                    print("Connected to TileManager")
+            async def get_image_from_zarr():
+                if not hasattr(self, 'zarr_tile_manager'):
+                    self.zarr_tile_manager = ZarrTileManager()
+                    print("Connecting to ZarrTileManager...")
+                    await self.zarr_tile_manager.connect(workspace_token=self.WORKSPACE_TOKEN, server_url=self.SERVER_URL)
+                    print("Connected to ZarrTileManager")
+                
+                # Convert microscope coordinates (mm) to pixel coordinates
                 pixel_x = int(x / pixel_size_um) * 1000
                 pixel_y = int(y / pixel_size_um) * 1000
-                return await self.tile_manager.get_region(
-                    channel=channel_name,
-                    scale=0,
-                    x_start=max(0, pixel_x - self.Width // 2),
-                    y_start=max(0, pixel_y - self.Height // 2),
-                    width=self.Width,
-                    height=self.Height
-                )
+                
+                # Calculate the pixel range for the image region
+                x_start = max(0, pixel_x - self.Width // 2)
+                y_start = max(0, pixel_y - self.Height // 2)
+                
+                # Use the class variables for dataset configuration
+                dataset_id = self.ARTIFACT_ALIAS
+                timestamp = self.DEFAULT_TIMESTAMP
+                
+                try:
+                    # First attempt: Try to use direct Zarr group access for better performance
+                    if not hasattr(self, 'artifact_manager'):
+                        self.artifact_manager = SquidArtifactManager()
+                        await self.artifact_manager.connect_server(self.zarr_tile_manager.artifact_manager_server)
+                    
+                    # Extract workspace and artifact_alias from the dataset_id
+                    workspace, artifact_alias = dataset_id.split('/')
+                    
+                    # Get the Zarr group
+                    zarr_group = await self.artifact_manager.get_zarr_group(
+                        workspace=workspace,
+                        artifact_alias=artifact_alias,
+                        timestamp=timestamp,
+                        channel=channel_name
+                    )
+                    
+                    if zarr_group:
+                        print(f"Successfully obtained Zarr group for {channel_name}")
+                        
+                        # Get the appropriate scale level data array
+                        scale_array = zarr_group[f'scale0']  # Assuming scale0 is the highest resolution
+                        
+                        # Extract the region of interest directly
+                        region_height = min(self.Height, scale_array.shape[0] - y_start)
+                        region_width = min(self.Width, scale_array.shape[1] - x_start)
+                        
+                        if region_height <= 0 or region_width <= 0:
+                            raise ValueError(f"Invalid region dimensions: {region_width}x{region_height}")
+                        
+                        # Get the region data directly from the Zarr array
+                        region_data = scale_array[y_start:y_start+region_height, x_start:x_start+region_width]
+                        
+                        # If the region is smaller than the expected size, pad it
+                        if region_data.shape != (self.Height, self.Width):
+                            padded_data = np.zeros((self.Height, self.Width), dtype=region_data.dtype)
+                            padded_data[:region_height, :region_width] = region_data
+                            region_data = padded_data
+                        
+                        return region_data
+                
+                except Exception as e:
+                    print(f"Direct Zarr access failed: {str(e)}. Falling back to tile-based approach.")
+                    # Continue with the tile-based approach if direct access fails
+                
+                # Initialize a numpy array to hold the region data
+                region_data = np.zeros((self.Height, self.Width), dtype=np.uint8)
+                
+                # Determine how many tiles we need to fetch to fill the region
+                tile_size = self.zarr_tile_manager.tile_size
+                tiles_x = (self.Width + tile_size - 1) // tile_size
+                tiles_y = (self.Height + tile_size - 1) // tile_size
+                
+                print(f"Fetching {tiles_x}x{tiles_y} tiles for region at ({x_start}, {y_start}) with size {self.Width}x{self.Height}")
+                
+                # Fetch tiles and assemble the region
+                for ty in range(tiles_y):
+                    for tx in range(tiles_x):
+                        # Calculate the tile coordinates
+                        tile_x = x_start // tile_size + tx
+                        tile_y = y_start // tile_size + ty
+                        
+                        # Fetch the tile data
+                        tile_data = await self.zarr_tile_manager.get_tile_np_data(
+                            dataset_id, 
+                            timestamp, 
+                            channel_name, 
+                            0,  # scale level - 0 is highest resolution
+                            tile_x, 
+                            tile_y
+                        )
+                        
+                        # Calculate the position of this tile within the region
+                        region_x = tx * tile_size
+                        region_y = ty * tile_size
+                        
+                        # Calculate the offset within the first tile
+                        offset_x = x_start % tile_size if tx == 0 else 0
+                        offset_y = y_start % tile_size if ty == 0 else 0
+                        
+                        # Calculate how much of the tile to copy
+                        copy_width = min(tile_size - offset_x, self.Width - region_x)
+                        copy_height = min(tile_size - offset_y, self.Height - region_y)
+                        
+                        if copy_width <= 0 or copy_height <= 0:
+                            continue
+                        
+                        # Copy the tile data to the region
+                        try:
+                            region_data[region_y:region_y+copy_height, region_x:region_x+copy_width] = \
+                                tile_data[offset_y:offset_y+copy_height, offset_x:offset_x+copy_width]
+                        except Exception as e:
+                            print(f"Error copying tile data: {e}")
+                
+                return region_data
 
             try:
-                self.image = await get_image_from_tiles()
-                if self.image is None:
-                    raise ValueError("No image returned from TileManager")
+                # Use the zarrr-based approach to get the image
+                self.image = await get_image_from_zarr()
+                if self.image is None or self.image.size == 0:
+                    raise ValueError("No image returned from ZarrTileManager")
                 print(f"Successfully retrieved image from {channel_name} at {x},{y}")
             except Exception as e:
-                print(f"Error getting image from TileManager: {str(e)}")
+                print(f"Error getting image from ZarrTileManager: {str(e)}")
                 self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
 
         exposure_factor = exposure_time / 100
