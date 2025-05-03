@@ -705,17 +705,22 @@ class Camera_Simulation(object):
                     await self.zarr_image_manager.connect(workspace_token=self.WORKSPACE_TOKEN, server_url=self.SERVER_URL)
                     print("Connected to ZarrImageManager")
                 
-                # Convert microscope coordinates (mm) to pixel coordinates
-                pixel_x = int(x / pixel_size_um) * 1000
-                pixel_y = int(y / pixel_size_um) * 1000
+                # Convert microscope coordinates (mm) to pixel coordinates - fix conversion factor
+                pixel_x = int((x / pixel_size_um) * 1000)  # Fix: Proper scaling with parentheses
+                pixel_y = int((y / pixel_size_um) * 1000)  # Fix: Proper scaling with parentheses
+                
+                # Print pixel coordinates for debugging
+                print(f"Converted coords (mm) x={x}, y={y} to pixel coords: x={pixel_x}, y={pixel_y}")
                 
                 # Calculate the pixel range for the image region
                 x_start = max(0, pixel_x - self.Width // 2)
                 y_start = max(0, pixel_y - self.Height // 2)
                 
                 # Use the class variables for dataset configuration
-                dataset_id = self.ARTIFACT_ALIAS
+                dataset_id = f"agent-lens/{self.ARTIFACT_ALIAS}"  # Fix: Use correctly formatted dataset_id
                 timestamp = self.DEFAULT_TIMESTAMP
+                
+                print(f"Using dataset: {dataset_id}, timestamp: {timestamp}, channel: {channel_name}")
                 
                 try:
                     # First attempt: Try to use direct Zarr group access for better performance
@@ -724,7 +729,9 @@ class Camera_Simulation(object):
                         await self.artifact_manager.connect_server(self.zarr_image_manager.artifact_manager_server)
                     
                     # Extract workspace and artifact_alias from the dataset_id
-                    workspace, artifact_alias = "agent-lens", dataset_id
+                    workspace, artifact_alias = "agent-lens", self.ARTIFACT_ALIAS
+                    
+                    print(f"Retrieving Zarr group with workspace={workspace}, artifact_alias={artifact_alias}")
                     
                     # Get the Zarr group
                     zarr_group = await self.artifact_manager.get_zarr_group(
@@ -737,10 +744,29 @@ class Camera_Simulation(object):
                     if zarr_group:
                         print(f"Successfully obtained Zarr group for {channel_name}")
                         
-                        # Get the appropriate scale level data array
-                        scale_array = zarr_group[f'scale0']  # Assuming scale0 is the highest resolution
+                        # Debug: Print available keys in the zarr group
+                        print(f"Available keys in Zarr group: {list(zarr_group.keys())}")
                         
-                        # Extract the region of interest directly
+                        # Get the appropriate scale level data array with error handling
+                        try:
+                            scale_array = zarr_group[f'scale0']  # Assuming scale0 is the highest resolution
+                            print(f"Scale array shape: {scale_array.shape}, dtype: {scale_array.dtype}")
+                        except KeyError:
+                            # Try alternative scale naming conventions if 'scale0' doesn't exist
+                            if '0' in zarr_group:
+                                scale_array = zarr_group['0']
+                                print(f"Using alternative scale key '0'. Shape: {scale_array.shape}")
+                            else:
+                                # If no recognized scale key exists, try the first available key
+                                first_key = list(zarr_group.keys())[0]
+                                scale_array = zarr_group[first_key]
+                                print(f"Using first available key '{first_key}'. Shape: {scale_array.shape}")
+                        
+                        # Ensure bounds are valid
+                        y_start = min(max(0, y_start), scale_array.shape[0] - 1)
+                        x_start = min(max(0, x_start), scale_array.shape[1] - 1)
+                        
+                        # Extract the region of interest directly with bounds checking
                         region_height = min(self.Height, scale_array.shape[0] - y_start)
                         region_width = min(self.Width, scale_array.shape[1] - x_start)
                         
@@ -748,18 +774,30 @@ class Camera_Simulation(object):
                             raise ValueError(f"Invalid region dimensions: {region_width}x{region_height}")
                         
                         # Get the region data directly from the Zarr array
+                        print(f"Reading region from y={y_start} to y={y_start+region_height}, x={x_start} to x={x_start+region_width}")
                         region_data = scale_array[y_start:y_start+region_height, x_start:x_start+region_width]
+                        
+                        print(f"Region data shape: {region_data.shape}, dtype: {region_data.dtype}, min: {region_data.min()}, max: {region_data.max()}")
                         
                         # If the region is smaller than the expected size, pad it
                         if region_data.shape != (self.Height, self.Width):
+                            print(f"Padding region from {region_data.shape} to {(self.Height, self.Width)}")
                             padded_data = np.zeros((self.Height, self.Width), dtype=region_data.dtype)
                             padded_data[:region_height, :region_width] = region_data
                             region_data = padded_data
                         
+                        # Ensure the image data is not all zeros
+                        if np.count_nonzero(region_data) == 0:
+                            print("WARNING: Retrieved region contains all zeros!")
+                            # Falling back to default image
+                            return None
+                            
                         return region_data
                 
                 except Exception as e:
                     print(f"Direct Zarr access failed: {str(e)}. Falling back to chunk-based approach.")
+                    import traceback
+                    print(traceback.format_exc())
                     # Continue with the chunk-based approach if direct access fails
                 
                 # Initialize a numpy array to hold the region data
@@ -773,6 +811,7 @@ class Camera_Simulation(object):
                 print(f"Fetching {chunks_x}x{chunks_y} chunks for region at ({x_start}, {y_start}) with size {self.Width}x{self.Height}")
                 
                 # Fetch chunks and assemble the region
+                successful_chunks = 0
                 for ty in range(chunks_y):
                     for tx in range(chunks_x):
                         # Calculate the chunk coordinates
@@ -806,26 +845,63 @@ class Camera_Simulation(object):
                         
                         # Copy the chunk data to the region
                         try:
-                            region_data[region_y:region_y+copy_height, region_x:region_x+copy_width] = \
-                                chunk_data[offset_y:offset_y+copy_height, offset_x:offset_x+copy_width]
+                            if chunk_data is not None and np.count_nonzero(chunk_data) > 0:
+                                print(f"Chunk at ({chunk_x},{chunk_y}) has data. Min: {chunk_data.min()}, Max: {chunk_data.max()}")
+                                region_data[region_y:region_y+copy_height, region_x:region_x+copy_width] = \
+                                    chunk_data[offset_y:offset_y+copy_height, offset_x:offset_x+copy_width]
+                                successful_chunks += 1
+                            else:
+                                print(f"Chunk at ({chunk_x},{chunk_y}) has no valid data.")
                         except Exception as e:
                             print(f"Error copying chunk data: {e}")
                 
-                return region_data
+                print(f"Successfully retrieved {successful_chunks} out of {chunks_x * chunks_y} chunks")
+                
+                # If we've got at least some valid chunks, return the data
+                if successful_chunks > 0 and np.count_nonzero(region_data) > 0:
+                    return region_data
+                else:
+                    print("No valid chunks retrieved, returning None")
+                    return None
 
             try:
-                # Use the zarrr-based approach to get the image
+                # Use the zarr-based approach to get the image
                 self.image = await get_image_from_zarr()
-                if self.image is None or self.image.size == 0:
-                    raise ValueError("No image returned from ZarrImageManager")
-                print(f"Successfully retrieved image from {channel_name} at {x},{y}")
+                
+                # If no valid image from Zarr, use fallback
+                if self.image is None or getattr(self.image, 'size', 0) == 0 or (isinstance(self.image, np.ndarray) and np.count_nonzero(self.image) == 0):
+                    print("No valid image returned from ZarrImageManager, using fallback")
+                    fallback_path = os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")
+                    print(f"Loading fallback image from: {fallback_path}")
+                    self.image = np.array(Image.open(fallback_path))
+                else:
+                    print(f"Successfully retrieved image from {channel_name} at {x},{y}")
+                    print(f"Image shape: {self.image.shape}, dtype: {self.image.dtype}")
+                    print(f"Image min: {self.image.min()}, max: {self.image.max()}")
             except Exception as e:
                 print(f"Error getting image from ZarrImageManager: {str(e)}")
-                self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
+                import traceback
+                print(traceback.format_exc())
+                fallback_path = os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")
+                print(f"Loading fallback image from: {fallback_path}")
+                self.image = np.array(Image.open(fallback_path))
 
-        exposure_factor = exposure_time / 100
-        intensity_factor = intensity / 60
-        self.image = np.clip(self.image * exposure_factor * intensity_factor, 0, 255).astype(np.uint8)
+        # Apply exposure and intensity scaling
+        exposure_factor = max(0.1, exposure_time / 100)  # Ensure minimum factor to prevent black images
+        intensity_factor = max(0.1, intensity / 60)      # Ensure minimum factor to prevent black images
+        
+        # Check if image contains any valid data before scaling
+        if np.count_nonzero(self.image) == 0:
+            print("WARNING: Image contains all zeros before scaling!")
+        
+        # Convert to float32 for scaling, apply factors, then clip and convert back to uint8
+        self.image = np.clip(self.image.astype(np.float32) * exposure_factor * intensity_factor, 0, 255).astype(np.uint8)
+        
+        # Check if image contains any valid data after scaling
+        if np.count_nonzero(self.image) == 0:
+            print("WARNING: Image contains all zeros after scaling!")
+            # Set to a gray image instead of black
+            self.image = np.ones((self.Height, self.Width), dtype=np.uint8) * 128
 
         if self.pixel_format == "MONO8":
             self.current_frame = self.image
@@ -833,11 +909,25 @@ class Camera_Simulation(object):
             self.current_frame = (self.image.astype(np.uint16) * 16).astype(np.uint16)
         elif self.pixel_format == "MONO16":
             self.current_frame = (self.image.astype(np.uint16) * 256).astype(np.uint16)
+        else:
+            # For any other format, default to MONO8
+            print(f"Unrecognized pixel format {self.pixel_format}, using MONO8")
+            self.current_frame = self.image
 
         if dz != 0:
             sigma = abs(dz) * 6
             self.current_frame = gaussian_filter(self.current_frame, sigma=sigma)
             print(f"The image is blurred with dz={dz}, sigma={sigma}")
+        
+        # Final check to ensure we're not sending a completely black image
+        if np.count_nonzero(self.current_frame) == 0:
+            print("CRITICAL: Final image is completely black, setting to gray")
+            if self.pixel_format == "MONO8":
+                self.current_frame = np.ones((self.Height, self.Width), dtype=np.uint8) * 128
+            elif self.pixel_format == "MONO12":
+                self.current_frame = np.ones((self.Height, self.Width), dtype=np.uint16) * 2048
+            elif self.pixel_format == "MONO16":
+                self.current_frame = np.ones((self.Height, self.Width), dtype=np.uint16) * 32768
 
         if self.new_image_callback_external is not None and self.callback_is_enabled:
             self.new_image_callback_external(self)
