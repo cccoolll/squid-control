@@ -12,7 +12,7 @@ imageio==2.31.1
 tifffile==2023.7.10
 pyqtgraph==0.13.3
 PyQt5==5.15.11
-hypha-rpc==0.20.51
+hypha-rpc==0.20.53
 zarr==2.11.3
 flask==3.1.0
 python-dotenv==1.0.1
