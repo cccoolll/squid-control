@@ -615,7 +615,8 @@ def load_config(config_path, multipoint_function):
     config_path = str(config_path)
 
     CONFIG.CACHE_CONFIG_FILE_PATH = str(config_dir / "cache_config_file_path.txt")
-    CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / "uc2_fucci_illumination_configurations.xml")
+
+    CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / "u2os_fucci_illumination_configurations.xml")
     CONFIG.LAST_COORDS_PATH = str(config_dir / "last_coords.txt")
 
     # Check if configuration file exists
