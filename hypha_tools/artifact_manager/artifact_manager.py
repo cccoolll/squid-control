@@ -484,7 +484,7 @@ class ZarrImageManager:
             print(traceback.format_exc())
             return None
 
-    async def get_region_np_data(self, dataset_id, timestamp, channel, scale, x, y):
+    async def get_region_np_data(self, dataset_id, timestamp, channel, scale, x, y, direct_region=None, width=None, height=None):
         """
         Get a region as numpy array using Zarr for efficient access
         
@@ -493,8 +493,12 @@ class ZarrImageManager:
             timestamp (str): The timestamp folder 
             channel (str): Channel name
             scale (int): Scale level
-            x (int): X coordinate
-            y (int): Y coordinate
+            x (int): X coordinate (chunk coordinates)
+            y (int): Y coordinate (chunk coordinates)
+            direct_region (tuple, optional): A tuple of (y_start, y_end, x_start, x_end) for direct region extraction.
+                If provided, x and y are ignored and this region is used directly.
+            width (int, optional): Desired width of the output image. If specified, the output will be resized/padded to this width.
+            height (int, optional): Desired height of the output image. If specified, the output will be resized/padded to this height.
             
         Returns:
             np.ndarray: Region data as numpy array
@@ -503,11 +507,49 @@ class ZarrImageManager:
             # Use default timestamp if none provided
             timestamp = timestamp or self.default_timestamp
             
+            # Determine the output dimensions
+            output_width = width if width is not None else self.chunk_size
+            output_height = height if height is not None else self.chunk_size
+            
             # Get or create the zarr group
             zarr_group = await self.get_zarr_group(dataset_id, timestamp, channel)
             if not zarr_group:
                 print(f"No Zarr group found for {dataset_id}/{timestamp}/{channel}")
-                return np.zeros((self.chunk_size, self.chunk_size), dtype=np.uint8)
+                return np.zeros((output_height, output_width), dtype=np.uint8)
+                
+            # TEST CODE: Directly access a specific chunk to verify it's working
+            try:
+                print("\n----- TEST: Accessing specific chunk -----")
+                # Check if scale0 exists
+                if 'scale0' in zarr_group:
+                    test_array = zarr_group['scale0']
+                    print(f"Test: scale0 array shape: {test_array.shape}, dtype: {test_array.dtype}")
+                    
+                    # Test accessing a specific chunk coordinate (335, 384)
+                    test_y, test_x = 335, 384
+                    test_y_start = test_y * self.chunk_size
+                    test_x_start = test_x * self.chunk_size
+                    test_y_end = min(test_y_start + self.chunk_size, test_array.shape[0])
+                    test_x_end = min(test_x_start + self.chunk_size, test_array.shape[1])
+                    
+                    if test_y_start < test_array.shape[0] and test_x_start < test_array.shape[1]:
+                        print(f"Test: Attempting to read chunk at coordinates (335, 384)")
+                        print(f"Test: Reading region y={test_y_start}:{test_y_end}, x={test_x_start}:{test_x_end}")
+                        test_chunk = test_array[test_y_start:test_y_end, test_x_start:test_x_end]
+                        print(f"Test: Successfully accessed chunk with shape {test_chunk.shape}")
+                        print(f"Test: Chunk stats - min: {test_chunk.min()}, max: {test_chunk.max()}, mean: {test_chunk.mean():.2f}")
+                        print(f"Test: Non-zero values: {np.count_nonzero(test_chunk)} of {test_chunk.size}")
+                    else:
+                        print(f"Test: Coordinates (335, 384) are out of bounds for array shape {test_array.shape}")
+                else:
+                    print("Test: 'scale0' key not found in zarr_group")
+                    print(f"Test: Available keys: {list(zarr_group.keys())}")
+            except Exception as test_error:
+                print(f"Test: Error accessing test chunk: {test_error}")
+                import traceback
+                print(f"Test: {traceback.format_exc()}")
+            print("----- END TEST -----\n")
+            # END TEST CODE
             
             # Navigate to the right array in the Zarr hierarchy
             try:
@@ -517,23 +559,32 @@ class ZarrImageManager:
                 scale_array = zarr_group[self.scale_key]
                 print(f"Scale array shape: {scale_array.shape}, dtype: {scale_array.dtype}")
                 
-                # Ensure chunk coordinates are valid
+                # Ensure coordinates are valid
                 array_shape = scale_array.shape
                 if len(array_shape) < 2:
                     raise ValueError(f"Scale array has unexpected shape: {array_shape}")
                 
-                # Calculate the bounds
-                y_start = y * self.chunk_size
-                x_start = x * self.chunk_size
-                
-                # Ensure coordinates are within bounds
-                if y_start >= array_shape[0] or x_start >= array_shape[1]:
-                    print(f"Coordinates out of bounds: y={y_start}, x={x_start}, shape={array_shape}")
-                    return np.zeros((self.chunk_size, self.chunk_size), dtype=np.uint8)
-                
-                # Get the specific chunk/region - adjust slicing as needed
-                y_end = min(y_start + self.chunk_size, array_shape[0])
-                x_end = min(x_start + self.chunk_size, array_shape[1])
+                # If direct region is provided, use it directly
+                if direct_region is not None:
+                    y_start, y_end, x_start, x_end = direct_region
+                    # Ensure coordinates are within bounds
+                    y_start = max(0, min(y_start, array_shape[0] - 1))
+                    y_end = max(y_start + 1, min(y_end, array_shape[0]))
+                    x_start = max(0, min(x_start, array_shape[1] - 1))
+                    x_end = max(x_start + 1, min(x_end, array_shape[1]))
+                else:
+                    # Calculate the bounds based on chunk coordinates
+                    y_start = y * self.chunk_size
+                    x_start = x * self.chunk_size
+                    
+                    # Ensure coordinates are within bounds
+                    if y_start >= array_shape[0] or x_start >= array_shape[1]:
+                        print(f"Coordinates out of bounds: y={y_start}, x={x_start}, shape={array_shape}")
+                        return np.zeros((output_height, output_width), dtype=np.uint8)
+                    
+                    # Get the specific chunk/region - adjust slicing as needed
+                    y_end = min(y_start + self.chunk_size, array_shape[0])
+                    x_end = min(x_start + self.chunk_size, array_shape[1])
                 
                 print(f"Reading region from y={y_start} to y={y_end}, x={x_start} to x={x_end}")
                 region_data = scale_array[y_start:y_end, x_start:x_end]
@@ -543,28 +594,85 @@ class ZarrImageManager:
                       f"min: {region_data.min() if region_data.size > 0 else 'N/A'}, "
                       f"max: {region_data.max() if region_data.size > 0 else 'N/A'}")
                 
-                # Make sure we have a properly shaped array
-                if region_data.shape != (self.chunk_size, self.chunk_size):
+                # If width and height are specified, resize the output to those dimensions
+                if width is not None or height is not None:
+                    # Create an empty array with the requested dimensions
+                    result = np.zeros((output_height, output_width), dtype=region_data.dtype or np.uint8)
+                    
+                    # Copy the retrieved data into the result array
+                    h, w = region_data.shape
+                    result[:min(h, output_height), :min(w, output_width)] = region_data[:min(h, output_height), :min(w, output_width)]
+                    
+                    print(f"Resized region data from {region_data.shape} to {result.shape}")
+                    
+                    # Ensure data is in the right format (uint8)
+                    if result.dtype != np.uint8:
+                        print(f"Converting resized data from {result.dtype} to uint8")
+                        if result.dtype == np.float32 or result.dtype == np.float64:
+                            # Normalize floating point data
+                            if result.max() > 0:
+                                result = (result / result.max() * 255).astype(np.uint8)
+                            else:
+                                result = np.zeros(result.shape, dtype=np.uint8)
+                        else:
+                            # For other integer types, scale appropriately
+                            result = result.astype(np.uint8)
+                    
+                    return result
+                    
+                # For direct region requests with no specific width/height, return as is
+                elif direct_region is not None:
+                    # Ensure data is in the right format (uint8)
+                    if region_data.dtype != np.uint8:
+                        print(f"Converting direct region data from {region_data.dtype} to uint8")
+                        if region_data.dtype == np.float32 or region_data.dtype == np.float64:
+                            # Normalize floating point data
+                            if region_data.max() > 0:
+                                region_data = (region_data / region_data.max() * 255).astype(np.uint8)
+                            else:
+                                region_data = np.zeros(region_data.shape, dtype=np.uint8)
+                        else:
+                            # For other integer types, scale appropriately
+                            region_data = region_data.astype(np.uint8)
+                    
+                    return region_data
+                
+                # Make sure we have a properly shaped array for chunk-based requests
+                elif region_data.shape != (self.chunk_size, self.chunk_size):
                     # Resize or pad if necessary
                     print(f"Padding region from {region_data.shape} to {(self.chunk_size, self.chunk_size)}")
                     result = np.zeros((self.chunk_size, self.chunk_size), dtype=region_data.dtype or np.uint8)
                     h, w = region_data.shape
                     result[:min(h, self.chunk_size), :min(w, self.chunk_size)] = region_data[:min(h, self.chunk_size), :min(w, self.chunk_size)]
+                    
+                    # Ensure data is in the right format (uint8)
+                    if result.dtype != np.uint8:
+                        print(f"Converting padded data from {result.dtype} to uint8")
+                        if result.dtype == np.float32 or result.dtype == np.float64:
+                            # Normalize floating point data
+                            if result.max() > 0:
+                                result = (result / result.max() * 255).astype(np.uint8)
+                            else:
+                                result = np.zeros(result.shape, dtype=np.uint8)
+                        else:
+                            # For other integer types, scale appropriately
+                            result = result.astype(np.uint8)
+                    
                     return result
-                
+                    
+                # Default case: return the region data as is
                 # Ensure data is in the right format (uint8)
                 if region_data.dtype != np.uint8:
-                    print(f"Converting data from {region_data.dtype} to uint8")
+                    print(f"Converting region data from {region_data.dtype} to uint8")
                     if region_data.dtype == np.float32 or region_data.dtype == np.float64:
                         # Normalize floating point data
                         if region_data.max() > 0:
-                            normalized = (region_data / region_data.max() * 255).astype(np.uint8)
+                            region_data = (region_data / region_data.max() * 255).astype(np.uint8)
                         else:
-                            normalized = np.zeros(region_data.shape, dtype=np.uint8)
-                        return normalized
+                            region_data = np.zeros(region_data.shape, dtype=np.uint8)
                     else:
                         # For other integer types, scale appropriately
-                        return region_data.astype(np.uint8)
+                        region_data = region_data.astype(np.uint8)
                 
                 return region_data
                 
