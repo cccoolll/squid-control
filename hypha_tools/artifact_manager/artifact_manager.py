@@ -21,6 +21,7 @@ from collections import deque
 import zarr
 from zarr.storage import LRUStoreCache, FSStore
 import fsspec
+import time
 
 dotenv.load_dotenv()  
 ENV_FILE = dotenv.find_dotenv()  
@@ -35,6 +36,9 @@ class SquidArtifactManager:
     def __init__(self):
         self._svc = None
         self.server = None
+        self.zarr_groups_cache = {}  # Cache for zarr groups
+        self.zarr_groups_timestamps = {}  # Timestamps for when groups were cached
+        self.zarr_cache_expiry_seconds = 40 * 60  # 40 minutes in seconds
 
     async def connect_server(self, server):
         """
@@ -296,6 +300,20 @@ class SquidArtifactManager:
 
         art_id = self._artifact_id(workspace, artifact_alias)
         zip_file_path = f"{timestamp}/{channel}.zip"
+        cache_key = f"{art_id}:{timestamp}:{channel}"
+        current_time = time.time()
+        
+        # Check if we have a cached and non-expired Zarr group
+        if cache_key in self.zarr_groups_cache:
+            cache_time = self.zarr_groups_timestamps.get(cache_key, 0)
+            if current_time - cache_time < self.zarr_cache_expiry_seconds:
+                print(f"Using cached Zarr group for {cache_key}")
+                return self.zarr_groups_cache[cache_key]
+            else:
+                # Group is expired, remove it from cache
+                print(f"Zarr group for {cache_key} has expired (created {(current_time - cache_time)/60:.1f} minutes ago). Refreshing...")
+                self.zarr_groups_cache.pop(cache_key, None)
+                self.zarr_groups_timestamps.pop(cache_key, None)
 
         try:
             print(f"Getting download URL for: {art_id}/{zip_file_path}")
@@ -321,6 +339,12 @@ class SquidArtifactManager:
             # Run the synchronous Zarr operations in a thread pool
             print("Running Zarr open in thread executor...")
             zarr_group = await asyncio.to_thread(_open_zarr_sync, store_url, cache_max_size)
+            
+            # Cache the Zarr group for future use
+            self.zarr_groups_cache[cache_key] = zarr_group
+            self.zarr_groups_timestamps[cache_key] = current_time
+            print(f"Cached new Zarr group for {cache_key}")
+            
             return zarr_group
 
         except RemoteException as e:
@@ -353,10 +377,12 @@ class ZarrImageManager:
             "Fluorescence_638_nm_Ex"
         ]
         self.zarr_groups_cache = {}  # Cache for open Zarr groups
+        self.zarr_groups_timestamps = {}  # Timestamps for when groups were cached
+        self.zarr_cache_expiry_seconds = 40 * 60  # 40 minutes in seconds
         self.is_running = True
         self.session = None
         self.default_timestamp = "2025-04-29_16-38-27"  # Set a default timestamp
-
+        self.scale_key = 'scale0'
     async def connect(self, workspace_token=None, server_url="https://hypha.aicell.io"):
         """Connect to the Artifact Manager service"""
         try:
@@ -405,10 +431,19 @@ class ZarrImageManager:
     async def get_zarr_group(self, dataset_id, timestamp, channel):
         """Get (or reuse from cache) a Zarr group for a specific dataset"""
         cache_key = f"{dataset_id}:{timestamp}:{channel}"
+        current_time = time.time()
         
+        # Check if the cached group exists and is still valid (less than 40 minutes old)
         if cache_key in self.zarr_groups_cache:
-            #print(f"Using cached Zarr group for {cache_key}")
-            return self.zarr_groups_cache[cache_key]
+            cache_time = self.zarr_groups_timestamps.get(cache_key, 0)
+            if current_time - cache_time < self.zarr_cache_expiry_seconds:
+                #print(f"Using cached Zarr group for {cache_key}")
+                return self.zarr_groups_cache[cache_key]
+            else:
+                # Group is expired, remove it from cache
+                print(f"Zarr group for {cache_key} has expired (created {(current_time - cache_time)/60:.1f} minutes ago). Refreshing...")
+                self.zarr_groups_cache.pop(cache_key, None)
+                self.zarr_groups_timestamps.pop(cache_key, None)
         
         try:
             # We no longer need to parse the dataset_id into workspace and artifact_alias
@@ -439,6 +474,8 @@ class ZarrImageManager:
             
             # Cache the Zarr group for future use
             self.zarr_groups_cache[cache_key] = zarr_group
+            self.zarr_groups_timestamps[cache_key] = current_time
+            print(f"Cached new Zarr group for {cache_key}")
             
             return zarr_group
         except Exception as e:
@@ -476,34 +513,8 @@ class ZarrImageManager:
             try:
                 # Debug: Print available keys in the zarr group
                 print(f"Available keys in Zarr group: {list(zarr_group.keys())}")
-                
-                # Dynamically determine the correct scale key
-                scale_key = None
-                
-                # Try different naming conventions for scale levels
-                potential_keys = [
-                    f'scale{scale}',  # Standard format: scale0, scale1, etc.
-                    str(scale),       # Just the number: 0, 1, etc.
-                    f's{scale}',      # Alternative prefix: s0, s1, etc.
-                    f'level{scale}'   # Another common format: level0, level1, etc.
-                ]
-                
-                for key in potential_keys:
-                    if key in zarr_group:
-                        scale_key = key
-                        print(f"Found matching scale key: {scale_key}")
-                        break
-                
-                # If no matching key, use the first available key
-                if scale_key is None and len(list(zarr_group.keys())) > 0:
-                    scale_key = list(zarr_group.keys())[0]
-                    print(f"No matching scale key found, using first available key: {scale_key}")
-                
-                if scale_key is None:
-                    raise KeyError("No usable keys found in Zarr group")
-                
                 # Get the scale array
-                scale_array = zarr_group[scale_key]
+                scale_array = zarr_group[self.scale_key]
                 print(f"Scale array shape: {scale_array.shape}, dtype: {scale_array.dtype}")
                 
                 # Ensure chunk coordinates are valid

@@ -453,10 +453,7 @@ class Camera(object):
         self.camera.LineSource.set(gx.GxLineSourceEntry.STROBE)
 
     def set_line3_to_exposure_active(self):
-        # self.camera.StrobeSwitch.set(gx.GxSwitchEntry.ON)
-        self.camera.LineSelector.set(gx.GxLineSelectorEntry.LINE3)
-        self.camera.LineMode.set(gx.GxLineModeEntry.OUTPUT)
-        self.camera.LineSource.set(gx.GxLineSourceEntry.EXPOSURE_ACTIVE)
+        pass
 
 
 class Camera_Simulation(object):
@@ -537,13 +534,16 @@ class Camera_Simulation(object):
         self.ARTIFACT_ALIAS = "image-map-20250429-treatment-zip"
         self.DEFAULT_TIMESTAMP = "2025-04-29_16-38-27"  # Default timestamp for the dataset
         
+        # Initialize these to None, will be set up lazily when needed
+        self.zarr_image_manager = None
+        self.artifact_manager = None
+
     def open(self, index=0):
         pass
 
     def set_callback(self, function):
         self.new_image_callback_external = function
 
-# TODO: Implement the following methods for the simulated camera
     def register_capture_callback_simulated(self, user_param, callback):
         """
         Register a callback function to be called with simulated camera data.
@@ -622,12 +622,24 @@ class Camera_Simulation(object):
         Clean up Zarr-related resources to prevent resource leaks
         """
         try:
-            if hasattr(self, 'zarr_image_manager') and self.zarr_image_manager:
+            if self.zarr_image_manager:
+                print("Closing ZarrImageManager resources...")
+                # Clear the cache to free memory
+                if hasattr(self.zarr_image_manager, 'zarr_groups_cache'):
+                    self.zarr_image_manager.zarr_groups_cache.clear()
+                    self.zarr_image_manager.zarr_groups_timestamps.clear()
+                    
                 await self.zarr_image_manager.close()
                 self.zarr_image_manager = None
                 print("ZarrImageManager closed successfully")
                 
-            if hasattr(self, 'artifact_manager') and self.artifact_manager:
+            if self.artifact_manager:
+                print("Closing ArtifactManager resources...")
+                # Clear the cache to free memory
+                if hasattr(self.artifact_manager, 'zarr_groups_cache'):
+                    self.artifact_manager.zarr_groups_cache.clear()
+                    self.artifact_manager.zarr_groups_timestamps.clear()
+                
                 # Close the artifact manager if it has a close method
                 if hasattr(self.artifact_manager, 'close'):
                     await self.artifact_manager.close()
@@ -635,13 +647,15 @@ class Camera_Simulation(object):
                 print("ArtifactManager closed successfully")
         except Exception as e:
             print(f"Error closing Zarr resources: {e}")
+            import traceback
+            print(traceback.format_exc())
             
-    async def cleanup_zarr_resources(self):
+    async def cleanup_zarr_resources_async(self):
         """
         Legacy method for backward compatibility
         """
         await self._cleanup_zarr_resources_async()
-            
+
     def set_exposure_time(self, exposure_time):
         pass
 
@@ -700,7 +714,9 @@ class Camera_Simulation(object):
             print(f"Using performance mode, example image for channel {channel}")
         else:
             async def get_image_from_zarr():
-                if not hasattr(self, 'zarr_image_manager'):
+                # Lazily initialize ZarrImageManager if needed
+                if self.zarr_image_manager is None:
+                    print("Creating new ZarrImageManager instance...")
                     self.zarr_image_manager = ZarrImageManager()
                     print("Connecting to ZarrImageManager...")
                     await self.zarr_image_manager.connect(workspace_token=self.WORKSPACE_TOKEN, server_url=self.SERVER_URL)
@@ -725,7 +741,7 @@ class Camera_Simulation(object):
                 
                 try:
                     # First attempt: Try to use direct Zarr group access for better performance
-                    if not hasattr(self, 'artifact_manager'):
+                    if self.artifact_manager is None:
                         self.artifact_manager = SquidArtifactManager()
                         await self.artifact_manager.connect_server(self.zarr_image_manager.artifact_manager_server)
                     
@@ -734,7 +750,7 @@ class Camera_Simulation(object):
                     
                     print(f"Retrieving Zarr group with workspace={workspace}, artifact_alias={artifact_alias}")
                     
-                    # Get the Zarr group
+                    # Get the Zarr group - will use cache automatically based on our changes to SquidArtifactManager
                     zarr_group = await self.artifact_manager.get_zarr_group(
                         workspace=workspace,
                         artifact_alias=artifact_alias,
@@ -819,7 +835,7 @@ class Camera_Simulation(object):
                         chunk_x = x_start // chunk_size + tx
                         chunk_y = y_start // chunk_size + ty
                         
-                        # Fetch the chunk data
+                        # Fetch the chunk data - will use cached Zarr group automatically
                         chunk_data = await self.zarr_image_manager.get_region_np_data(
                             dataset_id, 
                             timestamp, 
@@ -868,17 +884,6 @@ class Camera_Simulation(object):
             try:
                 # Use the zarr-based approach to get the image
                 self.image = await get_image_from_zarr()
-                
-                # If no valid image from Zarr, use fallback
-                if self.image is None or getattr(self.image, 'size', 0) == 0 or (isinstance(self.image, np.ndarray) and np.count_nonzero(self.image) == 0):
-                    print("No valid image returned from ZarrImageManager, using fallback")
-                    fallback_path = os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")
-                    print(f"Loading fallback image from: {fallback_path}")
-                    self.image = np.array(Image.open(fallback_path))
-                else:
-                    print(f"Successfully retrieved image from {channel_name} at {x},{y}")
-                    print(f"Image shape: {self.image.shape}, dtype: {self.image.dtype}")
-                    print(f"Image min: {self.image.min()}, max: {self.image.max()}")
             except Exception as e:
                 print(f"Error getting image from ZarrImageManager: {str(e)}")
                 import traceback
@@ -894,7 +899,7 @@ class Camera_Simulation(object):
         # Check if image contains any valid data before scaling
         if np.count_nonzero(self.image) == 0:
             print("WARNING: Image contains all zeros before scaling!")
-        
+            self.image = np.ones((self.Height, self.Width), dtype=np.uint8) * 128
         # Convert to float32 for scaling, apply factors, then clip and convert back to uint8
         self.image = np.clip(self.image.astype(np.float32) * exposure_factor * intensity_factor, 0, 255).astype(np.uint8)
         
