@@ -749,8 +749,7 @@ class Camera_Simulation(object):
                     x_start = max(0, pixel_x - half_width)
                     x_end = x_start + self.Width
                     
-                    # First attempt: Try direct region extraction
-                    print(f"Attempting direct region extraction for area: y={y_start}:{y_end}, x={x_start}:{x_end}")
+                    # Get the region directly using direct_region parameter and passing Width and Height
                     region_data = await self.zarr_image_manager.get_region_np_data(
                         dataset_id, 
                         timestamp, 
@@ -763,118 +762,31 @@ class Camera_Simulation(object):
                         height=self.Height
                     )
                     
-                    # Check if we got valid data
                     if region_data is not None and np.count_nonzero(region_data) > 0:
-                        print(f"Successfully retrieved region data via direct extraction. Shape: {region_data.shape}")
+                        print(f"Successfully retrieved region data. Shape: {region_data.shape}, Min: {region_data.min()}, Max: {region_data.max()}")
                         return region_data
-                    
-                    # If direct extraction failed or returned empty data, try multi-chunk assembly approach
-                    print("Direct region extraction failed or returned empty data. Trying multi-chunk assembly...")
-                    
-                    # Initialize output array
-                    output_data = np.zeros((self.Height, self.Width), dtype=np.uint8)
-                    
-                    # Determine chunk coordinates for the region
-                    chunk_size = self.zarr_image_manager.chunk_size
-                    start_chunk_x = x_start // chunk_size
-                    start_chunk_y = y_start // chunk_size
-                    end_chunk_x = (x_end + chunk_size - 1) // chunk_size
-                    end_chunk_y = (y_end + chunk_size - 1) // chunk_size
-                    
-                    # Calculate how many chunks we need
-                    chunks_x = end_chunk_x - start_chunk_x
-                    chunks_y = end_chunk_y - start_chunk_y
-                    print(f"Assembling {chunks_x}x{chunks_y} chunks for region...")
-                    
-                    # Track how many chunks we successfully retrieved
-                    successful_chunks = 0
-                    
-                    # Retrieve chunks and assemble them
-                    for cy in range(start_chunk_y, end_chunk_y):
-                        for cx in range(start_chunk_x, end_chunk_x):
-                            try:
-                                # Get the chunk
-                                chunk_data = await self.zarr_image_manager.get_region_np_data(
-                                    dataset_id, 
-                                    timestamp, 
-                                    channel_name, 
-                                    0,  # scale level
-                                    cx, 
-                                    cy
-                                )
-                                
-                                # Skip if chunk is empty
-                                if chunk_data is None or np.count_nonzero(chunk_data) == 0:
-                                    print(f"Chunk at ({cx},{cy}) is empty or not available")
-                                    continue
-                                
-                                # Calculate where in the output this chunk belongs
-                                chunk_y_start = cy * chunk_size - y_start
-                                chunk_x_start = cx * chunk_size - x_start
-                                
-                                # Calculate the portion of the chunk that is inside our desired region
-                                # Handle the case where the chunk is partially outside our region
-                                copy_height = min(chunk_size, self.Height - chunk_y_start)
-                                copy_width = min(chunk_size, self.Width - chunk_x_start)
-                                
-                                # Skip if chunk is completely outside our region
-                                if copy_height <= 0 or copy_width <= 0 or chunk_y_start >= self.Height or chunk_x_start >= self.Width:
-                                    continue
-                                
-                                # Handle chunks that start before our region (negative offsets)
-                                chunk_y_offset = 0
-                                chunk_x_offset = 0
-                                output_y_start = chunk_y_start
-                                output_x_start = chunk_x_start
-                                
-                                if chunk_y_start < 0:
-                                    chunk_y_offset = -chunk_y_start
-                                    output_y_start = 0
-                                    copy_height = min(copy_height, chunk_size - chunk_y_offset)
-                                
-                                if chunk_x_start < 0:
-                                    chunk_x_offset = -chunk_x_start
-                                    output_x_start = 0
-                                    copy_width = min(copy_width, chunk_size - chunk_x_offset)
-                                
-                                # Skip if there's nothing to copy after adjustments
-                                if copy_height <= 0 or copy_width <= 0:
-                                    continue
-                                
-                                # Copy data from chunk to output
-                                print(f"Placing chunk from ({cx},{cy}) at output position y={output_y_start}:{output_y_start+copy_height}, x={output_x_start}:{output_x_start+copy_width}")
-                                output_data[output_y_start:output_y_start+copy_height, output_x_start:output_x_start+copy_width] = \
-                                    chunk_data[chunk_y_offset:chunk_y_offset+copy_height, chunk_x_offset:chunk_x_offset+copy_width]
-                                
-                                successful_chunks += 1
-                                
-                            except Exception as chunk_error:
-                                print(f"Error retrieving or processing chunk at ({cx},{cy}): {chunk_error}")
-                    
-                    print(f"Successfully retrieved {successful_chunks} of {chunks_x * chunks_y} chunks")
-                    
-                    # If we got at least some chunks, return the assembled image
-                    if successful_chunks > 0 and np.count_nonzero(output_data) > 0:
-                        return output_data
-                    
-                    # If all else fails, try a single chunk at the center point
-                    print("Multi-chunk assembly failed. Trying single chunk at center...")
-                    center_chunk_x = pixel_x // chunk_size
-                    center_chunk_y = pixel_y // chunk_size
-                    
-                    chunk_data = await self.zarr_image_manager.get_region_np_data(
-                        dataset_id, 
-                        timestamp, 
-                        channel_name, 
-                        0,
-                        center_chunk_x, 
-                        center_chunk_y,
-                        width=self.Width,
-                        height=self.Height
-                    )
-                    
-                    if chunk_data is not None and np.count_nonzero(chunk_data) > 0:
-                        return chunk_data
+                    else:
+                        print("Retrieved region contains no data, falling back to chunk-based approach")
+                        
+                        # If direct region retrieval fails, use the chunk-based approach as fallback
+                        chunk_x = pixel_x // self.zarr_image_manager.chunk_size
+                        chunk_y = pixel_y // self.zarr_image_manager.chunk_size
+                        
+                        # Try to get a single chunk but specifying our desired output dimensions
+                        chunk_data = await self.zarr_image_manager.get_region_np_data(
+                            dataset_id, 
+                            timestamp, 
+                            channel_name, 
+                            0,  # scale level - 0 is highest resolution
+                            chunk_x, 
+                            chunk_y,
+                            width=self.Width,
+                            height=self.Height
+                        )
+                        
+                        if chunk_data is not None and np.count_nonzero(chunk_data) > 0:
+                            # We got a valid chunk
+                            return chunk_data
                 
                 except Exception as e:
                     print(f"Error getting image from Zarr: {str(e)}")
