@@ -228,10 +228,10 @@ class SquidController:
         print("home xy done")
 
         # move to scanning position
-        self.navigationController.move_x(32.5)
+        self.navigationController.move_x(22)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
-        self.navigationController.move_y(28.5)
+        self.navigationController.move_y(19)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
 
@@ -302,6 +302,7 @@ class SquidController:
         self.current_expousre_time = 100
         self.current_intensity = 100
         self.pixel_size_xy = 0.333
+        self.pixel_size_adjument_factor = 0.936
         self.get_pixel_size()
 
 
@@ -320,6 +321,7 @@ class SquidController:
             raise ValueError("Missing required parameters for pixel size calculation.")
 
         self.pixel_size_xy = pixel_size_um / (magnification / (objective_tube_lens_mm / tube_lens_mm))
+        self.pixel_size_xy = self.pixel_size_xy * self.pixel_size_adjument_factor
         print(f"Pixel size: {self.pixel_size_xy} µm")
         
                 
