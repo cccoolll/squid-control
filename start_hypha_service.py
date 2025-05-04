@@ -1005,39 +1005,41 @@ class Microscope:
                 # Check artifact manager connection
                 try:
                     # Create temporary artifact manager for health check if needed
-                    if not hasattr(self.squidController.camera, 'artifact_manager') or not self.squidController.camera.artifact_manager:
-                        artifact_manager = SquidArtifactManager()
-                        
-                        # Connect to the server using the same workspace token
-                        from hypha_rpc import connect_to_server
-                        api_server = await connect_to_server({
-                            "server_url": self.server_url,
-                            "token": os.environ.get("AGENT_LENS_WORKSPACE_TOKEN"),
-                            "workspace": "agent-lens",
-                            "ping_interval": None
-                        })
-                        
-                        await artifact_manager.connect_server(api_server)
-                        logger.info("Connected to artifact manager for health check")
+                    zarr_manager = None
+                    if hasattr(self.squidController.camera, 'zarr_image_manager') and self.squidController.camera.zarr_image_manager:
+                        # Use existing ZarrImageManager
+                        zarr_manager = self.squidController.camera.zarr_image_manager
+                        logger.info("Using existing ZarrImageManager for health check")
                     else:
-                        # Use existing artifact manager
-                        artifact_manager = self.squidController.camera.artifact_manager
-                    
-                    # Test artifact manager functionality
-                    gallery_id = "agent-lens/image-map-20250429-treatment-zip"
-                    test_result = await artifact_manager._svc.list_files(gallery_id)
-                    
-                    if test_result is None:
-                        raise RuntimeError(f"Failed to list files from gallery {gallery_id}")
+                        # Create a new ZarrImageManager
+                        from hypha_tools.artifact_manager.artifact_manager import ZarrImageManager
+                        zarr_manager = ZarrImageManager()
                         
-                    # Check if we got a valid response (should be a lif empty)
-                    if not isinstance(test_result, list):
-                        raise RuntimeError(f"Unexpected response format from artifact manager: {type(test_result)}")
-                        
-                    logger.info("Artifact manager connection is healthy")
+                        # Connect to the server using the workspace token
+                        workspace_token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+                        await zarr_manager.connect(workspace_token=workspace_token, server_url=self.server_url)
+                        logger.info("Created new ZarrImageManager for health check")
+                    
+                    # Test Zarr access using the dedicated test function
+                    test_result = await zarr_manager.test_zarr_access()
+                    
+                    if not test_result.get("success", False):
+                        error_msg = test_result.get("message", "Unknown error")
+                        raise RuntimeError(f"Zarr access test failed: {error_msg}")
+                    else:
+                        # Log successful test with some stats
+                        stats = test_result.get("chunk_stats", {})
+                        non_zero = stats.get("non_zero_count", 0)
+                        total = stats.get("total_size", 1)
+                        logger.info(f"Zarr access test succeeded. Non-zero values: {non_zero}/{total} ({(non_zero/total)*100:.1f}%)")
+                    
+                    # If we created a new ZarrImageManager, clean it up
+                    if zarr_manager != self.squidController.camera.zarr_image_manager:
+                        await zarr_manager.close()
+                    
                 except Exception as artifact_error:
-                    logger.error(f"Artifact manager health check failed: {str(artifact_error)}")
-                    raise RuntimeError(f"Artifact manager health check failed: {str(artifact_error)}")
+                    logger.error(f"Zarr access health check failed: {str(artifact_error)}")
+                    raise RuntimeError(f"Zarr access health check failed: {str(artifact_error)}")
                 
                 # Check chatbot service
                 chatbot_id = f"squid-control-chatbot-{'simulated' if self.is_simulation else 'real'}-{self.service_id}"

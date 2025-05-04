@@ -760,3 +760,85 @@ class ZarrImageManager:
         
         region_bytes = await self.get_region_bytes(dataset_id, timestamp, channel, scale, x, y)
         return base64.b64encode(region_bytes).decode('utf-8')
+
+    async def test_zarr_access(self, dataset_id=None, timestamp=None, channel=None):
+        """
+        Test function to verify Zarr file access is working correctly.
+        Attempts to access a known chunk at coordinates (335, 384) in scale0.
+        
+        Args:
+            dataset_id (str, optional): The dataset ID to test. Defaults to agent-lens/image-map-20250429-treatment-zip.
+            timestamp (str, optional): The timestamp to use. Defaults to the default timestamp.
+            channel (str, optional): The channel to test. Defaults to BF_LED_matrix_full.
+            
+        Returns:
+            dict: A dictionary with status, success flag, and additional info about the chunk.
+        """
+        try:
+            # Use default values if not provided
+            dataset_id = dataset_id or "agent-lens/image-map-20250429-treatment-zip"
+            timestamp = timestamp or self.default_timestamp
+            channel = channel or "BF_LED_matrix_full"
+            
+            print(f"Testing Zarr access for dataset: {dataset_id}, timestamp: {timestamp}, channel: {channel}")
+            
+            # Get the zarr group
+            zarr_group = await self.get_zarr_group(dataset_id, timestamp, channel)
+            if zarr_group is None:
+                return {
+                    "status": "error", 
+                    "success": False, 
+                    "message": "Failed to get Zarr group"
+                }
+                
+            # Directly test access to a known chunk at coordinates (335, 384) in scale0
+            # We know this chunk exists for sure in our dataset
+            test_y, test_x = 335, 384
+            test_y_start = test_y * self.chunk_size
+            test_x_start = test_x * self.chunk_size
+            
+            # Try to access the array
+            test_array = zarr_group['scale0']
+            
+            # Get the chunk dimensions and make sure coordinates are in bounds
+            array_shape = test_array.shape
+            test_y_end = min(test_y_start + self.chunk_size, array_shape[0])
+            test_x_end = min(test_x_start + self.chunk_size, array_shape[1])
+            
+            # Read the chunk directly
+            print(f"Reading test chunk at y={test_y_start}:{test_y_end}, x={test_x_start}:{test_x_end}")
+            test_chunk = test_array[test_y_start:test_y_end, test_x_start:test_x_end]
+            
+            # Gather statistics about the chunk for verification
+            chunk_stats = {
+                "shape": test_chunk.shape,
+                "min": float(test_chunk.min()) if test_chunk.size > 0 else None,
+                "max": float(test_chunk.max()) if test_chunk.size > 0 else None,
+                "mean": float(test_chunk.mean()) if test_chunk.size > 0 else None,
+                "non_zero_count": int(np.count_nonzero(test_chunk)),
+                "total_size": int(test_chunk.size)
+            }
+            
+            # Consider it successful if we got a non-empty chunk
+            success = test_chunk.size > 0 and np.count_nonzero(test_chunk) > 0
+            
+            return {
+                "status": "ok" if success else "error",
+                "success": success,
+                "message": "Successfully accessed test chunk" if success else "Chunk contained no data",
+                "chunk_stats": chunk_stats
+            }
+            
+        except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
+            print(f"Error in test_zarr_access: {str(e)}")
+            print(error_traceback)
+            
+            return {
+                "status": "error",
+                "success": False,
+                "message": f"Error accessing Zarr: {str(e)}",
+                "error": str(e),
+                "traceback": error_traceback
+            }

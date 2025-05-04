@@ -537,7 +537,7 @@ class Camera_Simulation(object):
         # Initialize these to None, will be set up lazily when needed
         self.zarr_image_manager = None
         self.artifact_manager = None
-        
+
         # Use scale1 instead of scale0 for lower resolution
         self.scale_level = 1
         self.scale_factor = 4  # scale1 is 1/4 of scale0
