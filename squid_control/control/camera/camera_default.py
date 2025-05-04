@@ -537,6 +537,10 @@ class Camera_Simulation(object):
         # Initialize these to None, will be set up lazily when needed
         self.zarr_image_manager = None
         self.artifact_manager = None
+        
+        # Use scale1 instead of scale0 for lower resolution
+        self.scale_level = 1
+        self.scale_factor = 4  # scale1 is 1/4 of scale0
 
     def open(self, index=0):
         pass
@@ -722,16 +726,16 @@ class Camera_Simulation(object):
                     await self.zarr_image_manager.connect(workspace_token=self.WORKSPACE_TOKEN, server_url=self.SERVER_URL)
                     print("Connected to ZarrImageManager")
                     
-                    # Ensure the scale_key is set
-                    if not hasattr(self.zarr_image_manager, 'scale_key'):
-                        self.zarr_image_manager.scale_key = 'scale0'
+                    # Set the scale_key to scale1 instead of scale0
+                    self.zarr_image_manager.scale_key = f'scale{self.scale_level}'
                 
                 # Convert microscope coordinates (mm) to pixel coordinates - fix conversion factor
-                pixel_x = int((x / pixel_size_um) * 1000)  # Fix: Proper scaling with parentheses
-                pixel_y = int((y / pixel_size_um) * 1000)  # Fix: Proper scaling with parentheses
+                # Divide by scale_factor since we're using scale1 (1/4 resolution)
+                pixel_x = int((x / pixel_size_um) * 1000 / self.scale_factor)
+                pixel_y = int((y / pixel_size_um) * 1000 / self.scale_factor)
                 
                 # Print pixel coordinates for debugging
-                print(f"Converted coords (mm) x={x}, y={y} to pixel coords: x={pixel_x}, y={pixel_y}")
+                print(f"Converted coords (mm) x={x}, y={y} to pixel coords: x={pixel_x}, y={pixel_y} (scale{self.scale_level})")
                 
                 # Use the class variables for dataset configuration
                 dataset_id = f"agent-lens/{self.ARTIFACT_ALIAS}"
@@ -740,53 +744,69 @@ class Camera_Simulation(object):
                 print(f"Using dataset: {dataset_id}, timestamp: {timestamp}, channel: {channel_name}")
                 
                 try:
-                    # Calculate region boundaries directly
-                    half_width = self.Width // 2
-                    half_height = self.Height // 2
+                    # Calculate region boundaries with reduced dimensions (Width/4, Height/4)
+                    scaled_width = self.Width // self.scale_factor
+                    scaled_height = self.Height // self.scale_factor
+                    
+                    half_width = scaled_width // 2
+                    half_height = scaled_height // 2
                     
                     y_start = max(0, pixel_y - half_height)
-                    y_end = y_start + self.Height
+                    y_end = y_start + scaled_height
                     x_start = max(0, pixel_x - half_width)
-                    x_end = x_start + self.Width
+                    x_end = x_start + scaled_width
                     
-                    # Get the region directly using direct_region parameter and passing Width and Height
+                    # Get the region directly using direct_region parameter and passing scaled Width and Height
                     region_data = await self.zarr_image_manager.get_region_np_data(
                         dataset_id, 
                         timestamp, 
                         channel_name, 
-                        0,  # scale level - 0 is highest resolution 
+                        self.scale_level,  # Using scale level from class property
                         0,  # x coordinate (ignored when using direct_region)
                         0,  # y coordinate (ignored when using direct_region)
                         direct_region=(y_start, y_end, x_start, x_end),
-                        width=self.Width,
-                        height=self.Height
+                        width=scaled_width,
+                        height=scaled_height
                     )
                     
                     if region_data is not None and np.count_nonzero(region_data) > 0:
                         print(f"Successfully retrieved region data. Shape: {region_data.shape}, Min: {region_data.min()}, Max: {region_data.max()}")
-                        return region_data
+                        
+                        # Resize the image back to the full resolution
+                        from PIL import Image
+                        resized_image = np.array(
+                            Image.fromarray(region_data).resize((self.Width, self.Height), Image.BICUBIC)
+                        )
+                        print(f"Resized image to full resolution: {resized_image.shape}")
+                        return resized_image
                     else:
                         print("Retrieved region contains no data, falling back to chunk-based approach")
                         
                         # If direct region retrieval fails, use the chunk-based approach as fallback
+                        # Adjust chunk coordinates for scale1
                         chunk_x = pixel_x // self.zarr_image_manager.chunk_size
                         chunk_y = pixel_y // self.zarr_image_manager.chunk_size
                         
-                        # Try to get a single chunk but specifying our desired output dimensions
+                        # Try to get a single chunk but specifying our desired output dimensions (scaled)
                         chunk_data = await self.zarr_image_manager.get_region_np_data(
                             dataset_id, 
                             timestamp, 
                             channel_name, 
-                            0,  # scale level - 0 is highest resolution
+                            self.scale_level,  # Using scale level from class property
                             chunk_x, 
                             chunk_y,
-                            width=self.Width,
-                            height=self.Height
+                            width=scaled_width,
+                            height=scaled_height
                         )
                         
                         if chunk_data is not None and np.count_nonzero(chunk_data) > 0:
-                            # We got a valid chunk
-                            return chunk_data
+                            # Resize the image back to the full resolution
+                            from PIL import Image
+                            resized_image = np.array(
+                                Image.fromarray(chunk_data).resize((self.Width, self.Height), Image.BICUBIC)
+                            )
+                            print(f"Resized chunk image to full resolution: {resized_image.shape}")
+                            return resized_image
                 
                 except Exception as e:
                     print(f"Error getting image from Zarr: {str(e)}")

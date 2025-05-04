@@ -228,10 +228,10 @@ class SquidController:
         print("home xy done")
 
         # move to scanning position
-        self.navigationController.move_x(28.5)
+        self.navigationController.move_x(32.5)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
-        self.navigationController.move_y(24.5)
+        self.navigationController.move_y(28.5)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
 
