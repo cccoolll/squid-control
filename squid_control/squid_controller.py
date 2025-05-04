@@ -303,6 +303,9 @@ class SquidController:
         self.current_intensity = 100
         self.pixel_size_xy = 0.333
         self.pixel_size_adjument_factor = 0.936
+        # drift correction for image map
+        self.drift_correction_x = -1.6
+        self.drift_correction_y = -2.1
         self.get_pixel_size()
 
 
@@ -376,7 +379,9 @@ class SquidController:
         magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
         self.current_expousre_time = exposure_time
         self.current_intensity = intensity
-        await self.camera.send_trigger(current_x, current_y, self.dz, self.pixel_size_xy, channel, intensity, exposure_time, magnification_factor)
+        corrected_x = current_x + self.drift_correction_x
+        corrected_y = current_y + self.drift_correction_y
+        await self.camera.send_trigger(corrected_x, corrected_y, self.dz, self.pixel_size_xy, channel, intensity, exposure_time, magnification_factor)
         print(f'For simulated camera, exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}, current position: {current_x},{current_y},{current_z}')
    
     def do_autofocus(self):

@@ -729,7 +729,7 @@ class Microscope:
         """Navigate to a well position in the well plate."""
         row: str = Field(..., description="Row number of the well position (e.g., 'A')")
         col: int = Field(..., description="Column number of the well position")
-        wellplate_type: str = Field('24', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')")
+        wellplate_type: str = Field('96', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')")
 
     class MoveToLoadingPositionInput(BaseModel):
         """Move the stage to the loading position."""
