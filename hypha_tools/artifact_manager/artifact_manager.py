@@ -516,41 +516,6 @@ class ZarrImageManager:
             if not zarr_group:
                 print(f"No Zarr group found for {dataset_id}/{timestamp}/{channel}")
                 return np.zeros((output_height, output_width), dtype=np.uint8)
-                
-            # TEST CODE: Directly access a specific chunk to verify it's working
-            try:
-                print("\n----- TEST: Accessing specific chunk -----")
-                # Check if scale0 exists
-                if 'scale0' in zarr_group:
-                    test_array = zarr_group['scale0']
-                    print(f"Test: scale0 array shape: {test_array.shape}, dtype: {test_array.dtype}")
-                    
-                    # Test accessing a specific chunk coordinate (335, 384)
-                    test_y, test_x = 335, 384
-                    test_y_start = test_y * self.chunk_size
-                    test_x_start = test_x * self.chunk_size
-                    test_y_end = min(test_y_start + self.chunk_size, test_array.shape[0])
-                    test_x_end = min(test_x_start + self.chunk_size, test_array.shape[1])
-                    
-                    if test_y_start < test_array.shape[0] and test_x_start < test_array.shape[1]:
-                        print(f"Test: Attempting to read chunk at coordinates (335, 384)")
-                        print(f"Test: Reading region y={test_y_start}:{test_y_end}, x={test_x_start}:{test_x_end}")
-                        test_chunk = test_array[test_y_start:test_y_end, test_x_start:test_x_end]
-                        print(f"Test: Successfully accessed chunk with shape {test_chunk.shape}")
-                        print(f"Test: Chunk stats - min: {test_chunk.min()}, max: {test_chunk.max()}, mean: {test_chunk.mean():.2f}")
-                        print(f"Test: Non-zero values: {np.count_nonzero(test_chunk)} of {test_chunk.size}")
-                    else:
-                        print(f"Test: Coordinates (335, 384) are out of bounds for array shape {test_array.shape}")
-                else:
-                    print("Test: 'scale0' key not found in zarr_group")
-                    print(f"Test: Available keys: {list(zarr_group.keys())}")
-            except Exception as test_error:
-                print(f"Test: Error accessing test chunk: {test_error}")
-                import traceback
-                print(f"Test: {traceback.format_exc()}")
-            print("----- END TEST -----\n")
-            # END TEST CODE
-            
             # Navigate to the right array in the Zarr hierarchy
             try:
                 # Debug: Print available keys in the zarr group
