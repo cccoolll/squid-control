@@ -338,14 +338,14 @@ class SquidArtifactManager:
 
             # Run the synchronous Zarr operations in a thread pool
             print("Running Zarr open in thread executor...")
-            zarr_group = await asyncio.to_thread(_open_zarr_sync, store_url, cache_max_size)
+            self.zarr_group = await asyncio.to_thread(_open_zarr_sync, store_url, cache_max_size)
             
             # Cache the Zarr group for future use
-            self.zarr_groups_cache[cache_key] = zarr_group
+            self.zarr_groups_cache[cache_key] = self.zarr_group
             self.zarr_groups_timestamps[cache_key] = current_time
             print(f"Cached new Zarr group for {cache_key}")
             
-            return zarr_group
+            return self.zarr_group
 
         except RemoteException as e:
             print(f"Error getting file URL from Artifact Manager: {e}")
@@ -383,6 +383,8 @@ class ZarrImageManager:
         self.session = None
         self.default_timestamp = "2025-04-29_16-38-27"  # Set a default timestamp
         self.scale_key = 'scale0'
+        self.zarr_group = None
+
     async def connect(self, workspace_token=None, server_url="https://hypha.aicell.io"):
         """Connect to the Artifact Manager service"""
         try:
@@ -470,14 +472,14 @@ class ZarrImageManager:
                 
             # Run the synchronous Zarr operations in a thread pool
             print("Running Zarr open in thread executor...")
-            zarr_group = await asyncio.to_thread(_open_zarr_sync, store_url, 2**28)  # Using default cache size
+            self.zarr_group = await asyncio.to_thread(_open_zarr_sync, store_url, 2**28)  # Using default cache size
             
             # Cache the Zarr group for future use
-            self.zarr_groups_cache[cache_key] = zarr_group
+            self.zarr_groups_cache[cache_key] = self.zarr_group
             self.zarr_groups_timestamps[cache_key] = current_time
             print(f"Cached new Zarr group for {cache_key}")
             
-            return zarr_group
+            return self.zarr_group
         except Exception as e:
             print(f"Error getting Zarr group: {e}")
             import traceback
@@ -512,16 +514,16 @@ class ZarrImageManager:
             output_height = height if height is not None else self.chunk_size
             
             # Get or create the zarr group
-            zarr_group = await self.get_zarr_group(dataset_id, timestamp, channel)
-            if not zarr_group:
+            self.zarr_group = await self.get_zarr_group(dataset_id, timestamp, channel)
+            if not self.zarr_group:
                 print(f"No Zarr group found for {dataset_id}/{timestamp}/{channel}")
                 return np.zeros((output_height, output_width), dtype=np.uint8)
             # Navigate to the right array in the Zarr hierarchy
             try:
                 # Debug: Print available keys in the zarr group
-                print(f"Available keys in Zarr group: {list(zarr_group.keys())}")
+                print(f"Available keys in Zarr group: {list(self.zarr_group.keys())}")
                 # Get the scale array
-                scale_array = zarr_group[self.scale_key]
+                scale_array = self.zarr_group[self.scale_key]
                 print(f"Scale array shape: {scale_array.shape}, dtype: {scale_array.dtype}")
                 
                 # Ensure coordinates are valid
@@ -666,7 +668,7 @@ class ZarrImageManager:
                         
                         return None
                     
-                    array = find_array(zarr_group)
+                    array = find_array(self.zarr_group)
                     if array is not None:
                         # Calculate coordinates based on the found array's dimensions
                         y_start = min(y * self.chunk_size, array.shape[0] - 1)
@@ -747,9 +749,9 @@ class ZarrImageManager:
             
             print(f"Testing Zarr access for dataset: {dataset_id}, timestamp: {timestamp}, channel: {channel}")
             
-            # Get the zarr group
-            zarr_group = await self.get_zarr_group(dataset_id, timestamp, channel)
-            if zarr_group is None:
+            # refresh the zarr group
+            self.zarr_group = await self.get_zarr_group(dataset_id, timestamp, channel)
+            if self.zarr_group is None:
                 return {
                     "status": "error", 
                     "success": False, 
@@ -763,7 +765,7 @@ class ZarrImageManager:
             test_x_start = test_x * self.chunk_size
             
             # Try to access the array
-            test_array = zarr_group['scale0']
+            test_array = self.zarr_group['scale0']
             
             # Get the chunk dimensions and make sure coordinates are in bounds
             array_shape = test_array.shape
