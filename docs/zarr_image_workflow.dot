@@ -57,10 +57,12 @@ digraph ZarrImageWorkflow {
         get_region_np_data [label="get_region_np_data()"];
         get_zarr_group [label="get_zarr_group()"];
         zarr_cache [label="Zarr Group Cache"];
+        test_zarr_access [label="test_zarr_access()"];
         
         get_region_bytes -> get_region_np_data;
         get_region_np_data -> get_zarr_group;
         get_zarr_group -> zarr_cache [label="Check cache first"];
+        test_zarr_access -> get_zarr_group;
     }
     
     // Artifact Manager
@@ -71,6 +73,24 @@ digraph ZarrImageWorkflow {
         
         get_file [label="get_file()\nGet pre-signed download URL"];
         artifact_id [label="artifact_id = workspace/artifact_alias"];
+        auth_request [label="Authenticated API Request"];
+        
+        artifact_id -> get_file;
+        get_file -> auth_request [label="Request signed URL"];
+    }
+    
+    // S3 Storage
+    subgraph cluster_s3_storage {
+        label="S3 Storage";
+        style=filled;
+        color=lightgrey;
+        
+        s3_backend [label="S3 Bucket Storage"];
+        presigned_url [label="Pre-signed Download URL"];
+        zip_archive [label="Image Channel ZIP Archive\n(timestamp/channel.zip)"];
+        
+        s3_backend -> zip_archive;
+        zip_archive -> presigned_url [label="Generate URL\nwith temp credentials"];
     }
     
     // Zarr Storage
@@ -80,11 +100,13 @@ digraph ZarrImageWorkflow {
         color=lightgrey;
         
         fsstore [label="FSStore\n(zip::download_url)"];
+        fsspec_handler [label="fsspec ZIP Handler"];
         lru_cache [label="LRUStoreCache\n(Cache zarr chunks)"];
         zarr_group [label="zarr.group()"];
         zarr_array [label="scale{scale}[y:y+chunk_size, x:x+chunk_size]"];
         
-        fsstore -> lru_cache;
+        fsstore -> fsspec_handler [label="Access via fsspec"];
+        fsspec_handler -> lru_cache [label="Cached access"];
         lru_cache -> zarr_group;
         zarr_group -> zarr_array;
     }
@@ -112,9 +134,11 @@ digraph ZarrImageWorkflow {
     direct_zarr_access -> get_zarr_group;
     
     get_zarr_group -> artifact_id -> get_file;
-    get_file -> fsstore [label="Use URL to access zip file"];
+    get_file -> presigned_url [label="Retrieve signed URL"];
+    presigned_url -> fsstore [label="Use URL to access zip file"];
     
     test_region_retrieval -> get_region_np_data;
+    auth_request -> s3_backend [label="Verify credentials"];
     
     // Key data flow explanation
     data_flow1 [shape=note, fillcolor=lightyellow, label="1. User selects position, channel, and\nacquisition parameters"];
@@ -123,6 +147,7 @@ digraph ZarrImageWorkflow {
     data_flow4 [shape=note, fillcolor=lightyellow, label="4. Zarr access steps:\n- Get download URL for zip\n- Open zip via fsspec\n- Access specific region\n- Apply LRU caching for performance"];
     data_flow5 [shape=note, fillcolor=lightyellow, label="5. Image data is processed with\nexposure and intensity adjustments"];
     data_flow6 [shape=note, fillcolor=lightyellow, label="6. Health probe periodically checks\nall components are functioning"];
+    data_flow7 [shape=note, fillcolor=lightyellow, label="7. S3 storage accessed via\npre-signed URLs for security"];
     
     data_flow1 -> request_image [style=invis];
     data_flow2 -> send_trigger [style=invis];
@@ -130,4 +155,5 @@ digraph ZarrImageWorkflow {
     data_flow4 -> fsstore [style=invis];
     data_flow5 -> image_processing [style=invis];
     data_flow6 -> is_service_healthy [style=invis];
+    data_flow7 -> s3_backend [style=invis];
 }
