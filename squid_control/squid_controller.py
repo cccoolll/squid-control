@@ -228,10 +228,10 @@ class SquidController:
         print("home xy done")
 
         # move to scanning position
-        self.navigationController.move_x(22)
+        self.navigationController.move_x(23.3)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
-        self.navigationController.move_y(19)
+        self.navigationController.move_y(20.35)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
 
@@ -396,7 +396,7 @@ class SquidController:
 
     def do_autofocus_simulation(self):
         
-        random_z = 3.1+ np.random.normal(0,0.1)
+        random_z = CONFIG.SIMULATED_CAMERA.ORIN_Z + np.random.normal(0,0.1)
         self.navigationController.move_z_to(random_z)
         self.send_trigger_simulation(self.current_channel, self.current_intensity, self.current_expousre_time)
         

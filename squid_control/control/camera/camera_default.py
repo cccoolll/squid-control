@@ -519,7 +519,7 @@ class Camera_Simulation(object):
         self.OffsetY = 0
         
         # simulated camera values
-        self.simulated_focus = 3.3
+        self.simulated_focus = 4
         self.channels = [0, 11, 12, 14, 13]
         self.image_paths = {
             0: 'BF_LED_matrix_full.bmp',
@@ -539,8 +539,8 @@ class Camera_Simulation(object):
         self.artifact_manager = None
 
         # Use scale1 instead of scale0 for lower resolution
-        self.scale_level = 1
-        self.scale_factor = 4  # scale1 is 1/4 of scale0
+        self.scale_level = 2
+        self.scale_factor = 16  # scale1 is 1/4 of scale0
 
     def open(self, index=0):
         pass
@@ -695,6 +695,77 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
+    async def get_image_from_zarr(self, x, y, pixel_size_um, channel_name):
+        """
+        Get image data from Zarr storage for the specified coordinates and channel.
+        
+        Args:
+            x (float): X coordinate in mm
+            y (float): Y coordinate in mm
+            pixel_size_um (float): Pixel size in micrometers
+            channel_name (str): Name of the channel to retrieve
+            
+        Returns:
+            np.ndarray: The image data
+        """
+        # Lazily initialize ZarrImageManager if needed
+        if self.zarr_image_manager is None:
+            print("Creating new ZarrImageManager instance...")
+            self.zarr_image_manager = ZarrImageManager()
+            print("Connecting to ZarrImageManager...")
+            await self.zarr_image_manager.connect(workspace_token=self.WORKSPACE_TOKEN, server_url=self.SERVER_URL)
+            print("Connected to ZarrImageManager")
+            
+            # Set the scale_key to scale1 instead of scale0
+            self.zarr_image_manager.scale_key = f'scale{self.scale_level}'
+        
+        # Convert microscope coordinates (mm) to pixel coordinates - fix conversion factor
+        # Divide by scale_factor since we're using scale1 (1/4 resolution)
+        pixel_x = int((x / pixel_size_um) * 1000 / self.scale_factor)
+        pixel_y = int((y / pixel_size_um) * 1000 / self.scale_factor)
+        
+        # Print pixel coordinates for debugging
+        print(f"Converted coords (mm) x={x}, y={y} to pixel coords: x={pixel_x}, y={pixel_y} (scale{self.scale_level})")
+        
+        # Use the class variables for dataset configuration
+        dataset_id = f"agent-lens/{self.ARTIFACT_ALIAS}"
+        timestamp = self.DEFAULT_TIMESTAMP
+        
+        print(f"Using dataset: {dataset_id}, timestamp: {timestamp}, channel: {channel_name}")
+        
+        try:
+            # Calculate region boundaries with reduced dimensions (Width/4, Height/4)
+            scaled_width = self.Width // self.scale_factor
+            scaled_height = self.Height // self.scale_factor
+            
+            half_width = scaled_width // 2
+            half_height = scaled_height // 2
+            
+            y_start = max(0, pixel_y - half_height)
+            y_end = y_start + scaled_height
+            x_start = max(0, pixel_x - half_width)
+            x_end = x_start + scaled_width
+            
+            # Get the region directly using direct_region parameter and passing scaled Width and Height
+            region_data = await self.zarr_image_manager.get_region_np_data(
+                dataset_id, 
+                timestamp, 
+                channel_name, 
+                self.scale_level,  # Using scale level from class property
+                0,  # x coordinate (ignored when using direct_region)
+                0,  # y coordinate (ignored when using direct_region)
+                direct_region=(y_start, y_end, x_start, x_end),
+                width=scaled_width,
+                height=scaled_height
+            )
+            
+            return region_data
+        except Exception as e:
+            print(f"Error getting image from Zarr: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            return None
+
     async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.333, channel=0, intensity=100, exposure_time=100, magnification_factor=20, performace_mode=False):
         print(f"Sending trigger with x={x}, y={y}, dz={dz}, pixel_size_um={pixel_size_um}, channel={channel}, intensity={intensity}, exposure_time={exposure_time}, magnification_factor={magnification_factor}, performace_mode={performace_mode}")
         self.frame_ID += 1
@@ -717,116 +788,11 @@ class Camera_Simulation(object):
             self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
             print(f"Using performance mode, example image for channel {channel}")
         else:
-            async def get_image_from_zarr():
-                # Lazily initialize ZarrImageManager if needed
-                if self.zarr_image_manager is None:
-                    print("Creating new ZarrImageManager instance...")
-                    self.zarr_image_manager = ZarrImageManager()
-                    print("Connecting to ZarrImageManager...")
-                    await self.zarr_image_manager.connect(workspace_token=self.WORKSPACE_TOKEN, server_url=self.SERVER_URL)
-                    print("Connected to ZarrImageManager")
-                    
-                    # Set the scale_key to scale1 instead of scale0
-                    self.zarr_image_manager.scale_key = f'scale{self.scale_level}'
-                
-                # Convert microscope coordinates (mm) to pixel coordinates - fix conversion factor
-                # Divide by scale_factor since we're using scale1 (1/4 resolution)
-                pixel_x = int((x / pixel_size_um) * 1000 / self.scale_factor)
-                pixel_y = int((y / pixel_size_um) * 1000 / self.scale_factor)
-                
-                # Print pixel coordinates for debugging
-                print(f"Converted coords (mm) x={x}, y={y} to pixel coords: x={pixel_x}, y={pixel_y} (scale{self.scale_level})")
-                
-                # Use the class variables for dataset configuration
-                dataset_id = f"agent-lens/{self.ARTIFACT_ALIAS}"
-                timestamp = self.DEFAULT_TIMESTAMP
-                
-                print(f"Using dataset: {dataset_id}, timestamp: {timestamp}, channel: {channel_name}")
-                
-                try:
-                    # Calculate region boundaries with reduced dimensions (Width/4, Height/4)
-                    scaled_width = self.Width // self.scale_factor
-                    scaled_height = self.Height // self.scale_factor
-                    
-                    half_width = scaled_width // 2
-                    half_height = scaled_height // 2
-                    
-                    y_start = max(0, pixel_y - half_height)
-                    y_end = y_start + scaled_height
-                    x_start = max(0, pixel_x - half_width)
-                    x_end = x_start + scaled_width
-                    
-                    # Get the region directly using direct_region parameter and passing scaled Width and Height
-                    region_data = await self.zarr_image_manager.get_region_np_data(
-                        dataset_id, 
-                        timestamp, 
-                        channel_name, 
-                        self.scale_level,  # Using scale level from class property
-                        0,  # x coordinate (ignored when using direct_region)
-                        0,  # y coordinate (ignored when using direct_region)
-                        direct_region=(y_start, y_end, x_start, x_end),
-                        width=scaled_width,
-                        height=scaled_height
-                    )
-                    
-                    if region_data is not None and np.count_nonzero(region_data) > 0:
-                        print(f"Successfully retrieved region data. Shape: {region_data.shape}, Min: {region_data.min()}, Max: {region_data.max()}")
-                        
-                        # Resize the image back to the full resolution
-                        from PIL import Image
-                        resized_image = np.array(
-                            Image.fromarray(region_data).resize((self.Width, self.Height), Image.BICUBIC)
-                        )
-                        print(f"Resized image to full resolution: {resized_image.shape}")
-                        return resized_image
-                    else:
-                        print("Retrieved region contains no data, falling back to chunk-based approach")
-                        
-                        # If direct region retrieval fails, use the chunk-based approach as fallback
-                        # Adjust chunk coordinates for scale1
-                        chunk_x = pixel_x // self.zarr_image_manager.chunk_size
-                        chunk_y = pixel_y // self.zarr_image_manager.chunk_size
-                        
-                        # Try to get a single chunk but specifying our desired output dimensions (scaled)
-                        chunk_data = await self.zarr_image_manager.get_region_np_data(
-                            dataset_id, 
-                            timestamp, 
-                            channel_name, 
-                            self.scale_level,  # Using scale level from class property
-                            chunk_x, 
-                            chunk_y,
-                            width=scaled_width,
-                            height=scaled_height
-                        )
-                        
-                        if chunk_data is not None and np.count_nonzero(chunk_data) > 0:
-                            # Resize the image back to the full resolution
-                            from PIL import Image
-                            resized_image = np.array(
-                                Image.fromarray(chunk_data).resize((self.Width, self.Height), Image.BICUBIC)
-                            )
-                            print(f"Resized chunk image to full resolution: {resized_image.shape}")
-                            return resized_image
-                
-                except Exception as e:
-                    print(f"Error getting image from Zarr: {str(e)}")
-                    import traceback
-                    print(traceback.format_exc())
-                
-                # If all approaches fail, return None
-                print("Failed to get valid image data from Zarr")
-                return None
-
-            try:
-                # Use the zarr-based approach to get the image
-                self.image = await get_image_from_zarr()
-            except Exception as e:
-                print(f"Error getting image from ZarrImageManager: {str(e)}")
-                import traceback
-                print(traceback.format_exc())
-                fallback_path = os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")
-                print(f"Loading fallback image from: {fallback_path}")
-                self.image = np.array(Image.open(fallback_path))
+            self.image = await self.get_image_from_zarr(x, y, pixel_size_um, channel_name)
+            if self.image is None:
+                # Fallback to example image if Zarr access fails
+                self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
+                print(f"Failed to get image from Zarr, using example image for channel {channel}")
 
         # Apply exposure and intensity scaling
         exposure_factor = max(0.1, exposure_time / 100)  # Ensure minimum factor to prevent black images

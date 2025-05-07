@@ -514,17 +514,31 @@ class ZarrImageManager:
             output_height = height if height is not None else self.chunk_size
             
             # Get or create the zarr group
-            self.zarr_group = await self.get_zarr_group(dataset_id, timestamp, channel)
+            cache_key = f"{dataset_id}:{timestamp}:{channel}"
+            current_time = time.time()
+            
+            # Check if we have a cached and non-expired Zarr group
+            if cache_key in self.zarr_groups_cache:
+                cache_time = self.zarr_groups_timestamps.get(cache_key, 0)
+                if current_time - cache_time < self.zarr_cache_expiry_seconds:
+                    self.zarr_group = self.zarr_groups_cache[cache_key]
+                else:
+                    # Group is expired, remove it from cache
+                    print(f"Zarr group for {cache_key} has expired (created {(current_time - cache_time)/60:.1f} minutes ago). Refreshing...")
+                    self.zarr_groups_cache.pop(cache_key, None)
+                    self.zarr_groups_timestamps.pop(cache_key, None)
+                    self.zarr_group = await self.get_zarr_group(dataset_id, timestamp, channel)
+            else:
+                self.zarr_group = await self.get_zarr_group(dataset_id, timestamp, channel)
+            
             if not self.zarr_group:
                 print(f"No Zarr group found for {dataset_id}/{timestamp}/{channel}")
                 return np.zeros((output_height, output_width), dtype=np.uint8)
+
             # Navigate to the right array in the Zarr hierarchy
             try:
-                # Debug: Print available keys in the zarr group
-                print(f"Available keys in Zarr group: {list(self.zarr_group.keys())}")
                 # Get the scale array
                 scale_array = self.zarr_group[self.scale_key]
-                print(f"Scale array shape: {scale_array.shape}, dtype: {scale_array.dtype}")
                 
                 # Ensure coordinates are valid
                 array_shape = scale_array.shape
@@ -556,11 +570,6 @@ class ZarrImageManager:
                 print(f"Reading region from y={y_start} to y={y_end}, x={x_start} to x={x_end}")
                 region_data = scale_array[y_start:y_end, x_start:x_end]
                 
-                # Debug info about retrieved data
-                print(f"Region data shape: {region_data.shape}, dtype: {region_data.dtype}, " 
-                      f"min: {region_data.min() if region_data.size > 0 else 'N/A'}, "
-                      f"max: {region_data.max() if region_data.size > 0 else 'N/A'}")
-                
                 # If width and height are specified, resize the output to those dimensions
                 if width is not None or height is not None:
                     # Create an empty array with the requested dimensions
@@ -570,11 +579,8 @@ class ZarrImageManager:
                     h, w = region_data.shape
                     result[:min(h, output_height), :min(w, output_width)] = region_data[:min(h, output_height), :min(w, output_width)]
                     
-                    print(f"Resized region data from {region_data.shape} to {result.shape}")
-                    
                     # Ensure data is in the right format (uint8)
                     if result.dtype != np.uint8:
-                        print(f"Converting resized data from {result.dtype} to uint8")
                         if result.dtype == np.float32 or result.dtype == np.float64:
                             # Normalize floating point data
                             if result.max() > 0:
@@ -591,7 +597,6 @@ class ZarrImageManager:
                 elif direct_region is not None:
                     # Ensure data is in the right format (uint8)
                     if region_data.dtype != np.uint8:
-                        print(f"Converting direct region data from {region_data.dtype} to uint8")
                         if region_data.dtype == np.float32 or region_data.dtype == np.float64:
                             # Normalize floating point data
                             if region_data.max() > 0:
@@ -607,14 +612,12 @@ class ZarrImageManager:
                 # Make sure we have a properly shaped array for chunk-based requests
                 elif region_data.shape != (self.chunk_size, self.chunk_size):
                     # Resize or pad if necessary
-                    print(f"Padding region from {region_data.shape} to {(self.chunk_size, self.chunk_size)}")
                     result = np.zeros((self.chunk_size, self.chunk_size), dtype=region_data.dtype or np.uint8)
                     h, w = region_data.shape
                     result[:min(h, self.chunk_size), :min(w, self.chunk_size)] = region_data[:min(h, self.chunk_size), :min(w, self.chunk_size)]
                     
                     # Ensure data is in the right format (uint8)
                     if result.dtype != np.uint8:
-                        print(f"Converting padded data from {result.dtype} to uint8")
                         if result.dtype == np.float32 or result.dtype == np.float64:
                             # Normalize floating point data
                             if result.max() > 0:
@@ -630,7 +633,6 @@ class ZarrImageManager:
                 # Default case: return the region data as is
                 # Ensure data is in the right format (uint8)
                 if region_data.dtype != np.uint8:
-                    print(f"Converting region data from {region_data.dtype} to uint8")
                     if region_data.dtype == np.float32 or region_data.dtype == np.float64:
                         # Normalize floating point data
                         if region_data.max() > 0:
@@ -645,59 +647,13 @@ class ZarrImageManager:
                 
             except KeyError as e:
                 print(f"Error accessing Zarr array path: {e}")
-                # If specific key approach failed, try to explore the structure and find data
-                try:
-                    # Simple approach: try to traverse into any sub-groups until we find an array
-                    def find_array(group, depth=0, max_depth=3):
-                        if depth >= max_depth:
-                            return None
-                        
-                        for key in group.keys():
-                            item = group[key]
-                            
-                            # Check if it's an array with at least 2 dimensions
-                            if hasattr(item, 'shape') and len(item.shape) >= 2:
-                                print(f"Found array at path: {key}, shape: {item.shape}")
-                                return item
-                            
-                            # If it's a group, recursively check inside
-                            elif hasattr(item, 'keys'):
-                                result = find_array(item, depth+1, max_depth)
-                                if result is not None:
-                                    return result
-                        
-                        return None
-                    
-                    array = find_array(self.zarr_group)
-                    if array is not None:
-                        # Calculate coordinates based on the found array's dimensions
-                        y_start = min(y * self.chunk_size, array.shape[0] - 1)
-                        x_start = min(x * self.chunk_size, array.shape[1] - 1)
-                        y_end = min(y_start + self.chunk_size, array.shape[0])
-                        x_end = min(x_start + self.chunk_size, array.shape[1])
-                        
-                        region_data = array[y_start:y_end, x_start:x_end]
-                        
-                        # Pad if necessary
-                        if region_data.shape != (self.chunk_size, self.chunk_size):
-                            result = np.zeros((self.chunk_size, self.chunk_size), dtype=region_data.dtype or np.uint8)
-                            h, w = region_data.shape
-                            result[:min(h, self.chunk_size), :min(w, self.chunk_size)] = region_data[:min(h, self.chunk_size), :min(w, self.chunk_size)]
-                            return result
-                        
-                        return region_data
-                
-                except Exception as nested_e:
-                    print(f"Alternative array search failed: {nested_e}")
-                
-                # If all else fails, return an empty array
-                return np.zeros((self.chunk_size, self.chunk_size), dtype=np.uint8)
+                return np.zeros((output_height, output_width), dtype=np.uint8)
                 
         except Exception as e:
             print(f"Error getting region data: {e}")
             import traceback
             print(traceback.format_exc())
-            return np.zeros((self.chunk_size, self.chunk_size), dtype=np.uint8)
+            return np.zeros((output_height, output_width), dtype=np.uint8)
 
     async def get_region_bytes(self, dataset_id, timestamp, channel, scale, x, y):
         """Serve a region as PNG bytes"""
