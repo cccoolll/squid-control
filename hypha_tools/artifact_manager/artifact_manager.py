@@ -358,7 +358,7 @@ class SquidArtifactManager:
 
 # Constants
 SERVER_URL = "https://hypha.aicell.io"
-WORKSPACE_TOKEN = os.environ.get("WORKSPACE_TOKEN")
+WORKSPACE_TOKEN = os.environ.get("SQUID_WORKSPACE_TOKEN")
 ARTIFACT_ALIAS = "image-map-20250429-treatment-zip"
 DEFAULT_CHANNEL = "BF_LED_matrix_full"
 
@@ -367,7 +367,7 @@ class ZarrImageManager:
     def __init__(self):
         self.artifact_manager = None
         self.artifact_manager_server = None
-        self.workspace = "agent-lens"  # Default workspace
+        self.workspace = "squid-control"  # Default workspace
         self.chunk_size = 256  # Default chunk size for Zarr
         self.channels = [
             "BF_LED_matrix_full",
@@ -388,7 +388,7 @@ class ZarrImageManager:
     async def connect(self, workspace_token=None, server_url="https://hypha.aicell.io"):
         """Connect to the Artifact Manager service"""
         try:
-            token = workspace_token or os.environ.get("WORKSPACE_TOKEN")
+            token = workspace_token or os.environ.get("SQUID_WORKSPACE_TOKEN")
             if not token:
                 raise ValueError("Workspace token not provided")
             
@@ -690,7 +690,7 @@ class ZarrImageManager:
         Attempts to access a known chunk at coordinates (335, 384) in scale0.
         
         Args:
-            dataset_id (str, optional): The dataset ID to test. Defaults to agent-lens/image-map-20250429-treatment-zip.
+            dataset_id (str, optional): The dataset ID to test. Defaults to squid-control/image-map-20250429-treatment-zip.
             timestamp (str, optional): The timestamp to use. Defaults to the default timestamp.
             channel (str, optional): The channel to test. Defaults to BF_LED_matrix_full.
             
@@ -699,7 +699,7 @@ class ZarrImageManager:
         """
         try:
             # Use default values if not provided
-            dataset_id = dataset_id or "agent-lens/image-map-20250429-treatment-zip"
+            dataset_id = dataset_id or "squid-control/image-map-20250429-treatment-zip"
             timestamp = timestamp or self.default_timestamp
             channel = channel or "BF_LED_matrix_full"
             
