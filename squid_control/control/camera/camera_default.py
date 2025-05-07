@@ -12,7 +12,7 @@ from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting
 from scipy.ndimage import gaussian_filter
 import zarr
-from hypha_tools.artifact_manager.step2_get_tiles import TileManager
+from hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager, ZarrImageManager
 import asyncio
 script_dir = os.path.dirname(__file__)
 
@@ -453,15 +453,10 @@ class Camera(object):
         self.camera.LineSource.set(gx.GxLineSourceEntry.STROBE)
 
     def set_line3_to_exposure_active(self):
-        # self.camera.StrobeSwitch.set(gx.GxSwitchEntry.ON)
-        self.camera.LineSelector.set(gx.GxLineSelectorEntry.LINE3)
-        self.camera.LineMode.set(gx.GxLineModeEntry.OUTPUT)
-        self.camera.LineSource.set(gx.GxLineSourceEntry.EXPOSURE_ACTIVE)
+        pass
 
 
 class Camera_Simulation(object):
-
-
 
     def __init__(
         self, sn=None, is_global_shutter=False, rotate_image_angle=None, flip_image=None
@@ -524,7 +519,7 @@ class Camera_Simulation(object):
         self.OffsetY = 0
         
         # simulated camera values
-        self.simulated_focus = 3.3
+        self.simulated_focus = 4
         self.channels = [0, 11, 12, 14, 13]
         self.image_paths = {
             0: 'BF_LED_matrix_full.bmp',
@@ -533,18 +528,26 @@ class Camera_Simulation(object):
             14: 'Fluorescence_561_nm_Ex.bmp',
             13: 'Fluorescence_638_nm_Ex.bmp',
         }
+        # Configuration for ZarrImageManager
         self.SERVER_URL = "https://hypha.aicell.io"
         self.WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
-        self.ARTIFACT_ALIAS = "microscopy-tiles"
+        self.ARTIFACT_ALIAS = "image-map-20250429-treatment-zip"
+        self.DEFAULT_TIMESTAMP = "2025-04-29_16-38-27"  # Default timestamp for the dataset
         
-        
+        # Initialize these to None, will be set up lazily when needed
+        self.zarr_image_manager = None
+        self.artifact_manager = None
+
+        # Use scale1 instead of scale0 for lower resolution
+        self.scale_level = 2
+        self.scale_factor = 16  # scale1 is 1/4 of scale0
+
     def open(self, index=0):
         pass
 
     def set_callback(self, function):
         self.new_image_callback_external = function
 
-# TODO: Implement the following methods for the simulated camera
     def register_capture_callback_simulated(self, user_param, callback):
         """
         Register a callback function to be called with simulated camera data.
@@ -598,7 +601,64 @@ class Camera_Simulation(object):
         pass
 
     def close(self):
+        self.cleanup_zarr_resources()
         pass
+        
+    def cleanup_zarr_resources(self):
+        """
+        Synchronous wrapper for async cleanup method
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Create a new event loop if the current one is already running
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                new_loop.run_until_complete(self._cleanup_zarr_resources_async())
+                new_loop.close()
+            else:
+                loop.run_until_complete(self._cleanup_zarr_resources_async())
+        except Exception as e:
+            print(f"Error in cleanup_zarr_resources: {e}")
+        
+    async def _cleanup_zarr_resources_async(self):
+        """
+        Clean up Zarr-related resources to prevent resource leaks
+        """
+        try:
+            if self.zarr_image_manager:
+                print("Closing ZarrImageManager resources...")
+                # Clear the cache to free memory
+                if hasattr(self.zarr_image_manager, 'zarr_groups_cache'):
+                    self.zarr_image_manager.zarr_groups_cache.clear()
+                    self.zarr_image_manager.zarr_groups_timestamps.clear()
+                    
+                await self.zarr_image_manager.close()
+                self.zarr_image_manager = None
+                print("ZarrImageManager closed successfully")
+                
+            if self.artifact_manager:
+                print("Closing ArtifactManager resources...")
+                # Clear the cache to free memory
+                if hasattr(self.artifact_manager, 'zarr_groups_cache'):
+                    self.artifact_manager.zarr_groups_cache.clear()
+                    self.artifact_manager.zarr_groups_timestamps.clear()
+                
+                # Close the artifact manager if it has a close method
+                if hasattr(self.artifact_manager, 'close'):
+                    await self.artifact_manager.close()
+                self.artifact_manager = None
+                print("ArtifactManager closed successfully")
+        except Exception as e:
+            print(f"Error closing Zarr resources: {e}")
+            import traceback
+            print(traceback.format_exc())
+            
+    async def cleanup_zarr_resources_async(self):
+        """
+        Legacy method for backward compatibility
+        """
+        await self._cleanup_zarr_resources_async()
 
     def set_exposure_time(self, exposure_time):
         pass
@@ -635,7 +695,79 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.1665, channel=0, intensity=100, exposure_time=100, magnification_factor=20, performace_mode=False):
+    async def get_image_from_zarr(self, x, y, pixel_size_um, channel_name):
+        """
+        Get image data from Zarr storage for the specified coordinates and channel.
+        
+        Args:
+            x (float): X coordinate in mm
+            y (float): Y coordinate in mm
+            pixel_size_um (float): Pixel size in micrometers
+            channel_name (str): Name of the channel to retrieve
+            
+        Returns:
+            np.ndarray: The image data
+        """
+        # Lazily initialize ZarrImageManager if needed
+        if self.zarr_image_manager is None:
+            print("Creating new ZarrImageManager instance...")
+            self.zarr_image_manager = ZarrImageManager()
+            print("Connecting to ZarrImageManager...")
+            await self.zarr_image_manager.connect(workspace_token=self.WORKSPACE_TOKEN, server_url=self.SERVER_URL)
+            print("Connected to ZarrImageManager")
+            
+            # Set the scale_key to scale1 instead of scale0
+            self.zarr_image_manager.scale_key = f'scale{self.scale_level}'
+        
+        # Convert microscope coordinates (mm) to pixel coordinates - fix conversion factor
+        # Divide by scale_factor since we're using scale1 (1/4 resolution)
+        pixel_x = int((x / pixel_size_um) * 1000 / self.scale_factor)
+        pixel_y = int((y / pixel_size_um) * 1000 / self.scale_factor)
+        
+        # Print pixel coordinates for debugging
+        print(f"Converted coords (mm) x={x}, y={y} to pixel coords: x={pixel_x}, y={pixel_y} (scale{self.scale_level})")
+        
+        # Use the class variables for dataset configuration
+        dataset_id = f"agent-lens/{self.ARTIFACT_ALIAS}"
+        timestamp = self.DEFAULT_TIMESTAMP
+        
+        print(f"Using dataset: {dataset_id}, timestamp: {timestamp}, channel: {channel_name}")
+        
+        try:
+            # Calculate region boundaries with reduced dimensions (Width/4, Height/4)
+            scaled_width = self.Width // self.scale_factor
+            scaled_height = self.Height // self.scale_factor
+            
+            half_width = scaled_width // 2
+            half_height = scaled_height // 2
+            
+            y_start = max(0, pixel_y - half_height)
+            y_end = y_start + scaled_height
+            x_start = max(0, pixel_x - half_width)
+            x_end = x_start + scaled_width
+            
+            # Get the region directly using direct_region parameter and passing scaled Width and Height
+            region_data = await self.zarr_image_manager.get_region_np_data(
+                dataset_id, 
+                timestamp, 
+                channel_name, 
+                self.scale_level,  # Using scale level from class property
+                0,  # x coordinate (ignored when using direct_region)
+                0,  # y coordinate (ignored when using direct_region)
+                direct_region=(y_start, y_end, x_start, x_end),
+                width=scaled_width,
+                height=scaled_height
+            )
+            
+            return region_data
+        except Exception as e:
+            print(f"Error getting image from Zarr: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            return None
+
+    async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.333, channel=0, intensity=100, exposure_time=100, magnification_factor=20, performace_mode=False):
+        print(f"Sending trigger with x={x}, y={y}, dz={dz}, pixel_size_um={pixel_size_um}, channel={channel}, intensity={intensity}, exposure_time={exposure_time}, magnification_factor={magnification_factor}, performace_mode={performace_mode}")
         self.frame_ID += 1
         self.timestamp = time.time()
 
@@ -656,35 +788,28 @@ class Camera_Simulation(object):
             self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
             print(f"Using performance mode, example image for channel {channel}")
         else:
-            async def get_image_from_tiles():
-                if not hasattr(self, 'tile_manager'):
-                    self.tile_manager = TileManager()
-                    print("Connecting to TileManager...")
-                    await self.tile_manager.connect()
-                    print("Connected to TileManager")
-                pixel_x = int(x / pixel_size_um) * 1000
-                pixel_y = int(y / pixel_size_um) * 1000
-                return await self.tile_manager.get_region(
-                    channel=channel_name,
-                    scale=0,
-                    x_start=max(0, pixel_x - self.Width // 2),
-                    y_start=max(0, pixel_y - self.Height // 2),
-                    width=self.Width,
-                    height=self.Height
-                )
-
-            try:
-                self.image = await get_image_from_tiles()
-                if self.image is None:
-                    raise ValueError("No image returned from TileManager")
-                print(f"Successfully retrieved image from {channel_name} at {x},{y}")
-            except Exception as e:
-                print(f"Error getting image from TileManager: {str(e)}")
+            self.image = await self.get_image_from_zarr(x, y, pixel_size_um, channel_name)
+            if self.image is None:
+                # Fallback to example image if Zarr access fails
                 self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
+                print(f"Failed to get image from Zarr, using example image for channel {channel}")
 
-        exposure_factor = exposure_time / 100
-        intensity_factor = intensity / 60
-        self.image = np.clip(self.image * exposure_factor * intensity_factor, 0, 255).astype(np.uint8)
+        # Apply exposure and intensity scaling
+        exposure_factor = max(0.1, exposure_time / 100)  # Ensure minimum factor to prevent black images
+        intensity_factor = max(0.1, intensity / 60)      # Ensure minimum factor to prevent black images
+        
+        # Check if image contains any valid data before scaling
+        if np.count_nonzero(self.image) == 0:
+            print("WARNING: Image contains all zeros before scaling!")
+            self.image = np.ones((self.Height, self.Width), dtype=np.uint8) * 128
+        # Convert to float32 for scaling, apply factors, then clip and convert back to uint8
+        self.image = np.clip(self.image.astype(np.float32) * exposure_factor * intensity_factor, 0, 255).astype(np.uint8)
+        
+        # Check if image contains any valid data after scaling
+        if np.count_nonzero(self.image) == 0:
+            print("WARNING: Image contains all zeros after scaling!")
+            # Set to a gray image instead of black
+            self.image = np.ones((self.Height, self.Width), dtype=np.uint8) * 128
 
         if self.pixel_format == "MONO8":
             self.current_frame = self.image
@@ -692,11 +817,25 @@ class Camera_Simulation(object):
             self.current_frame = (self.image.astype(np.uint16) * 16).astype(np.uint16)
         elif self.pixel_format == "MONO16":
             self.current_frame = (self.image.astype(np.uint16) * 256).astype(np.uint16)
+        else:
+            # For any other format, default to MONO8
+            print(f"Unrecognized pixel format {self.pixel_format}, using MONO8")
+            self.current_frame = self.image
 
         if dz != 0:
             sigma = abs(dz) * 6
             self.current_frame = gaussian_filter(self.current_frame, sigma=sigma)
             print(f"The image is blurred with dz={dz}, sigma={sigma}")
+        
+        # Final check to ensure we're not sending a completely black image
+        if np.count_nonzero(self.current_frame) == 0:
+            print("CRITICAL: Final image is completely black, setting to gray")
+            if self.pixel_format == "MONO8":
+                self.current_frame = np.ones((self.Height, self.Width), dtype=np.uint8) * 128
+            elif self.pixel_format == "MONO12":
+                self.current_frame = np.ones((self.Height, self.Width), dtype=np.uint16) * 2048
+            elif self.pixel_format == "MONO16":
+                self.current_frame = np.ones((self.Height, self.Width), dtype=np.uint16) * 32768
 
         if self.new_image_callback_external is not None and self.callback_is_enabled:
             self.new_image_callback_external(self)

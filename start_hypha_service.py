@@ -25,6 +25,7 @@ import base64
 from pydantic import Field
 from hypha_rpc.utils.schema import schema_function
 import signal
+from hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
 
 dotenv.load_dotenv()  
 ENV_FILE = dotenv.find_dotenv()  
@@ -728,7 +729,7 @@ class Microscope:
         """Navigate to a well position in the well plate."""
         row: str = Field(..., description="Row number of the well position (e.g., 'A')")
         col: int = Field(..., description="Column number of the well position")
-        wellplate_type: str = Field('24', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')")
+        wellplate_type: str = Field('96', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')")
 
     class MoveToLoadingPositionInput(BaseModel):
         """Move the stage to the loading position."""
@@ -803,7 +804,7 @@ class Microscope:
             "auto_focus": self.AutoFocusInput.model_json_schema(),
             "snap_image": self.SnapImageInput.model_json_schema(),
             "inspect_tool": self.InspectToolInput.model_json_schema(),
-            "move_to_loading_position": self.MoveToLoadingPositionInput.model_json_schema(),
+            "load_position": self.MoveToLoadingPositionInput.model_json_schema(),
             "navigate_to_well": self.NavigateToWellInput.model_json_schema()
         }
 
@@ -921,7 +922,7 @@ class Microscope:
                 "snap_image": self.snap_image_schema,
                 "home_stage": self.home_stage_schema,
                 "return_stage": self.return_stage_schema,
-                "move_to_loading_position": self.move_to_loading_position,
+                "load_position": self.move_to_loading_position,
                 "navigate_to_well": self.navigate_to_well_schema,
                 "inspect_tool": self.inspect_tool_schema,
             }
@@ -1001,6 +1002,52 @@ class Microscope:
                 if datastore_svc is None:
                     raise RuntimeError("Datastore service not found")
                 
+                # check the current artifact manager is working or not
+                try:
+                    # Get the ZarrImageManager instance from the simulated camera
+                    if not self.is_simulation:
+                        logger.info("Skipping Zarr access check in non-simulation mode.")
+                    else:
+                        # Check if zarr_image_manager exists and initialize it if needed
+                        if not hasattr(self.squidController.camera, 'zarr_image_manager') or self.squidController.camera.zarr_image_manager is None:
+                            logger.info("ZarrImageManager not initialized yet, initializing it for health check")
+                            
+                            try:
+                                # Initialize with timeout
+                                await asyncio.wait_for(
+                                    self.initialize_zarr_manager(self.squidController.camera),
+                                    timeout=30
+                                )
+                            except asyncio.TimeoutError:
+                                logger.error("ZarrImageManager initialization timed out")
+                                raise RuntimeError("ZarrImageManager initialization timed out")
+                        
+                        logger.info("Testing existing ZarrImageManager instance from simulated camera.")
+                        
+                        # Test Zarr access using the dedicated test function
+                        # Added timeout to prevent probe from hanging indefinitely
+                        test_result = await asyncio.wait_for(self.squidController.camera.zarr_image_manager.test_zarr_access(), 50) 
+                        
+                        if not test_result.get("success", False):
+                            error_msg = test_result.get("message", "Unknown error")
+                            raise RuntimeError(f"Zarr access test failed for existing instance: {error_msg}")
+                        else:
+                            # Log successful test with some stats
+                            stats = test_result.get("chunk_stats", {})
+                            non_zero = stats.get("non_zero_count", 0)
+                            total = stats.get("total_size", 1)
+                            if total > 0:
+                                logger.info(f"Existing Zarr access test succeeded. Non-zero values: {non_zero}/{total} ({(non_zero/total)*100:.1f}%)")
+                            else:
+                                logger.info("Existing Zarr access test succeeded, but chunk size was zero.")
+
+                except asyncio.TimeoutError:
+                    logger.error("Zarr access health check timed out.")
+                    raise RuntimeError("Zarr access health check timed out after 50 seconds.")
+                except Exception as artifact_error:
+                    logger.error(f"Zarr access health check failed: {str(artifact_error)}")
+                    raise RuntimeError(f"Zarr access health check failed: {str(artifact_error)}")
+                
                 # Check chatbot service
                 chatbot_id = f"squid-control-chatbot-{'simulated' if self.is_simulation else 'real'}-{self.service_id}"
                 
@@ -1016,7 +1063,8 @@ class Microscope:
                             "token": chatbot_token,
                             "ping_interval": None
                         })
-                        chatbot_svc = await chatbot_server.get_service(chatbot_id)
+                        # Add timeout for getting chatbot service
+                        chatbot_svc = await asyncio.wait_for(chatbot_server.get_service(chatbot_id), 10)
                         if chatbot_svc is None:
                             raise RuntimeError("Chatbot service not found")
                 except Exception as chatbot_error:
@@ -1028,6 +1076,8 @@ class Microscope:
                 return {"status": "ok", "message": "All services are healthy"}
             except Exception as e:
                 logger.error(f"Health check failed: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
                 raise RuntimeError(f"Service health check failed: {str(e)}")
         
         logger.info("Registering health probes for Kubernetes")
@@ -1036,6 +1086,35 @@ class Microscope:
             f"liveness-{self.service_id}": is_service_healthy
         })
         logger.info("Health probes registered successfully")
+
+    async def initialize_zarr_manager(self, camera):
+        """Initialize the ZarrImageManager for the simulated camera."""
+        # Import ZarrImageManager if needed
+        from hypha_tools.artifact_manager.artifact_manager import ZarrImageManager
+        
+        # Create and initialize the ZarrImageManager
+        camera.zarr_image_manager = ZarrImageManager()
+        
+        # Connect to the server
+        workspace_token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+        if not workspace_token:
+            logger.error("AGENT_LENS_WORKSPACE_TOKEN environment variable not set")
+            raise RuntimeError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set")
+            
+        init_success = await camera.zarr_image_manager.connect(
+            workspace_token=workspace_token,
+            server_url=self.server_url
+        )
+        
+        if not init_success:
+            raise RuntimeError("Failed to initialize ZarrImageManager")
+        
+        # Set the scale_key to match the camera's scale level
+        if hasattr(camera, 'scale_level'):
+            camera.zarr_image_manager.scale_key = f'scale{camera.scale_level}'
+        
+        logger.info("ZarrImageManager initialized successfully for health check")
+        return camera.zarr_image_manager
 
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):

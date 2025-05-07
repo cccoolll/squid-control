@@ -615,7 +615,8 @@ def load_config(config_path, multipoint_function):
     config_path = str(config_path)
 
     CONFIG.CACHE_CONFIG_FILE_PATH = str(config_dir / "cache_config_file_path.txt")
-    CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / "uc2_fucci_illumination_configurations.xml")
+
+    CONFIG.CHANNEL_CONFIGURATIONS_PATH = str(config_dir / "u2os_fucci_illumination_configurations.xml")
     CONFIG.LAST_COORDS_PATH = str(config_dir / "last_coords.txt")
 
     # Check if configuration file exists
@@ -743,5 +744,5 @@ class WELLPLATE_FORMAT_6:
 class SIMULATED_CAMERA:
     ORIN_X = 20
     ORIN_Y = 20
-    ORIN_Z = 3.354
+    ORIN_Z = 4
     MAGNIFICATION_FACTOR = 80

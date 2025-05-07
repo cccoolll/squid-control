@@ -117,7 +117,7 @@ class SquidController:
         self.microcontroller.configure_actuators()
 
         self.configurationManager = core.ConfigurationManager(
-            filename="./uc2_fucci_illumination_configurations.xml"
+            filename="./u2os_fucci_illumination_configurations.xml"
         )
 
         self.streamHandler = core.StreamHandler(
@@ -228,10 +228,10 @@ class SquidController:
         print("home xy done")
 
         # move to scanning position
-        self.navigationController.move_x(25)
+        self.navigationController.move_x(23.3)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
-        self.navigationController.move_y(25)
+        self.navigationController.move_y(20.35)
         while self.microcontroller.is_busy():
             time.sleep(0.005)
 
@@ -301,7 +301,11 @@ class SquidController:
         self.current_channel = 0
         self.current_expousre_time = 100
         self.current_intensity = 100
-        self.pixel_size_xy = 0.1665
+        self.pixel_size_xy = 0.333
+        self.pixel_size_adjument_factor = 0.936
+        # drift correction for image map
+        self.drift_correction_x = -1.6
+        self.drift_correction_y = -2.1
         self.get_pixel_size()
 
 
@@ -320,6 +324,7 @@ class SquidController:
             raise ValueError("Missing required parameters for pixel size calculation.")
 
         self.pixel_size_xy = pixel_size_um / (magnification / (objective_tube_lens_mm / tube_lens_mm))
+        self.pixel_size_xy = self.pixel_size_xy * self.pixel_size_adjument_factor
         print(f"Pixel size: {self.pixel_size_xy} µm")
         
                 
@@ -374,7 +379,9 @@ class SquidController:
         magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
         self.current_expousre_time = exposure_time
         self.current_intensity = intensity
-        await self.camera.send_trigger(current_x, current_y, self.dz, self.pixel_size_xy, channel, intensity, exposure_time, magnification_factor)
+        corrected_x = current_x + self.drift_correction_x
+        corrected_y = current_y + self.drift_correction_y
+        await self.camera.send_trigger(corrected_x, corrected_y, self.dz, self.pixel_size_xy, channel, intensity, exposure_time, magnification_factor)
         print(f'For simulated camera, exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}, current position: {current_x},{current_y},{current_z}')
    
     def do_autofocus(self):
@@ -389,7 +396,7 @@ class SquidController:
 
     def do_autofocus_simulation(self):
         
-        random_z = 3.1+ np.random.normal(0,0.1)
+        random_z = CONFIG.SIMULATED_CAMERA.ORIN_Z + np.random.normal(0,0.1)
         self.navigationController.move_z_to(random_z)
         self.send_trigger_simulation(self.current_channel, self.current_intensity, self.current_expousre_time)
         

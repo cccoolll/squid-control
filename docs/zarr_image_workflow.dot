@@ -1,0 +1,54 @@
+digraph ZarrImageWorkflow {
+    // Graph settings
+    rankdir=TB;
+    node [shape=box, style=filled, fillcolor=lightblue, fontsize=10, margin="0.2,0.1"];
+    edge [fontsize=9];
+    
+    // User Interaction
+    user [label="User Interaction", fillcolor=lightyellow];
+    request_image [label="Request Image\n(dataset_id, timestamp, channel, scale, x, y)"];
+    user -> request_image;
+    
+    // Backend Services
+    subgraph cluster_backend {
+        label="Backend Services";
+        style=filled;
+        color=lightgrey;
+        
+        artifact_manager [label="Artifact Manager\nGenerate Pre-signed URL"];
+        fsspec_access [label="fsspec Access\n(zip::URL)"];
+        zarr_cache [label="Zarr Group Cache\n(40 min expiry)"];
+        lru_cache [label="LRU Chunk Cache\n(256MB)"];
+        zarr_extraction [label="Zarr Array Extraction\n(Slice by coordinates)"];
+        
+        request_image -> artifact_manager;
+        artifact_manager -> fsspec_access [label="Retrieve URL"];
+        fsspec_access -> zarr_cache [label="Access Zarr Group"];
+        zarr_cache -> lru_cache [label="Cache Chunks"];
+        lru_cache -> zarr_extraction [label="Extract Data"];
+    }
+    
+    // S3 Storage
+    subgraph cluster_s3 {
+        label="S3 Storage";
+        style=filled;
+        color=lightgrey;
+        
+        s3_bucket [label="S3 Bucket\n(ZIP Archives)"];
+        pre_signed_url [label="Pre-signed URL\n(Secure Access)"];
+        
+        s3_bucket -> pre_signed_url [label="Generate URL"];
+        pre_signed_url -> artifact_manager;
+    }
+    
+    // Data Flow Explanation
+    data_flow1 [shape=note, fillcolor=lightyellow, label="1. User selects image parameters"];
+    data_flow2 [shape=note, fillcolor=lightyellow, label="2. Backend generates pre-signed URL"];
+    data_flow3 [shape=note, fillcolor=lightyellow, label="3. fsspec accesses Zarr data"];
+    data_flow4 [shape=note, fillcolor=lightyellow, label="4. Data cached and extracted"];
+    
+    data_flow1 -> request_image [style=invis];
+    data_flow2 -> artifact_manager [style=invis];
+    data_flow3 -> fsspec_access [style=invis];
+    data_flow4 -> zarr_extraction [style=invis];
+}
