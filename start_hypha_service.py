@@ -894,8 +894,9 @@ class Microscope:
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
 
-        # Register health probes for Kubernetes
-        await self.register_service_probes(server)
+        # Register health probes for Kubernetes only if not in local mode
+        if not self.is_local:
+            await self.register_service_probes(server)
         
         logger.info(f'You can use this service using the service id: {svc.id}')
         id = svc.id.split(":")[1]
