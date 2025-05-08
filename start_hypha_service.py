@@ -894,8 +894,9 @@ class Microscope:
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
 
-        # Register health probes for Kubernetes
-        await self.register_service_probes(server)
+        # Register health probes for Kubernetes only if not in local mode
+        if not self.is_local:
+            await self.register_service_probes(server)
         
         logger.info(f'You can use this service using the service id: {svc.id}')
         id = svc.id.split(":")[1]
@@ -956,12 +957,12 @@ class Microscope:
             )
         if self.is_simulation:
             await self.start_hypha_service(server, service_id=self.service_id)
-            datastore_id = f'data-store-simulated-{self.service_id}'
-            chatbot_id = f"squid-control-chatbot-simulated-{self.service_id}"
+            datastore_id = f'data-store-simu-{self.service_id}'
+            chatbot_id = f"squid-chatbot-simu-{self.service_id}"
         else:
             await self.start_hypha_service(server, service_id=self.service_id)
             datastore_id = f'data-store-real-{self.service_id}'
-            chatbot_id = f"squid-control-chatbot-real-{self.service_id}"
+            chatbot_id = f"squid-chatbot-real-{self.service_id}"
         self.datastore = HyphaDataStore()
         try:
             await self.datastore.setup(data_store_server, service_id=datastore_id)
