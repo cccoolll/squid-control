@@ -530,7 +530,7 @@ class Camera_Simulation(object):
         }
         # Configuration for ZarrImageManager
         self.SERVER_URL = "https://hypha.aicell.io"
-        self.WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
+        self.WORKSPACE_TOKEN = os.getenv("SQUID_WORKSPACE_TOKEN")
         self.ARTIFACT_ALIAS = "image-map-20250429-treatment-zip"
         self.DEFAULT_TIMESTAMP = "2025-04-29_16-38-27"  # Default timestamp for the dataset
         
@@ -728,7 +728,7 @@ class Camera_Simulation(object):
         print(f"Converted coords (mm) x={x}, y={y} to pixel coords: x={pixel_x}, y={pixel_y} (scale{self.scale_level})")
         
         # Use the class variables for dataset configuration
-        dataset_id = f"agent-lens/{self.ARTIFACT_ALIAS}"
+        dataset_id = f"squid-control/{self.ARTIFACT_ALIAS}"
         timestamp = self.DEFAULT_TIMESTAMP
         
         print(f"Using dataset: {dataset_id}, timestamp: {timestamp}, channel: {channel_name}")

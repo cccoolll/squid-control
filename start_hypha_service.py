@@ -1097,10 +1097,10 @@ class Microscope:
         camera.zarr_image_manager = ZarrImageManager()
         
         # Connect to the server
-        workspace_token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+        workspace_token = os.environ.get("SQUID_WORKSPACE_TOKEN")
         if not workspace_token:
-            logger.error("AGENT_LENS_WORKSPACE_TOKEN environment variable not set")
-            raise RuntimeError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set")
+            logger.error("SQUID_WORKSPACE_TOKEN environment variable not set")
+            raise RuntimeError("SQUID_WORKSPACE_TOKEN environment variable not set")
             
         init_success = await camera.zarr_image_manager.connect(
             workspace_token=workspace_token,
