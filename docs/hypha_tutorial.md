@@ -19,7 +19,7 @@ Example code to connect to the microscope service:
         token,
     });
 
-    const microscopeControlService = await getService(server, "Microscope Control", "agent-lens/microscope-control-squid-test");
+    const microscopeControlService = await getService(server, "Microscope Control", "squid-control/microscope-control-squid-test");
     setMicroscopeControl(microscopeControlService);
 
 ```
