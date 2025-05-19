@@ -998,7 +998,7 @@ class Microscope:
                     raise RuntimeError(f"Microscope service returned unexpected response: {result}")
                 
                 # Check datastore service
-                datastore_id = f'data-store-{"simulated" if self.is_simulation else "real"}-{self.service_id}'
+                datastore_id = f'data-store-{"simu" if self.is_simulation else "real"}-{self.service_id}'
                 datastore_svc = await server.get_service(datastore_id)
                 if datastore_svc is None:
                     raise RuntimeError("Datastore service not found")
