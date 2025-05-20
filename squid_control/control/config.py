@@ -513,12 +513,6 @@ class BaseConfig(BaseModel):
     # Additional field to store options
     OPTIONS: dict = {}
 
-    # For simulated camera
-    class SIMULATED_CAMERA:
-        ORIN_X = 20
-        ORIN_Y = 20
-        ORIN_Z = 4
-        MAGNIFICATION_FACTOR = 80
 
     def write_config_to_txt(self, output_path):
         with open(output_path, "w") as file:
