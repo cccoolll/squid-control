@@ -1,10 +1,13 @@
 FROM python:3.10.13-slim
 
 # Install system dependencies
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
     git \
+    curl \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user "squid-user"
