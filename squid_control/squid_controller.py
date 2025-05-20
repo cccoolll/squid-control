@@ -396,7 +396,7 @@ class SquidController:
 
     def do_autofocus_simulation(self):
         
-        random_z = CONFIG.SIMULATED_CAMERA.ORIN_Z + np.random.normal(0,0.1)
+        random_z = SIMULATED_CAMERA.ORIN_Z + np.random.normal(0,0.1)
         self.navigationController.move_z_to(random_z)
         self.send_trigger_simulation(self.current_channel, self.current_intensity, self.current_expousre_time)
         
