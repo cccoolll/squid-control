@@ -1050,7 +1050,7 @@ class Microscope:
                     raise RuntimeError(f"Zarr access health check failed: {str(artifact_error)}")
                 
                 # Check chatbot service
-                chatbot_id = f"squid-control-chatbot-{'simulated' if self.is_simulation else 'real'}-{self.service_id}"
+                chatbot_id = f"squid-chatbot-{'simu' if self.is_simulation else 'real'}-{self.service_id}"
                 
                 # We need to check the chatbot server, not the main server
                 chatbot_server_url = "https://chat.bioimage.io"
@@ -1069,9 +1069,7 @@ class Microscope:
                         if chatbot_svc is None:
                             raise RuntimeError("Chatbot service not found")
                 except Exception as chatbot_error:
-                    logger.error(f"Error checking chatbot service: {str(chatbot_error)}")
-                    # We don't want to fail the entire health check if only the chatbot is down
-                    # Just log the error
+                    raise RuntimeError(f"Chatbot service health check failed: {str(chatbot_error)}")
                 
                 logger.info("All services are healthy")
                 return {"status": "ok", "message": "All services are healthy"}
