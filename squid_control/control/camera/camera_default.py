@@ -732,7 +732,7 @@ class Camera_Simulation(object):
         if dataset_id == "squid-control/image-map-20250429-treatment-zip":
             timestamp = self.DEFAULT_TIMESTAMP
         elif dataset_id == "squid-control/image-map-20250506-treatment-zip":
-            timestamp = "2025-05-06_16-56-52"
+            timestamp = "2025-05-06_17-26-38"
         
         print(f"Using dataset: {dataset_id}, timestamp: {timestamp}, channel: {channel_name}")
         
