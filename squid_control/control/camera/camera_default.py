@@ -531,7 +531,6 @@ class Camera_Simulation(object):
         # Configuration for ZarrImageManager
         self.SERVER_URL = "https://hypha.aicell.io"
         self.WORKSPACE_TOKEN = os.getenv("SQUID_WORKSPACE_TOKEN")
-        self.ARTIFACT_ALIAS = "image-map-20250429-treatment-zip"
         self.DEFAULT_TIMESTAMP = "2025-04-29_16-38-27"  # Default timestamp for the dataset
         
         # Initialize these to None, will be set up lazily when needed
@@ -695,7 +694,7 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    async def get_image_from_zarr(self, x, y, pixel_size_um, channel_name):
+    async def get_image_from_zarr(self, x, y, pixel_size_um, channel_name, sample_data_alias="squid-control/image-map-20250429-treatment-zip"):
         """
         Get image data from Zarr storage for the specified coordinates and channel.
         
@@ -704,6 +703,7 @@ class Camera_Simulation(object):
             y (float): Y coordinate in mm
             pixel_size_um (float): Pixel size in micrometers
             channel_name (str): Name of the channel to retrieve
+            sample_data_alias (str): Alias of the sample data
             
         Returns:
             np.ndarray: The image data
@@ -728,8 +728,11 @@ class Camera_Simulation(object):
         print(f"Converted coords (mm) x={x}, y={y} to pixel coords: x={pixel_x}, y={pixel_y} (scale{self.scale_level})")
         
         # Use the class variables for dataset configuration
-        dataset_id = f"squid-control/{self.ARTIFACT_ALIAS}"
-        timestamp = self.DEFAULT_TIMESTAMP
+        dataset_id = sample_data_alias
+        if dataset_id == "squid-control/image-map-20250429-treatment-zip":
+            timestamp = self.DEFAULT_TIMESTAMP
+        elif dataset_id == "squid-control/image-map-20250506-treatment-zip":
+            timestamp = "2025-05-06_16-56-52"
         
         print(f"Using dataset: {dataset_id}, timestamp: {timestamp}, channel: {channel_name}")
         
@@ -766,7 +769,7 @@ class Camera_Simulation(object):
             print(traceback.format_exc())
             return None
 
-    async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.333, channel=0, intensity=100, exposure_time=100, magnification_factor=20, performace_mode=False):
+    async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.333, channel=0, intensity=100, exposure_time=100, magnification_factor=20, performace_mode=False, sample_data_alias="squid-control/image-map-20250429-treatment-zip"):
         print(f"Sending trigger with x={x}, y={y}, dz={dz}, pixel_size_um={pixel_size_um}, channel={channel}, intensity={intensity}, exposure_time={exposure_time}, magnification_factor={magnification_factor}, performace_mode={performace_mode}")
         self.frame_ID += 1
         self.timestamp = time.time()
@@ -788,7 +791,7 @@ class Camera_Simulation(object):
             self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
             print(f"Using performance mode, example image for channel {channel}")
         else:
-            self.image = await self.get_image_from_zarr(x, y, pixel_size_um, channel_name)
+            self.image = await self.get_image_from_zarr(x, y, pixel_size_um, channel_name, sample_data_alias)
             if self.image is None:
                 # Fallback to example image if Zarr access fails
                 self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
