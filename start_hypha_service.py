@@ -120,7 +120,7 @@ class Microscope:
             "auto_focus": "not_started",
             "do_laser_autofocus": "not_started",
             "navigate_to_well": "not_started",
-            "get_chatbot_url": "not_started"
+            "get_chatbot_url": "not_started",
         }
 
     def load_authorized_emails(self, login_required=True):
@@ -345,6 +345,21 @@ class Microscope:
             logger.error(f"Failed to update parameters: {e}")
             raise e
 
+    @schema_function(skip_self=True)
+    def set_simulated_sample_data_alias(self, sample_data_alias: str=Field("squid-control/image-map-20250429-treatment-zip", description="The alias of the sample data")):
+        """
+        Set the alias of simulated sample
+        """
+        self.squidController.set_simulated_sample_data_alias(sample_data_alias)
+        return f"The alias of simulated sample is set to {sample_data_alias}"
+    
+    @schema_function(skip_self=True)
+    def get_simulated_sample_data_alias(self):
+        """
+        Get the alias of simulated sample
+        """
+        return self.squidController.get_simulated_sample_data_alias()
+    
     @schema_function(skip_self=True)
     async def one_new_frame(self, exposure_time: int=Field(100, description="Exposure time in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Light intensity"), context=None):
         """
@@ -701,6 +716,10 @@ class Microscope:
         y: Optional[float] = Field(None, description="Move the stage to the Y coordinate")
         z: float = Field(3.35, description="Move the stage to the Z coordinate")
 
+    class SetSimulatedSampleDataAliasInput(BaseModel):
+        """Set the alias of simulated sample"""
+        sample_data_alias: str = Field("squid-control/image-map-20250429-treatment-zip", description="The alias of the sample data")
+
     class AutoFocusInput(BaseModel):
         """Reflection based autofocus."""
         N: int = Field(10, description="Number of discrete focus positions")
@@ -763,7 +782,7 @@ class Microscope:
         z = config.z if config.z is not None else 0
         result = self.move_to_position(x, y, z, context)
         return result['message']
-
+    
     def auto_focus_schema(self, config: AutoFocusInput, context=None):
         self.auto_focus(context)
         return "Auto-focus completed."
@@ -870,6 +889,8 @@ class Microscope:
                 "navigate_to_well": self.navigate_to_well,
                 "move_to_position": self.move_to_position,
                 "move_to_loading_position": self.move_to_loading_position,
+                "set_simulated_sample_data_alias": self.set_simulated_sample_data_alias,
+                "get_simulated_sample_data_alias": self.get_simulated_sample_data_alias,
                 "auto_focus": self.auto_focus,
                 "do_laser_autofocus": self.do_laser_autofocus,
                 "get_status": self.get_status,
@@ -894,7 +915,7 @@ class Microscope:
         logger.info(f'You can use this service using the service id: {svc.id}')
         id = svc.id.split(":")[1]
 
-        logger.info(f"You can also test the service via the HTTP proxy: {self.server_url}/{server.config.workspace}/services/{id}")
+        logger.info(f"You can also test the service via the HTTP proxy: {self.server_url}{server.config.workspace}/services/{id}")
 
         # Start the health check task
         asyncio.create_task(self.check_service_health())

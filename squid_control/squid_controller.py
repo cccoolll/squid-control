@@ -306,6 +306,8 @@ class SquidController:
         # drift correction for image map
         self.drift_correction_x = -1.6
         self.drift_correction_y = -2.1
+        # simulated sample data alias
+        self.sample_data_alias = "squid-control/image-map-20250429-treatment-zip"
         self.get_pixel_size()
 
 
@@ -381,9 +383,15 @@ class SquidController:
         self.current_intensity = intensity
         corrected_x = current_x + self.drift_correction_x
         corrected_y = current_y + self.drift_correction_y
-        await self.camera.send_trigger(corrected_x, corrected_y, self.dz, self.pixel_size_xy, channel, intensity, exposure_time, magnification_factor)
+        await self.camera.send_trigger(corrected_x, corrected_y, self.dz, self.pixel_size_xy, channel, intensity, exposure_time, magnification_factor, sample_data_alias=self.sample_data_alias)
         print(f'For simulated camera, exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}, current position: {current_x},{current_y},{current_z}')
    
+    def set_simulated_sample_data_alias(self, sample_data_alias):
+        self.sample_data_alias = sample_data_alias
+
+    def get_simulated_sample_data_alias(self):
+        return self.sample_data_alias
+
     def do_autofocus(self):
         
         if self.is_simulation:
