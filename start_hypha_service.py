@@ -356,17 +356,10 @@ class Microscope:
         try:
             gray_img = await self.squidController.snap_image(channel, intensity, exposure_time)
 
-            min_val = np.min(gray_img)
-            max_val = np.max(gray_img)
-            if max_val > min_val:  # Avoid division by zero if the image is completely uniform
-                gray_img = (gray_img - min_val) * (255 / (max_val - min_val))
-                gray_img = gray_img.astype(np.uint8)  # Convert to 8-bit image
-                #resize to 512x512
-                resized_img = cv2.resize(gray_img, (512, 512))
-            else:
-                gray_img = np.zeros((512, 512), dtype=np.uint8)  # If no variation, return a black image
-
-            gray_img = Image.fromarray(gray_img)
+            gray_img = gray_img.astype(np.uint8)  # Convert to 8-bit image
+            #resize to 512x512
+            resized_img = cv2.resize(gray_img, (512, 512))
+            gray_img = Image.fromarray(resized_img)
             gray_img = gray_img.convert("L")  # Convert to grayscale  
             # Save the image to a BytesIO object as PNG  
             buffer = io.BytesIO()  
