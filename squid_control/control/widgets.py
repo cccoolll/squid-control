@@ -3546,7 +3546,7 @@ class WellSelectionWidget(QTableWidget):
                 )
                 + col * CONFIG.WELL_SPACING_MM
                 + CONFIG.A1_X_MM
-                + CONFIG.WELLPLATE_OFFSET_X_mm
+                + CONFIG.WELLPLATE_OFFSET_X_MM
             )
             y_mm = (
                 CONFIG.Y_MM_384_WELLPLATE_UPPERLEFT
