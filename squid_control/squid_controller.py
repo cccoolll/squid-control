@@ -412,7 +412,10 @@ class SquidController:
         self.laserAutofocusController.initialize_auto()
 
     def do_laser_autofocus(self):
-        self.laserAutofocusController.move_to_target(0)
+        if self.is_simulation:
+            self.do_autofocus_simulation()
+        else:
+            self.laserAutofocusController.move_to_target(0)
     
     def measure_displacement(self):
         self.laserAutofocusController.measure_displacement()     
