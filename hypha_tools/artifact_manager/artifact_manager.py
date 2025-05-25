@@ -510,7 +510,10 @@ class ZarrImageManager:
         chunk_name_in_zip = str(x)
 
         # Construct the full chunk download URL
-        chunk_download_url = f"{self.server_url}/{self.workspace}/artifacts/{dataset_id}/zip-files/{zip_file_path_in_dataset}?path={chunk_name_in_zip}"
+        # dataset_id is the full path like "agent-lens/artifact-name"
+        # self.workspace is "agent-lens"
+        artifact_name_only = dataset_id.split('/')[-1]
+        chunk_download_url = f"{self.server_url}/{self.workspace}/artifacts/{artifact_name_only}/zip-files/{zip_file_path_in_dataset}?path={chunk_name_in_zip}"
         
         print(f"Attempting to fetch chunk: {chunk_download_url}")
         
