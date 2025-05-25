@@ -355,7 +355,7 @@ class Microscope:
             raise e
 
     @schema_function(skip_self=True)
-    def set_simulated_sample_data_alias(self, sample_data_alias: str=Field("squid-control/image-map-20250429-treatment-zip", description="The alias of the sample data")):
+    def set_simulated_sample_data_alias(self, sample_data_alias: str=Field("agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38", description="The alias of the sample data")):
         """
         Set the alias of simulated sample
         """
@@ -747,7 +747,7 @@ class Microscope:
 
     class SetSimulatedSampleDataAliasInput(BaseModel):
         """Set the alias of simulated sample"""
-        sample_data_alias: str = Field("squid-control/image-map-20250429-treatment-zip", description="The alias of the sample data")
+        sample_data_alias: str = Field("agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38", description="The alias of the sample data")
 
     class AutoFocusInput(BaseModel):
         """Reflection based autofocus."""

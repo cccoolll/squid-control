@@ -325,7 +325,7 @@ class ZarrImageManager:
         """
         Fetch and cache Zarr metadata (.zgroup or .zarray) for a given dataset alias.
         Args:
-            dataset_alias (str): The alias of the dataset (e.g., "squid-control/image-map-20250429-treatment-zip")
+            dataset_alias (str): The alias of the dataset (e.g., "agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38")
             metadata_path_in_dataset (str): Path within the dataset (e.g., "Channel/scaleN/.zarray")
         """
         cache_key = (dataset_alias, metadata_path_in_dataset)
@@ -606,7 +606,7 @@ class ZarrImageManager:
 
     # Legacy methods for backward compatibility - now use chunk-based access
     async def get_zarr_group(self, dataset_id, channel):
-        """Legacy method - now returns None as we use direct chunk access. Timestamp is ignored."""
+        """Legacy method - now returns None as we use direct chunk access instead. Timestamp is ignored."""
         print("Warning: get_zarr_group is deprecated, using direct chunk access instead. Timestamp parameter is ignored.")
         return None
 
