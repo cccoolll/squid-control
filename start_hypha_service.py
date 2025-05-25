@@ -306,6 +306,7 @@ class Microscope:
                 'dx': self.dx,
                 'dy': self.dy,
                 'dz': self.dz,
+                'current_channel': self.squidController.current_channel,
                 'BF_intensity_exposure': self.BF_intensity_exposure,
                 'F405_intensity_exposure': self.F405_intensity_exposure,
                 'F488_intensity_exposure': self.F488_intensity_exposure,

@@ -3772,6 +3772,7 @@ class LaserAutofocusController(QObject):
         self.microcontroller.turn_off_AF_laser()
         self.wait_till_operation_is_completed()
         self.x_reference = x
+        self.initialize_manual(self.x_offset, self.y_offset, self.width, self.height, self.pixel_to_um, self.x_reference,write_to_cache=True)
         self.signal_displacement_um.emit(0)
 
     def _caculate_centroid(self, image):
