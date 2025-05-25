@@ -19,9 +19,8 @@ import blosc
 import aiohttp
 from collections import deque
 import zarr
-from zarr.storage import LRUStoreCache, FSStore
-import fsspec
 import time
+import json
 
 dotenv.load_dotenv()  
 ENV_FILE = dotenv.find_dotenv()  
@@ -36,9 +35,6 @@ class SquidArtifactManager:
     def __init__(self):
         self._svc = None
         self.server = None
-        self.zarr_groups_cache = {}  # Cache for zarr groups
-        self.zarr_groups_timestamps = {}  # Timestamps for when groups were cached
-        self.zarr_cache_expiry_seconds = 40 * 60  # 40 minutes in seconds
 
     async def connect_server(self, server):
         """
@@ -274,87 +270,7 @@ class SquidArtifactManager:
             print(traceback.format_exc())
             return []
 
-    async def get_zarr_group(
-        self,
-        workspace: str,
-        artifact_alias: str,
-        timestamp: str,
-        channel: str,
-        cache_max_size=2**28 # 256 MB LRU cache
-    ):
-        """
-        Access a Zarr group stored within a zip file in an artifact.
 
-        Args:
-            workspace (str): The workspace containing the artifact.
-            artifact_alias (str): The alias of the artifact (e.g., 'image-map-20250429-treatment-zip').
-            timestamp (str): The timestamp folder name.
-            channel (str): The channel name (used for the zip filename).
-            cache_max_size (int, optional): Max size for LRU cache in bytes. Defaults to 2**28.
-
-        Returns:
-            zarr.Group: The root Zarr group object.
-        """
-        if self._svc is None:
-            raise ConnectionError("Artifact Manager service not connected. Call connect_server first.")
-
-        art_id = self._artifact_id(workspace, artifact_alias)
-        zip_file_path = f"{timestamp}/{channel}.zip"
-        cache_key = f"{art_id}:{timestamp}:{channel}"
-        current_time = time.time()
-        
-        # Check if we have a cached and non-expired Zarr group
-        if cache_key in self.zarr_groups_cache:
-            cache_time = self.zarr_groups_timestamps.get(cache_key, 0)
-            if current_time - cache_time < self.zarr_cache_expiry_seconds:
-                print(f"Using cached Zarr group for {cache_key}")
-                return self.zarr_groups_cache[cache_key]
-            else:
-                # Group is expired, remove it from cache
-                print(f"Zarr group for {cache_key} has expired (created {(current_time - cache_time)/60:.1f} minutes ago). Refreshing...")
-                self.zarr_groups_cache.pop(cache_key, None)
-                self.zarr_groups_timestamps.pop(cache_key, None)
-
-        try:
-            print(f"Getting download URL for: {art_id}/{zip_file_path}")
-            # Get the direct download URL for the zip file
-            download_url = await self._svc.get_file(art_id, zip_file_path)
-            print(f"Obtained download URL.")
-
-            # Construct the URL for FSStore using fsspec's zip chaining
-            store_url = f"zip::{download_url}"
-
-            # Define the synchronous function to open the Zarr store and group
-            def _open_zarr_sync(url, cache_size):
-                print(f"Opening Zarr store: {url}")
-                store = FSStore(url, mode="r")
-                if cache_size and cache_size > 0:
-                    print(f"Using LRU cache with size: {cache_size} bytes")
-                    store = LRUStoreCache(store, max_size=cache_size)
-                # It's generally recommended to open the root group
-                root_group = zarr.group(store=store)
-                print(f"Zarr group opened successfully.")
-                return root_group
-
-            # Run the synchronous Zarr operations in a thread pool
-            print("Running Zarr open in thread executor...")
-            self.zarr_group = await asyncio.to_thread(_open_zarr_sync, store_url, cache_max_size)
-            
-            # Cache the Zarr group for future use
-            self.zarr_groups_cache[cache_key] = self.zarr_group
-            self.zarr_groups_timestamps[cache_key] = current_time
-            print(f"Cached new Zarr group for {cache_key}")
-            
-            return self.zarr_group
-
-        except RemoteException as e:
-            print(f"Error getting file URL from Artifact Manager: {e}")
-            raise FileNotFoundError(f"Could not find or access zip file {zip_file_path} in artifact {art_id}") from e
-        except Exception as e:
-            print(f"An error occurred while accessing the Zarr group: {e}")
-            import traceback
-            print(traceback.format_exc())
-            raise
 
 # Constants
 SERVER_URL = "https://hypha.aicell.io"
@@ -376,18 +292,81 @@ class ZarrImageManager:
             "Fluorescence_561_nm_Ex",
             "Fluorescence_638_nm_Ex"
         ]
-        self.zarr_groups_cache = {}  # Cache for open Zarr groups
-        self.zarr_groups_timestamps = {}  # Timestamps for when groups were cached
-        self.zarr_cache_expiry_seconds = 40 * 60  # 40 minutes in seconds
         self.is_running = True
         self.session = None
         self.default_timestamp = "2025-04-29_16-38-27"  # Set a default timestamp
         self.scale_key = 'scale0'
-        self.zarr_group = None
+        
+        # New attributes for HTTP-based access
+        self.metadata_cache = {}  # Cache for .zarray and .zgroup metadata
+        self.metadata_cache_lock = asyncio.Lock()
+        self.processed_tile_cache = {}  # Cache for processed tiles
+        self.processed_tile_ttl = 40 * 60  # 40 minutes in seconds
+        self.processed_tile_cache_size = 1000  # Max number of tiles to cache
+        self.empty_regions_cache = {}  # Cache for known empty regions
+        self.empty_regions_ttl = 40 * 60  # 40 minutes in seconds
+        self.empty_regions_cache_size = 500  # Max number of empty regions to cache
+        self.http_session_lock = asyncio.Lock()
+        self.server_url = "https://hypha.aicell.io"
+
+    async def _get_http_session(self):
+        """Get or create an aiohttp.ClientSession with increased connection pool."""
+        async with self.http_session_lock:
+            if self.session is None or self.session.closed:
+                connector = aiohttp.TCPConnector(
+                    limit_per_host=50,  # Max connections per host
+                    limit=100,          # Total max connections
+                    ssl=False if "localhost" in self.server_url else True
+                )
+                self.session = aiohttp.ClientSession(connector=connector)
+            return self.session
+
+    async def _fetch_zarr_metadata(self, dataset_alias, metadata_path_in_dataset):
+        """
+        Fetch and cache Zarr metadata (.zgroup or .zarray) for a given dataset alias.
+        Args:
+            dataset_alias (str): The alias of the dataset (e.g., "squid-control/image-map-20250429-treatment-zip")
+            metadata_path_in_dataset (str): Path within the dataset (e.g., "Channel/scaleN/.zarray")
+        """
+        cache_key = (dataset_alias, metadata_path_in_dataset)
+        async with self.metadata_cache_lock:
+            if cache_key in self.metadata_cache:
+                print(f"Using cached metadata for {cache_key}")
+                return self.metadata_cache[cache_key]
+
+        if not self.artifact_manager:
+            print("Artifact manager not available in ZarrImageManager for metadata fetch.")
+            # Attempt to connect if not already
+            await self.connect()
+            if not self.artifact_manager:
+                raise ConnectionError("Artifact manager connection failed.")
+
+        try:
+            print(f"Fetching metadata: dataset_alias='{dataset_alias}', path='{metadata_path_in_dataset}'")
+            
+            metadata_content_bytes = await self.artifact_manager.get_file(
+                self.workspace,
+                dataset_alias.split('/')[-1],  # Extract artifact name from full path
+                metadata_path_in_dataset
+            )
+            metadata_str = metadata_content_bytes.decode('utf-8')
+            import json
+            metadata = json.loads(metadata_str)
+            
+            async with self.metadata_cache_lock:
+                self.metadata_cache[cache_key] = metadata
+            print(f"Fetched and cached metadata for {cache_key}")
+            return metadata
+        except Exception as e:
+            print(f"Error fetching metadata for {dataset_alias} / {metadata_path_in_dataset}: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return None
 
     async def connect(self, workspace_token=None, server_url="https://hypha.aicell.io"):
-        """Connect to the Artifact Manager service"""
+        """Connect to the Artifact Manager service and initialize http session."""
         try:
+            self.server_url = server_url
             token = workspace_token or os.environ.get("SQUID_WORKSPACE_TOKEN")
             if not token:
                 raise ValueError("Workspace token not provided")
@@ -401,8 +380,8 @@ class ZarrImageManager:
             self.artifact_manager = SquidArtifactManager()
             await self.artifact_manager.connect_server(self.artifact_manager_server)
             
-            # Initialize aiohttp session for any HTTP requests
-            self.session = aiohttp.ClientSession()
+            # Initialize aiohttp session
+            await self._get_http_session()  # Ensures session is created
             
             print("ZarrImageManager connected successfully")
             return True
@@ -416,13 +395,17 @@ class ZarrImageManager:
         """Close the image manager and cleanup resources"""
         self.is_running = False
         
-        # Close the cached Zarr groups
-        self.zarr_groups_cache.clear()
+        # Clear all caches
+        self.processed_tile_cache.clear()
+        async with self.metadata_cache_lock:
+            self.metadata_cache.clear()
+        self.empty_regions_cache.clear()
         
         # Close the aiohttp session
-        if self.session:
-            await self.session.close()
-            self.session = None
+        async with self.http_session_lock:
+            if self.session and not self.session.closed:
+                await self.session.close()
+                self.session = None
         
         # Disconnect from the server
         if self.artifact_manager_server:
@@ -430,69 +413,225 @@ class ZarrImageManager:
             self.artifact_manager_server = None
             self.artifact_manager = None
 
-    async def get_zarr_group(self, dataset_id, timestamp, channel):
-        """Get (or reuse from cache) a Zarr group for a specific dataset"""
-        cache_key = f"{dataset_id}:{timestamp}:{channel}"
-        current_time = time.time()
+    def _add_to_empty_regions_cache(self, key):
+        """Add a region key to the empty regions cache with expiration"""
+        # Set expiration time
+        expiry_time = time.time() + self.empty_regions_ttl
         
-        # Check if the cached group exists and is still valid (less than 40 minutes old)
-        if cache_key in self.zarr_groups_cache:
-            cache_time = self.zarr_groups_timestamps.get(cache_key, 0)
-            if current_time - cache_time < self.zarr_cache_expiry_seconds:
-                #print(f"Using cached Zarr group for {cache_key}")
-                return self.zarr_groups_cache[cache_key]
+        # Add to cache
+        self.empty_regions_cache[key] = expiry_time
+        
+        # Clean up if cache is too large
+        if len(self.empty_regions_cache) > self.empty_regions_cache_size:
+            # Get the entries sorted by expiry time (oldest first)
+            sorted_entries = sorted(
+                self.empty_regions_cache.items(),
+                key=lambda item: item[1]
+            )
+            
+            # Remove oldest 25% of entries
+            entries_to_remove = len(self.empty_regions_cache) // 4
+            for i in range(entries_to_remove):
+                if i < len(sorted_entries):
+                    del self.empty_regions_cache[sorted_entries[i][0]]
+            
+            print(f"Cleaned up {entries_to_remove} oldest entries from empty regions cache")
+
+    async def get_chunk_np_data(self, dataset_id, channel, scale, x, y):
+        """
+        Get a chunk as numpy array using new HTTP chunk access.
+        Args:
+            dataset_id (str): The alias of the dataset.
+            channel (str): Channel name
+            scale (int): Scale level
+            x (int): X coordinate of the chunk for this scale.
+            y (int): Y coordinate of the chunk for this scale.
+        Returns:
+            np.ndarray or None: Chunk data as numpy array, or None if not found/empty/error.
+        """
+        start_time = time.time()
+        # Key for processed_tile_cache and empty_regions_cache
+        tile_cache_key = f"{dataset_id}:{channel}:{scale}:{x}:{y}"
+
+        # 1. Check processed tile cache
+        if tile_cache_key in self.processed_tile_cache:
+            cached_data = self.processed_tile_cache[tile_cache_key]
+            if time.time() - cached_data['timestamp'] < self.processed_tile_ttl:
+                print(f"Using cached processed tile data for {tile_cache_key}")
+                return cached_data['data']
             else:
-                # Group is expired, remove it from cache
-                print(f"Zarr group for {cache_key} has expired (created {(current_time - cache_time)/60:.1f} minutes ago). Refreshing...")
-                self.zarr_groups_cache.pop(cache_key, None)
-                self.zarr_groups_timestamps.pop(cache_key, None)
-        
+                del self.processed_tile_cache[tile_cache_key]
+
+        # 2. Check empty regions cache
+        if tile_cache_key in self.empty_regions_cache:
+            expiry_time = self.empty_regions_cache[tile_cache_key]
+            if time.time() < expiry_time:
+                print(f"Skipping known empty tile: {tile_cache_key}")
+                return None
+            else:
+                del self.empty_regions_cache[tile_cache_key]
+
+        # Construct path to .zarray metadata
+        zarray_path_in_dataset = f"{channel}/scale{scale}/.zarray"
+        zarray_metadata = await self._fetch_zarr_metadata(dataset_id, zarray_path_in_dataset)
+
+        if not zarray_metadata:
+            print(f"Failed to get .zarray metadata for {dataset_id}/{zarray_path_in_dataset}")
+            self._add_to_empty_regions_cache(tile_cache_key)
+            return None
+
         try:
-            # We no longer need to parse the dataset_id into workspace and artifact_alias
-            # Just use the dataset_id directly since it's already the full path
-            print(f"Accessing artifact at: {dataset_id}/{timestamp}/{channel}.zip")
-            
-            # Get the direct download URL for the zip file
-            zip_file_path = f"{timestamp}/{channel}.zip"
-            download_url = await self.artifact_manager._svc.get_file(dataset_id, zip_file_path)
-            
-            # Construct the URL for FSStore using fsspec's zip chaining
-            store_url = f"zip::{download_url}"
-            
-            # Define the synchronous function to open the Zarr store and group
-            def _open_zarr_sync(url, cache_size):
-                print(f"Opening Zarr store: {url}")
-                store = FSStore(url, mode="r")
-                if cache_size and cache_size > 0:
-                    store = LRUStoreCache(store, max_size=cache_size)
-                # It's generally recommended to open the root group
-                root_group = zarr.group(store=store)
-                print(f"Zarr group opened successfully.")
-                return root_group
-                
-            # Run the synchronous Zarr operations in a thread pool
-            print("Running Zarr open in thread executor...")
-            self.zarr_group = await asyncio.to_thread(_open_zarr_sync, store_url, 2**28)  # Using default cache size
-            
-            # Cache the Zarr group for future use
-            self.zarr_groups_cache[cache_key] = self.zarr_group
-            self.zarr_groups_timestamps[cache_key] = current_time
-            print(f"Cached new Zarr group for {cache_key}")
-            
-            return self.zarr_group
-        except Exception as e:
-            print(f"Error getting Zarr group: {e}")
+            z_shape = zarray_metadata["shape"]         # [total_height, total_width]
+            z_chunks = zarray_metadata["chunks"]       # [chunk_height, chunk_width]
+            z_dtype_str = zarray_metadata["dtype"]
+            z_dtype = np.dtype(z_dtype_str)
+            z_compressor_meta = zarray_metadata["compressor"]  # Can be null
+            z_fill_value = zarray_metadata.get("fill_value")  # Important for empty/partial chunks
+
+        except KeyError as e:
+            print(f"Incomplete .zarray metadata for {dataset_id}/{zarray_path_in_dataset}: Missing key {e}")
+            return None
+
+        # Check chunk coordinates are within bounds of the scale array
+        num_chunks_y_total = (z_shape[0] + z_chunks[0] - 1) // z_chunks[0]
+        num_chunks_x_total = (z_shape[1] + z_chunks[1] - 1) // z_chunks[1]
+
+        if not (0 <= y < num_chunks_y_total and 0 <= x < num_chunks_x_total):
+            print(f"Chunk coordinates ({x}, {y}) out of bounds for {dataset_id}/{channel}/scale{scale} (max: {num_chunks_x_total-1}, {num_chunks_y_total-1})")
+            self._add_to_empty_regions_cache(tile_cache_key)
+            return None
+        
+        # Determine path to the zip file and the chunk name within that zip
+        # Interpretation: {y}.zip contains a row of chunks, chunk file is named {x}
+        zip_file_path_in_dataset = f"{channel}/scale{scale}/{y}.zip"
+        chunk_name_in_zip = str(x)
+
+        # Construct the full chunk download URL
+        chunk_download_url = f"{self.server_url}/{self.workspace}/artifacts/{dataset_id}/zip-files/{zip_file_path_in_dataset}?path={chunk_name_in_zip}"
+        
+        print(f"Attempting to fetch chunk: {chunk_download_url}")
+        
+        http_session = await self._get_http_session()
+        raw_chunk_bytes = None
+        try:
+            async with http_session.get(chunk_download_url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                if response.status == 200:
+                    raw_chunk_bytes = await response.read()
+                elif response.status == 404:
+                    print(f"Chunk not found (404) at {chunk_download_url}. Treating as empty.")
+                    self._add_to_empty_regions_cache(tile_cache_key)
+                    # Create an empty tile using fill_value if available
+                    empty_tile_data = np.full(z_chunks, z_fill_value if z_fill_value is not None else 0, dtype=z_dtype)
+                    return empty_tile_data[:self.chunk_size, :self.chunk_size]  # Ensure correct output size
+                else:
+                    error_text = await response.text()
+                    print(f"Error fetching chunk {chunk_download_url}: HTTP {response.status} - {error_text}")
+                    return None  # Indicate error
+        except asyncio.TimeoutError:
+            print(f"Timeout fetching chunk: {chunk_download_url}")
+            return None
+        except aiohttp.ClientError as e:  # More specific aiohttp errors
+            print(f"ClientError fetching chunk {chunk_download_url}: {e}")
+            return None
+        except Exception as e:  # Catch-all for other unexpected errors during fetch
+            print(f"Unexpected error fetching chunk {chunk_download_url}: {e}")
             import traceback
             print(traceback.format_exc())
             return None
 
+        if not raw_chunk_bytes:  # Should be caught by 404 or other errors, but as a safeguard
+            print(f"No data received for chunk: {chunk_download_url}, though HTTP status was not an error.")
+            self._add_to_empty_regions_cache(tile_cache_key)
+            empty_tile_data = np.full(z_chunks, z_fill_value if z_fill_value is not None else 0, dtype=z_dtype)
+            return empty_tile_data[:self.chunk_size, :self.chunk_size]
+
+        # 4. Decompress and decode chunk data
+        try:
+            if z_compressor_meta is None:  # Raw, uncompressed data
+                decompressed_data = raw_chunk_bytes
+            else:
+                codec = numcodecs.get_codec(z_compressor_meta)  # Handles filters too if defined in compressor object
+                decompressed_data = codec.decode(raw_chunk_bytes)
+            
+            # Convert to NumPy array and reshape. Chunk shape from .zarray is [height, width]
+            chunk_data = np.frombuffer(decompressed_data, dtype=z_dtype).reshape(z_chunks)
+            
+            # The Zarr chunk might be smaller than self.chunk_size if it's a partial edge chunk.
+            # Or it could be larger if .zarray chunks are not self.chunk_size.
+            # We need to return a tile of self.chunk_size.
+            
+            final_tile_data = np.full((self.chunk_size, self.chunk_size), 
+                                       z_fill_value if z_fill_value is not None else 0, 
+                                       dtype=z_dtype)
+            
+            # Determine the slice to copy from chunk_data and where to place it in final_tile_data
+            copy_height = min(chunk_data.shape[0], self.chunk_size)
+            copy_width = min(chunk_data.shape[1], self.chunk_size)
+            
+            final_tile_data[:copy_height, :copy_width] = chunk_data[:copy_height, :copy_width]
+
+        except Exception as e:
+            print(f"Error decompressing/decoding chunk from {chunk_download_url}: {e}")
+            print(f"Metadata: dtype={z_dtype_str}, compressor={z_compressor_meta}, chunk_shape={z_chunks}")
+            import traceback
+            print(traceback.format_exc())
+            return None  # Indicate error
+
+        # 5. Check if tile is effectively empty (e.g., all fill_value or zeros)
+        # Use a small threshold for non-zero values if fill_value is 0 or not defined
+        is_empty_threshold = 10 
+        if z_fill_value is not None:
+            if np.all(final_tile_data == z_fill_value):
+                print(f"Tile data is all fill_value ({z_fill_value}), treating as empty: {tile_cache_key}")
+                self._add_to_empty_regions_cache(tile_cache_key)  # Cache as empty
+                return None  # Return None for empty tiles based on fill_value
+        elif np.count_nonzero(final_tile_data) < is_empty_threshold:
+            print(f"Tile data is effectively empty (few non-zeros), treating as empty: {tile_cache_key}")
+            self._add_to_empty_regions_cache(tile_cache_key)  # Cache as empty
+            return None
+
+        # 6. Cache the processed tile
+        self.processed_tile_cache[tile_cache_key] = {
+            'data': final_tile_data,
+            'timestamp': time.time()
+        }
+        
+        total_time = time.time() - start_time
+        print(f"Total tile processing time for {tile_cache_key}: {total_time:.3f}s, size: {final_tile_data.nbytes/1024:.1f}KB")
+        
+        return final_tile_data
+
+    # Legacy methods for backward compatibility - now use chunk-based access
+    async def get_zarr_group(self, dataset_id, timestamp, channel):
+        """Legacy method - now returns None as we use direct chunk access"""
+        print("Warning: get_zarr_group is deprecated, using direct chunk access instead")
+        return None
+
+    async def prime_metadata(self, dataset_alias, channel_name, scale):
+        """Pre-fetch .zarray metadata for a given dataset, channel, and scale."""
+        print(f"Priming metadata for {dataset_alias}/{channel_name}/scale{scale}")
+        try:
+            zarray_path = f"{channel_name}/scale{scale}/.zarray"
+            await self._fetch_zarr_metadata(dataset_alias, zarray_path)
+            
+            zgroup_channel_path = f"{channel_name}/.zgroup"
+            await self._fetch_zarr_metadata(dataset_alias, zgroup_channel_path)
+
+            zgroup_root_path = ".zgroup"
+            await self._fetch_zarr_metadata(dataset_alias, zgroup_root_path)
+            print(f"Metadata priming complete for {dataset_alias}/{channel_name}/scale{scale}")
+            return True
+        except Exception as e:
+            print(f"Error priming metadata: {e}")
+            return False
+
     async def get_region_np_data(self, dataset_id, timestamp, channel, scale, x, y, direct_region=None, width=None, height=None):
         """
-        Get a region as numpy array using Zarr for efficient access
+        Get a region as numpy array using new HTTP chunk access
         
         Args:
             dataset_id (str): The dataset ID (workspace/artifact_alias)
-            timestamp (str): The timestamp folder 
+            timestamp (str): The timestamp folder (now ignored, kept for compatibility)
             channel (str): Channel name
             scale (int): Scale level
             x (int): X coordinate (chunk coordinates)
@@ -506,148 +645,114 @@ class ZarrImageManager:
             np.ndarray: Region data as numpy array
         """
         try:
-            # Use default timestamp if none provided
-            timestamp = timestamp or self.default_timestamp
-            
             # Determine the output dimensions
             output_width = width if width is not None else self.chunk_size
             output_height = height if height is not None else self.chunk_size
             
-            # Get or create the zarr group
-            cache_key = f"{dataset_id}:{timestamp}:{channel}"
-            current_time = time.time()
-            
-            # Check if we have a cached and non-expired Zarr group
-            if cache_key in self.zarr_groups_cache:
-                cache_time = self.zarr_groups_timestamps.get(cache_key, 0)
-                if current_time - cache_time < self.zarr_cache_expiry_seconds:
-                    self.zarr_group = self.zarr_groups_cache[cache_key]
-                else:
-                    # Group is expired, remove it from cache
-                    print(f"Zarr group for {cache_key} has expired (created {(current_time - cache_time)/60:.1f} minutes ago). Refreshing...")
-                    self.zarr_groups_cache.pop(cache_key, None)
-                    self.zarr_groups_timestamps.pop(cache_key, None)
-                    self.zarr_group = await self.get_zarr_group(dataset_id, timestamp, channel)
-            else:
-                self.zarr_group = await self.get_zarr_group(dataset_id, timestamp, channel)
-            
-            if not self.zarr_group:
-                print(f"No Zarr group found for {dataset_id}/{timestamp}/{channel}")
-                return np.zeros((output_height, output_width), dtype=np.uint8)
-
-            # Navigate to the right array in the Zarr hierarchy
-            try:
-                # Get the scale array
-                scale_array = self.zarr_group[self.scale_key]
+            # For direct region access, we need to fetch multiple chunks and stitch them together
+            if direct_region is not None:
+                y_start, y_end, x_start, x_end = direct_region
                 
-                # Ensure coordinates are valid
-                array_shape = scale_array.shape
-                if len(array_shape) < 2:
-                    raise ValueError(f"Scale array has unexpected shape: {array_shape}")
+                # Get metadata to determine chunk size
+                zarray_path_in_dataset = f"{channel}/scale{scale}/.zarray"
+                zarray_metadata = await self._fetch_zarr_metadata(dataset_id, zarray_path_in_dataset)
                 
-                # If direct region is provided, use it directly
-                if direct_region is not None:
-                    y_start, y_end, x_start, x_end = direct_region
-                    # Ensure coordinates are within bounds
-                    y_start = max(0, min(y_start, array_shape[0] - 1))
-                    y_end = max(y_start + 1, min(y_end, array_shape[0]))
-                    x_start = max(0, min(x_start, array_shape[1] - 1))
-                    x_end = max(x_start + 1, min(x_end, array_shape[1]))
-                else:
-                    # Calculate the bounds based on chunk coordinates
-                    y_start = y * self.chunk_size
-                    x_start = x * self.chunk_size
-                    
-                    # Ensure coordinates are within bounds
-                    if y_start >= array_shape[0] or x_start >= array_shape[1]:
-                        print(f"Coordinates out of bounds: y={y_start}, x={x_start}, shape={array_shape}")
-                        return np.zeros((output_height, output_width), dtype=np.uint8)
-                    
-                    # Get the specific chunk/region - adjust slicing as needed
-                    y_end = min(y_start + self.chunk_size, array_shape[0])
-                    x_end = min(x_start + self.chunk_size, array_shape[1])
+                if not zarray_metadata:
+                    print(f"Failed to get .zarray metadata for direct region access")
+                    return np.zeros((output_height, output_width), dtype=np.uint8)
                 
-                print(f"Reading region from y={y_start} to y={y_end}, x={x_start} to x={x_end}")
-                region_data = scale_array[y_start:y_end, x_start:x_end]
+                z_chunks = zarray_metadata["chunks"]  # [chunk_height, chunk_width]
+                z_dtype = np.dtype(zarray_metadata["dtype"])
                 
-                # If width and height are specified, resize the output to those dimensions
+                # Calculate which chunks we need
+                chunk_y_start = y_start // z_chunks[0]
+                chunk_y_end = (y_end - 1) // z_chunks[0] + 1
+                chunk_x_start = x_start // z_chunks[1]
+                chunk_x_end = (x_end - 1) // z_chunks[1] + 1
+                
+                # Create result array
+                result_height = y_end - y_start
+                result_width = x_end - x_start
+                result = np.zeros((result_height, result_width), dtype=z_dtype)
+                
+                # Fetch and stitch chunks
+                for chunk_y in range(chunk_y_start, chunk_y_end):
+                    for chunk_x in range(chunk_x_start, chunk_x_end):
+                        chunk_data = await self.get_chunk_np_data(dataset_id, channel, scale, chunk_x, chunk_y)
+                        
+                        if chunk_data is not None:
+                            # Calculate where this chunk fits in the result
+                            chunk_y_offset = chunk_y * z_chunks[0]
+                            chunk_x_offset = chunk_x * z_chunks[1]
+                            
+                            # Calculate the slice within the chunk
+                            chunk_y_slice_start = max(0, y_start - chunk_y_offset)
+                            chunk_y_slice_end = min(z_chunks[0], y_end - chunk_y_offset)
+                            chunk_x_slice_start = max(0, x_start - chunk_x_offset)
+                            chunk_x_slice_end = min(z_chunks[1], x_end - chunk_x_offset)
+                            
+                            # Calculate the slice within the result
+                            result_y_slice_start = max(0, chunk_y_offset - y_start + chunk_y_slice_start)
+                            result_y_slice_end = result_y_slice_start + (chunk_y_slice_end - chunk_y_slice_start)
+                            result_x_slice_start = max(0, chunk_x_offset - x_start + chunk_x_slice_start)
+                            result_x_slice_end = result_x_slice_start + (chunk_x_slice_end - chunk_x_slice_start)
+                            
+                            # Copy the data
+                            if (chunk_y_slice_end > chunk_y_slice_start and chunk_x_slice_end > chunk_x_slice_start and
+                                result_y_slice_end > result_y_slice_start and result_x_slice_end > result_x_slice_start):
+                                result[result_y_slice_start:result_y_slice_end, result_x_slice_start:result_x_slice_end] = \
+                                    chunk_data[chunk_y_slice_start:chunk_y_slice_end, chunk_x_slice_start:chunk_x_slice_end]
+                
+                # Resize to requested dimensions if needed
                 if width is not None or height is not None:
-                    # Create an empty array with the requested dimensions
-                    result = np.zeros((output_height, output_width), dtype=region_data.dtype or np.uint8)
-                    
-                    # Copy the retrieved data into the result array
-                    h, w = region_data.shape
-                    result[:min(h, output_height), :min(w, output_width)] = region_data[:min(h, output_height), :min(w, output_width)]
-                    
-                    # Ensure data is in the right format (uint8)
-                    if result.dtype != np.uint8:
-                        if result.dtype == np.float32 or result.dtype == np.float64:
-                            # Normalize floating point data
-                            if result.max() > 0:
-                                result = (result / result.max() * 255).astype(np.uint8)
-                            else:
-                                result = np.zeros(result.shape, dtype=np.uint8)
-                        else:
-                            # For other integer types, scale appropriately
-                            result = result.astype(np.uint8)
-                    
-                    return result
-                    
-                # For direct region requests with no specific width/height, return as is
-                elif direct_region is not None:
-                    # Ensure data is in the right format (uint8)
-                    if region_data.dtype != np.uint8:
-                        if region_data.dtype == np.float32 or region_data.dtype == np.float64:
-                            # Normalize floating point data
-                            if region_data.max() > 0:
-                                region_data = (region_data / region_data.max() * 255).astype(np.uint8)
-                            else:
-                                region_data = np.zeros(region_data.shape, dtype=np.uint8)
-                        else:
-                            # For other integer types, scale appropriately
-                            region_data = region_data.astype(np.uint8)
-                    
-                    return region_data
+                    final_result = np.zeros((output_height, output_width), dtype=result.dtype)
+                    copy_height = min(result.shape[0], output_height)
+                    copy_width = min(result.shape[1], output_width)
+                    final_result[:copy_height, :copy_width] = result[:copy_height, :copy_width]
+                    result = final_result
                 
-                # Make sure we have a properly shaped array for chunk-based requests
-                elif region_data.shape != (self.chunk_size, self.chunk_size):
-                    # Resize or pad if necessary
-                    result = np.zeros((self.chunk_size, self.chunk_size), dtype=region_data.dtype or np.uint8)
-                    h, w = region_data.shape
-                    result[:min(h, self.chunk_size), :min(w, self.chunk_size)] = region_data[:min(h, self.chunk_size), :min(w, self.chunk_size)]
-                    
-                    # Ensure data is in the right format (uint8)
-                    if result.dtype != np.uint8:
-                        if result.dtype == np.float32 or result.dtype == np.float64:
-                            # Normalize floating point data
-                            if result.max() > 0:
-                                result = (result / result.max() * 255).astype(np.uint8)
-                            else:
-                                result = np.zeros(result.shape, dtype=np.uint8)
-                        else:
-                            # For other integer types, scale appropriately
-                            result = result.astype(np.uint8)
-                    
-                    return result
-                    
-                # Default case: return the region data as is
                 # Ensure data is in the right format (uint8)
-                if region_data.dtype != np.uint8:
-                    if region_data.dtype == np.float32 or region_data.dtype == np.float64:
+                if result.dtype != np.uint8:
+                    if result.dtype == np.float32 or result.dtype == np.float64:
                         # Normalize floating point data
-                        if region_data.max() > 0:
-                            region_data = (region_data / region_data.max() * 255).astype(np.uint8)
+                        if result.max() > 0:
+                            result = (result / result.max() * 255).astype(np.uint8)
                         else:
-                            region_data = np.zeros(region_data.shape, dtype=np.uint8)
+                            result = np.zeros(result.shape, dtype=np.uint8)
                     else:
                         # For other integer types, scale appropriately
-                        region_data = region_data.astype(np.uint8)
+                        result = result.astype(np.uint8)
                 
-                return region_data
+                return result
+            
+            else:
+                # Single chunk access
+                chunk_data = await self.get_chunk_np_data(dataset_id, channel, scale, x, y)
                 
-            except KeyError as e:
-                print(f"Error accessing Zarr array path: {e}")
-                return np.zeros((output_height, output_width), dtype=np.uint8)
+                if chunk_data is None:
+                    return np.zeros((output_height, output_width), dtype=np.uint8)
+                
+                # Resize to requested dimensions if needed
+                if width is not None or height is not None:
+                    result = np.zeros((output_height, output_width), dtype=chunk_data.dtype)
+                    copy_height = min(chunk_data.shape[0], output_height)
+                    copy_width = min(chunk_data.shape[1], output_width)
+                    result[:copy_height, :copy_width] = chunk_data[:copy_height, :copy_width]
+                    chunk_data = result
+                
+                # Ensure data is in the right format (uint8)
+                if chunk_data.dtype != np.uint8:
+                    if chunk_data.dtype == np.float32 or chunk_data.dtype == np.float64:
+                        # Normalize floating point data
+                        if chunk_data.max() > 0:
+                            chunk_data = (chunk_data / chunk_data.max() * 255).astype(np.uint8)
+                        else:
+                            chunk_data = np.zeros(chunk_data.shape, dtype=np.uint8)
+                    else:
+                        # For other integer types, scale appropriately
+                        chunk_data = chunk_data.astype(np.uint8)
+                
+                return chunk_data
                 
         except Exception as e:
             print(f"Error getting region data: {e}")
@@ -658,16 +763,36 @@ class ZarrImageManager:
     async def get_region_bytes(self, dataset_id, timestamp, channel, scale, x, y):
         """Serve a region as PNG bytes"""
         try:
-            # Use default timestamp if none provided
-            timestamp = timestamp or self.default_timestamp
-            
-            # Get region data as numpy array
+            # Get region data as numpy array (timestamp is now ignored)
             region_data = await self.get_region_np_data(dataset_id, timestamp, channel, scale, x, y)
             
-            # Convert to PNG bytes
-            image = Image.fromarray(region_data)
+            if region_data is None:
+                print(f"No numpy data for region {dataset_id}/{channel}/{scale}/{x}/{y}, returning blank image.")
+                # Create a blank image
+                pil_image = Image.new("L", (self.chunk_size, self.chunk_size), color=0) 
+            else:
+                try:
+                    # Ensure data is in a suitable range for image conversion if necessary
+                    if region_data.dtype == np.uint16:
+                        # Basic windowing for uint16: scale to uint8
+                        scaled_data = (region_data / 256).astype(np.uint8)
+                        pil_image = Image.fromarray(scaled_data)
+                    elif region_data.dtype == np.float32 or region_data.dtype == np.float64:
+                        # Handle float data: normalize to 0-255 for PNG
+                        min_val, max_val = np.min(region_data), np.max(region_data)
+                        if max_val > min_val:
+                            normalized_data = ((region_data - min_val) / (max_val - min_val) * 255).astype(np.uint8)
+                        else: # Flat data
+                            normalized_data = np.zeros_like(region_data, dtype=np.uint8)
+                        pil_image = Image.fromarray(normalized_data)
+                    else: # Assume uint8 or other directly compatible types
+                        pil_image = Image.fromarray(region_data)
+                except Exception as e:
+                    print(f"Error converting numpy region to PIL Image: {e}. Data type: {region_data.dtype}, shape: {region_data.shape}")
+                    pil_image = Image.new("L", (self.chunk_size, self.chunk_size), color=0) # Fallback to blank
+            
             buffer = io.BytesIO()
-            image.save(buffer, format="PNG")
+            pil_image.save(buffer, format="PNG") # Default PNG compression
             return buffer.getvalue()
         except Exception as e:
             print(f"Error in get_region_bytes: {str(e)}")
@@ -678,20 +803,17 @@ class ZarrImageManager:
 
     async def get_region_base64(self, dataset_id, timestamp, channel, scale, x, y):
         """Serve a region as base64 string"""
-        # Use default timestamp if none provided
-        timestamp = timestamp or self.default_timestamp
-        
         region_bytes = await self.get_region_bytes(dataset_id, timestamp, channel, scale, x, y)
         return base64.b64encode(region_bytes).decode('utf-8')
 
     async def test_zarr_access(self, dataset_id=None, timestamp=None, channel=None):
         """
-        Test function to verify Zarr file access is working correctly.
+        Test function to verify Zarr chunk access is working correctly.
         Attempts to access a known chunk at coordinates (335, 384) in scale0.
         
         Args:
             dataset_id (str, optional): The dataset ID to test. Defaults to squid-control/image-map-20250429-treatment-zip.
-            timestamp (str, optional): The timestamp to use. Defaults to the default timestamp.
+            timestamp (str, optional): The timestamp to use (ignored in new implementation).
             channel (str, optional): The channel to test. Defaults to BF_LED_matrix_full.
             
         Returns:
@@ -700,37 +822,23 @@ class ZarrImageManager:
         try:
             # Use default values if not provided
             dataset_id = dataset_id or "squid-control/image-map-20250429-treatment-zip"
-            timestamp = timestamp or self.default_timestamp
             channel = channel or "BF_LED_matrix_full"
             
-            print(f"Testing Zarr access for dataset: {dataset_id}, timestamp: {timestamp}, channel: {channel}")
+            print(f"Testing Zarr chunk access for dataset: {dataset_id}, channel: {channel}")
             
-            # refresh the zarr group
-            self.zarr_group = await self.get_zarr_group(dataset_id, timestamp, channel)
-            if self.zarr_group is None:
+            # Test access to a known chunk at coordinates (335, 384) in scale0
+            test_y, test_x = 335, 384
+            scale = 0
+            
+            print(f"Attempting to fetch test chunk at coordinates ({test_x}, {test_y}) in scale{scale}")
+            test_chunk = await self.get_chunk_np_data(dataset_id, channel, scale, test_x, test_y)
+            
+            if test_chunk is None:
                 return {
                     "status": "error", 
                     "success": False, 
-                    "message": "Failed to get Zarr group"
+                    "message": "Failed to get test chunk - returned None"
                 }
-                
-            # Directly test access to a known chunk at coordinates (335, 384) in scale0
-            # We know this chunk exists for sure in our dataset
-            test_y, test_x = 335, 384
-            test_y_start = test_y * self.chunk_size
-            test_x_start = test_x * self.chunk_size
-            
-            # Try to access the array
-            test_array = self.zarr_group['scale0']
-            
-            # Get the chunk dimensions and make sure coordinates are in bounds
-            array_shape = test_array.shape
-            test_y_end = min(test_y_start + self.chunk_size, array_shape[0])
-            test_x_end = min(test_x_start + self.chunk_size, array_shape[1])
-            
-            # Read the chunk directly
-            print(f"Reading test chunk at y={test_y_start}:{test_y_end}, x={test_x_start}:{test_x_end}")
-            test_chunk = test_array[test_y_start:test_y_end, test_x_start:test_x_end]
             
             # Gather statistics about the chunk for verification
             chunk_stats = {
@@ -739,7 +847,8 @@ class ZarrImageManager:
                 "max": float(test_chunk.max()) if test_chunk.size > 0 else None,
                 "mean": float(test_chunk.mean()) if test_chunk.size > 0 else None,
                 "non_zero_count": int(np.count_nonzero(test_chunk)),
-                "total_size": int(test_chunk.size)
+                "total_size": int(test_chunk.size),
+                "dtype": str(test_chunk.dtype)
             }
             
             # Consider it successful if we got a non-empty chunk

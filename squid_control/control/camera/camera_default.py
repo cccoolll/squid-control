@@ -715,9 +715,6 @@ class Camera_Simulation(object):
             print("Connecting to ZarrImageManager...")
             await self.zarr_image_manager.connect(workspace_token=self.WORKSPACE_TOKEN, server_url=self.SERVER_URL)
             print("Connected to ZarrImageManager")
-            
-            # Set the scale_key to scale1 instead of scale0
-            self.zarr_image_manager.scale_key = f'scale{self.scale_level}'
         
         # Convert microscope coordinates (mm) to pixel coordinates - fix conversion factor
         # Divide by scale_factor since we're using scale1 (1/4 resolution)
