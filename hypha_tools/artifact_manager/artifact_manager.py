@@ -274,8 +274,8 @@ class SquidArtifactManager:
 
 # Constants
 SERVER_URL = "https://hypha.aicell.io"
-WORKSPACE_TOKEN = os.environ.get("SQUID_WORKSPACE_TOKEN")
-ARTIFACT_ALIAS = "image-map-20250429-treatment-zip"
+WORKSPACE_TOKEN = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+ARTIFACT_ALIAS = "20250506-scan-time-lapse-2025-05-06_17-56-38"
 DEFAULT_CHANNEL = "BF_LED_matrix_full"
 
 # New class to replace TileManager using Zarr for efficient access
@@ -283,7 +283,7 @@ class ZarrImageManager:
     def __init__(self):
         self.artifact_manager = None
         self.artifact_manager_server = None
-        self.workspace = "squid-control"  # Default workspace
+        self.workspace = "agent-lens"  # Default workspace
         self.chunk_size = 256  # Default chunk size for Zarr
         self.channels = [
             "BF_LED_matrix_full",
@@ -294,7 +294,7 @@ class ZarrImageManager:
         ]
         self.is_running = True
         self.session = None
-        self.default_timestamp = "2025-04-29_16-38-27"  # Set a default timestamp
+        self.default_timestamp = "20250506-scan-time-lapse-2025-05-06_17-56-38"  # Set a default timestamp
         self.scale_key = 'scale0'
         
         # New attributes for HTTP-based access
