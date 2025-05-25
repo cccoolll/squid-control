@@ -127,6 +127,7 @@ class Microscope:
             "move_to_loading_position": "not_started",
             "auto_focus": "not_started",
             "do_laser_autofocus": "not_started",
+            "set_laser_reference": "not_started",
             "navigate_to_well": "not_started",
             "get_chatbot_url": "not_started",
         }
@@ -695,7 +696,28 @@ class Microscope:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to do laser autofocus: {e}")
             raise e
-
+        
+    @schema_function(skip_self=True)
+    def set_laser_reference(self, context=None):
+        """
+        Set the reference of the laser
+        Returns: A string message
+        """
+        task_name = "set_laser_reference"
+        self.task_status[task_name] = "started"
+        try:
+            if self.is_simulation:
+                pass
+            else:
+                self.squidController.laserAutofocusController.set_reference()
+            logger.info('The laser reference is set')
+            self.task_status[task_name] = "finished"
+            return 'The laser reference is set'
+        except Exception as e:
+            self.task_status[task_name] = "failed"
+            logger.error(f"Failed to set laser reference: {e}")
+            raise e
+        
     @schema_function(skip_self=True)
     def navigate_to_well(self, row: str=Field('A', description="Row number of the well position (e.g., 'A')"), col: int=Field(1, description="Column number of the well position"), wellplate_type: str=Field('96', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), context=None):
         """
@@ -922,6 +944,7 @@ class Microscope:
                 "get_simulated_sample_data_alias": self.get_simulated_sample_data_alias,
                 "auto_focus": self.auto_focus,
                 "do_laser_autofocus": self.do_laser_autofocus,
+                "set_laser_reference": self.set_laser_reference,
                 "get_status": self.get_status,
                 "update_parameters_from_client": self.update_parameters_from_client,
                 "get_chatbot_url": self.get_chatbot_url,
@@ -937,8 +960,8 @@ class Microscope:
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
 
-        # Register health probes for Kubernetes only if not in local mode
-        if not self.is_local:
+        # Register health probes when service is has not 'local' in the service id
+        if "local" not in service_id:
             await self.register_service_probes(server)
         
         logger.info(f'You can use this service using the service id: {svc.id}')
