@@ -1097,7 +1097,8 @@ class Microscope:
                         test_result = await asyncio.wait_for(
                             self.squidController.camera.zarr_image_manager.test_zarr_access(
                                 dataset_id="agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38",
-                                channel="BF_LED_matrix_full"
+                                channel="BF_LED_matrix_full",
+                                bypass_cache=True
                             ), 
                             50
                         ) 

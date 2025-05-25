@@ -321,18 +321,20 @@ class ZarrImageManager:
                 self.session = aiohttp.ClientSession(connector=connector)
             return self.session
 
-    async def _fetch_zarr_metadata(self, dataset_alias, metadata_path_in_dataset):
+    async def _fetch_zarr_metadata(self, dataset_alias, metadata_path_in_dataset, use_cache=True):
         """
         Fetch and cache Zarr metadata (.zgroup or .zarray) for a given dataset alias.
         Args:
             dataset_alias (str): The alias of the dataset (e.g., "agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38")
             metadata_path_in_dataset (str): Path within the dataset (e.g., "Channel/scaleN/.zarray")
+            use_cache (bool): Whether to use cached metadata. Defaults to True.
         """
         cache_key = (dataset_alias, metadata_path_in_dataset)
-        async with self.metadata_cache_lock:
-            if cache_key in self.metadata_cache:
-                print(f"Using cached metadata for {cache_key}")
-                return self.metadata_cache[cache_key]
+        if use_cache:
+            async with self.metadata_cache_lock:
+                if cache_key in self.metadata_cache:
+                    print(f"Using cached metadata for {cache_key}")
+                    return self.metadata_cache[cache_key]
 
         if not self.artifact_manager:
             print("Artifact manager not available in ZarrImageManager for metadata fetch.")
@@ -613,18 +615,18 @@ class ZarrImageManager:
         print("Warning: get_zarr_group is deprecated, using direct chunk access instead. Timestamp parameter is ignored.")
         return None
 
-    async def prime_metadata(self, dataset_alias, channel_name, scale):
+    async def prime_metadata(self, dataset_alias, channel_name, scale, use_cache=True):
         """Pre-fetch .zarray metadata for a given dataset, channel, and scale."""
-        print(f"Priming metadata for {dataset_alias}/{channel_name}/scale{scale}")
+        print(f"Priming metadata for {dataset_alias}/{channel_name}/scale{scale} (use_cache={use_cache})")
         try:
             zarray_path = f"{channel_name}/scale{scale}/.zarray"
-            await self._fetch_zarr_metadata(dataset_alias, zarray_path)
-            
+            await self._fetch_zarr_metadata(dataset_alias, zarray_path, use_cache=use_cache)
+
             zgroup_channel_path = f"{channel_name}/.zgroup"
-            await self._fetch_zarr_metadata(dataset_alias, zgroup_channel_path)
+            await self._fetch_zarr_metadata(dataset_alias, zgroup_channel_path, use_cache=use_cache)
 
             zgroup_root_path = ".zgroup"
-            await self._fetch_zarr_metadata(dataset_alias, zgroup_root_path)
+            await self._fetch_zarr_metadata(dataset_alias, zgroup_root_path, use_cache=use_cache)
             print(f"Metadata priming complete for {dataset_alias}/{channel_name}/scale{scale}")
             return True
         except Exception as e:
@@ -813,42 +815,42 @@ class ZarrImageManager:
         region_bytes = await self.get_region_bytes(dataset_id, channel, scale, x, y)
         return base64.b64encode(region_bytes).decode('utf-8')
 
-    async def test_zarr_access(self, dataset_id=None, channel=None):
+    async def test_zarr_access(self, dataset_id=None, channel=None, bypass_cache=False):
         """
         Test function to verify Zarr chunk access is working correctly.
-        Attempts to access a known chunk at coordinates (335, 384) in scale0.
+        Attempts to access a known chunk.
         
         Args:
-            dataset_id (str, optional): The dataset ID to test. Defaults to agent-lens/20250506-scan-time-lapse-...
-            channel (str, optional): The channel to test. Defaults to BF_LED_matrix_full.
+            dataset_id (str, optional): The dataset ID to test. Defaults to a standard test dataset.
+            channel (str, optional): The channel to test. Defaults to a standard test channel.
+            bypass_cache (bool, optional): If True, bypasses metadata cache for this test. Defaults to False.
             
         Returns:
-            dict: A dictionary with status, success flag, and additional info about the chunk.
+            dict: A dictionary with status, success flag, and additional info.
         """
         try:
             # Use default values if not provided
             dataset_id = dataset_id or "agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38"
             channel = channel or "BF_LED_matrix_full"
             
-            print(f"Testing Zarr chunk access for dataset: {dataset_id}, channel: {channel}")
+            print(f"Testing Zarr chunk access for dataset: {dataset_id}, channel: {channel}, bypass_cache: {bypass_cache}")
             
-            # Test access to a known chunk at coordinates (335, 384) in scale0
-            scale = 0
+            scale = 0 # Typically testing scale0
             print(f"Attempting to prime metadata for dataset: {dataset_id}, channel: {channel}, scale: {scale}")
-            test_file_info = await self.prime_metadata(dataset_id, channel, scale)
+            # Pass use_cache=!bypass_cache
+            metadata_primed = await self.prime_metadata(dataset_id, channel, scale, use_cache=not bypass_cache)
             
-            if test_file_info is None:
+            if not metadata_primed: # prime_metadata now returns True/False
                 return {
                     "status": "error", 
                     "success": False, 
-                    "message": "Failed to get test chunk - returned None"
+                    "message": "Failed to prime metadata for test chunk."
                 }
             
-            # Consider it successful if we got a non-empty chunk
             return {
                 "status": "ok",
                 "success": True,
-                "message": "Successfully accessed test chunk"
+                "message": f"Successfully primed metadata for test chunk (bypass_cache={bypass_cache})."
             }
             
         except Exception as e:
