@@ -383,6 +383,9 @@ class ZarrImageManager:
             # Initialize aiohttp session
             await self._get_http_session()  # Ensures session is created
             
+            # Prime metadata for a default dataset if needed, or remove if priming is dynamic
+            # Example: await self.prime_metadata("agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38", self.channels[0], scale=0)
+            
             print("ZarrImageManager connected successfully")
             return True
         except Exception as e:
@@ -602,9 +605,9 @@ class ZarrImageManager:
         return final_tile_data
 
     # Legacy methods for backward compatibility - now use chunk-based access
-    async def get_zarr_group(self, dataset_id, timestamp, channel):
-        """Legacy method - now returns None as we use direct chunk access"""
-        print("Warning: get_zarr_group is deprecated, using direct chunk access instead")
+    async def get_zarr_group(self, dataset_id, channel):
+        """Legacy method - now returns None as we use direct chunk access. Timestamp is ignored."""
+        print("Warning: get_zarr_group is deprecated, using direct chunk access instead. Timestamp parameter is ignored.")
         return None
 
     async def prime_metadata(self, dataset_alias, channel_name, scale):
@@ -625,13 +628,12 @@ class ZarrImageManager:
             print(f"Error priming metadata: {e}")
             return False
 
-    async def get_region_np_data(self, dataset_id, timestamp, channel, scale, x, y, direct_region=None, width=None, height=None):
+    async def get_region_np_data(self, dataset_id, channel, scale, x, y, direct_region=None, width=None, height=None):
         """
         Get a region as numpy array using new HTTP chunk access
         
         Args:
-            dataset_id (str): The dataset ID (workspace/artifact_alias)
-            timestamp (str): The timestamp folder (now ignored, kept for compatibility)
+            dataset_id (str): The dataset ID (e.g., "agent-lens/20250506-scan-time-lapse-...")
             channel (str): Channel name
             scale (int): Scale level
             x (int): X coordinate (chunk coordinates)
@@ -654,6 +656,7 @@ class ZarrImageManager:
                 y_start, y_end, x_start, x_end = direct_region
                 
                 # Get metadata to determine chunk size
+                # dataset_id is now the full path like "agent-lens/20250506-scan-time-lapse-..."
                 zarray_path_in_dataset = f"{channel}/scale{scale}/.zarray"
                 zarray_metadata = await self._fetch_zarr_metadata(dataset_id, zarray_path_in_dataset)
                 
@@ -727,6 +730,7 @@ class ZarrImageManager:
             
             else:
                 # Single chunk access
+                # dataset_id is the full path like "agent-lens/20250506-scan-time-lapse-..."
                 chunk_data = await self.get_chunk_np_data(dataset_id, channel, scale, x, y)
                 
                 if chunk_data is None:
@@ -760,11 +764,11 @@ class ZarrImageManager:
             print(traceback.format_exc())
             return np.zeros((output_height, output_width), dtype=np.uint8)
 
-    async def get_region_bytes(self, dataset_id, timestamp, channel, scale, x, y):
-        """Serve a region as PNG bytes"""
+    async def get_region_bytes(self, dataset_id, channel, scale, x, y):
+        """Serve a region as PNG bytes. Timestamp is ignored."""
         try:
-            # Get region data as numpy array (timestamp is now ignored)
-            region_data = await self.get_region_np_data(dataset_id, timestamp, channel, scale, x, y)
+            # Get region data as numpy array
+            region_data = await self.get_region_np_data(dataset_id, channel, scale, x, y)
             
             if region_data is None:
                 print(f"No numpy data for region {dataset_id}/{channel}/{scale}/{x}/{y}, returning blank image.")
@@ -801,19 +805,18 @@ class ZarrImageManager:
             blank_image.save(buffer, format="PNG")
             return buffer.getvalue()
 
-    async def get_region_base64(self, dataset_id, timestamp, channel, scale, x, y):
-        """Serve a region as base64 string"""
-        region_bytes = await self.get_region_bytes(dataset_id, timestamp, channel, scale, x, y)
+    async def get_region_base64(self, dataset_id, channel, scale, x, y):
+        """Serve a region as base64 string. Timestamp is ignored."""
+        region_bytes = await self.get_region_bytes(dataset_id, channel, scale, x, y)
         return base64.b64encode(region_bytes).decode('utf-8')
 
-    async def test_zarr_access(self, dataset_id=None, timestamp=None, channel=None):
+    async def test_zarr_access(self, dataset_id=None, channel=None):
         """
         Test function to verify Zarr chunk access is working correctly.
         Attempts to access a known chunk at coordinates (335, 384) in scale0.
         
         Args:
-            dataset_id (str, optional): The dataset ID to test. Defaults to squid-control/image-map-20250429-treatment-zip.
-            timestamp (str, optional): The timestamp to use (ignored in new implementation).
+            dataset_id (str, optional): The dataset ID to test. Defaults to agent-lens/20250506-scan-time-lapse-...
             channel (str, optional): The channel to test. Defaults to BF_LED_matrix_full.
             
         Returns:
@@ -821,7 +824,7 @@ class ZarrImageManager:
         """
         try:
             # Use default values if not provided
-            dataset_id = dataset_id or "squid-control/image-map-20250429-treatment-zip"
+            dataset_id = dataset_id or "agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38"
             channel = channel or "BF_LED_matrix_full"
             
             print(f"Testing Zarr chunk access for dataset: {dataset_id}, channel: {channel}")

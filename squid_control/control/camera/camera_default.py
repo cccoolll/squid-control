@@ -530,8 +530,8 @@ class Camera_Simulation(object):
         }
         # Configuration for ZarrImageManager
         self.SERVER_URL = "https://hypha.aicell.io"
-        self.WORKSPACE_TOKEN = os.getenv("SQUID_WORKSPACE_TOKEN")
-        self.DEFAULT_TIMESTAMP = "2025-04-29_16-38-27"  # Default timestamp for the dataset
+        self.WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
+        self.DEFAULT_TIMESTAMP = "20250506-scan-time-lapse-2025-05-06_17-56-38"  # Default timestamp for the dataset
         
         # Initialize these to None, will be set up lazily when needed
         self.zarr_image_manager = None
@@ -694,7 +694,7 @@ class Camera_Simulation(object):
     def set_hardware_triggered_acquisition(self):
         pass
 
-    async def get_image_from_zarr(self, x, y, pixel_size_um, channel_name, sample_data_alias="squid-control/image-map-20250429-treatment-zip"):
+    async def get_image_from_zarr(self, x, y, pixel_size_um, channel_name, sample_data_alias="agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38"):
         """
         Get image data from Zarr storage for the specified coordinates and channel.
         
@@ -703,7 +703,7 @@ class Camera_Simulation(object):
             y (float): Y coordinate in mm
             pixel_size_um (float): Pixel size in micrometers
             channel_name (str): Name of the channel to retrieve
-            sample_data_alias (str): Alias of the sample data
+            sample_data_alias (str): Alias of the sample data (e.g., "agent-lens/20250506-scan-time-lapse-...")
             
         Returns:
             np.ndarray: The image data
@@ -726,12 +726,8 @@ class Camera_Simulation(object):
         
         # Use the class variables for dataset configuration
         dataset_id = sample_data_alias
-        if dataset_id == "squid-control/image-map-20250429-treatment-zip":
-            timestamp = self.DEFAULT_TIMESTAMP
-        elif dataset_id == "squid-control/image-map-20250506-treatment-zip":
-            timestamp = "2025-05-06_17-26-38"
-        
-        print(f"Using dataset: {dataset_id}, timestamp: {timestamp}, channel: {channel_name}")
+        # Timestamp is now part of dataset_id or determined by the dataset_id itself.
+        print(f"Using dataset: {dataset_id}, channel: {channel_name}")
         
         try:
             # Calculate region boundaries with reduced dimensions (Width/4, Height/4)
@@ -749,7 +745,6 @@ class Camera_Simulation(object):
             # Get the region directly using direct_region parameter and passing scaled Width and Height
             region_data = await self.zarr_image_manager.get_region_np_data(
                 dataset_id, 
-                timestamp, 
                 channel_name, 
                 self.scale_level,  # Using scale level from class property
                 0,  # x coordinate (ignored when using direct_region)
@@ -766,8 +761,8 @@ class Camera_Simulation(object):
             print(traceback.format_exc())
             return None
 
-    async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.333, channel=0, intensity=100, exposure_time=100, magnification_factor=20, performace_mode=False, sample_data_alias="squid-control/image-map-20250429-treatment-zip"):
-        print(f"Sending trigger with x={x}, y={y}, dz={dz}, pixel_size_um={pixel_size_um}, channel={channel}, intensity={intensity}, exposure_time={exposure_time}, magnification_factor={magnification_factor}, performace_mode={performace_mode}")
+    async def send_trigger(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.333, channel=0, intensity=100, exposure_time=100, magnification_factor=20, performace_mode=False, sample_data_alias="agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38"):
+        print(f"Sending trigger with x={x}, y={y}, dz={dz}, pixel_size_um={pixel_size_um}, channel={channel}, intensity={intensity}, exposure_time={exposure_time}, magnification_factor={magnification_factor}, performace_mode={performace_mode}, sample_data_alias={sample_data_alias}")
         self.frame_ID += 1
         self.timestamp = time.time()
 
