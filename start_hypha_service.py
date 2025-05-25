@@ -946,7 +946,8 @@ class Microscope:
         logger.info(f"You can also test the service via the HTTP proxy: {self.server_url}{server.config.workspace}/services/{id}")
 
         # Start the health check task
-        asyncio.create_task(self.check_service_health())
+        if not self.is_simulation:
+            asyncio.create_task(self.check_service_health())
 
     async def start_chatbot_service(self, server, service_id):
         chatbot_extension = {
