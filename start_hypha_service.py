@@ -76,6 +76,14 @@ class Microscope:
         self.F561_intensity_exposure = [50, 100]
         self.F638_intensity_exposure = [50, 100]
         self.F730_intensity_exposure = [50, 100]
+        self.channel_param_map = {
+            0: 'BF_intensity_exposure',
+            11: 'F405_intensity_exposure',
+            12: 'F488_intensity_exposure',
+            13: 'F561_intensity_exposure',
+            14: 'F638_intensity_exposure',
+            15: 'F730_intensity_exposure',
+        }
         self.parameters = {
             'current_x': self.current_x,
             'current_y': self.current_y,
@@ -361,19 +369,32 @@ class Microscope:
         return self.squidController.get_simulated_sample_data_alias()
     
     @schema_function(skip_self=True)
-    async def one_new_frame(self, exposure_time: int=Field(100, description="Exposure time in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Light intensity"), context=None):
+    async def one_new_frame(self, context=None):
         """
         Get an image from the microscope
         Returns: A base64 encoded image
         """
         task_name = "one_new_frame"
         self.task_status[task_name] = "started"
+        channel = self.squidController.current_channel
+        intensity, exposure_time = 50, 100  # Default values
         try:
+            #update the current illumination channel and intensity
+            param_name = self.channel_param_map.get(channel)
+            if param_name:
+                stored_params = getattr(self, param_name, None)
+                if stored_params and isinstance(stored_params, list) and len(stored_params) == 2:
+                    intensity, exposure_time = stored_params
+                else:
+                    logger.warning(f"Parameter {param_name} for channel {channel} is not properly initialized. Using defaults.")
+            else:
+                logger.warning(f"Unknown channel {channel} in one_new_frame. Using default intensity/exposure.")
+            
             gray_img = await self.squidController.snap_image(channel, intensity, exposure_time)
 
             gray_img = gray_img.astype(np.uint8)  # Convert to 8-bit image
-            #resize to 512x512
-            resized_img = cv2.resize(gray_img, (512, 512))
+            #resize to 2048x2048
+            resized_img = cv2.resize(gray_img, (2048, 2048))
             gray_img = Image.fromarray(resized_img)
             gray_img = gray_img.convert("L")  # Convert to grayscale  
             # Save the image to a BytesIO object as PNG  
@@ -382,19 +403,7 @@ class Microscope:
             buffer.seek(0) 
             image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
             
-            #update the current illumination channel and intensity
-            if channel == 0:
-                self.BF_intensity_exposure = [intensity, exposure_time]
-            elif channel == 11:
-                self.F405_intensity_exposure = [intensity, exposure_time]
-            elif channel == 12:
-                self.F488_intensity_exposure = [intensity, exposure_time]
-            elif channel == 13:
-                self.F561_intensity_exposure = [intensity, exposure_time]
-            elif channel == 14:
-                self.F638_intensity_exposure = [intensity, exposure_time]
-            elif channel == 15:
-                self.F730_intensity_exposure = [intensity, exposure_time]
+
             self.get_status()
             self.task_status[task_name] = "finished"
             return image_base64  
@@ -427,18 +436,13 @@ class Microscope:
             logger.info(f'The image is snapped and saved as {data_url}')
             
             #update the current illumination channel and intensity
-            if channel == 0:
-                self.BF_intensity_exposure = [intensity, exposure_time]
-            elif channel == 11:
-                self.F405_intensity_exposure = [intensity, exposure_time]
-            elif channel == 12:
-                self.F488_intensity_exposure = [intensity, exposure_time]
-            elif channel == 13:
-                self.F561_intensity_exposure = [intensity, exposure_time]
-            elif channel == 14:
-                self.F638_intensity_exposure = [intensity, exposure_time]
-            elif channel == 15:
-                self.F730_intensity_exposure = [intensity, exposure_time]
+            self.squidController.current_channel = channel
+            param_name = self.channel_param_map.get(channel)
+            if param_name:
+                setattr(self, param_name, [intensity, exposure_time])
+            else:
+                logger.warning(f"Unknown channel {channel} in snap, parameters not updated for intensity/exposure attributes.")
+            
             self.get_status()
             self.task_status[task_name] = "finished"
             return data_url
@@ -532,6 +536,18 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             self.squidController.liveController.set_illumination(channel, intensity)
+            
+            param_name = self.channel_param_map.get(channel)
+            self.squidController.current_channel = channel
+            if param_name:
+                current_params = getattr(self, param_name, [intensity, 100]) # Default exposure if not found
+                if not (isinstance(current_params, list) and len(current_params) == 2):
+                    logger.warning(f"Parameter {param_name} for channel {channel} was not a list of two items. Resetting with default exposure.")
+                    current_params = [intensity, 100] # Default exposure
+                setattr(self, param_name, [intensity, current_params[1]])
+            else:
+                logger.warning(f"Unknown channel {channel} in set_illumination, parameters not updated for intensity attributes.")
+                
             logger.info(f'The intensity of the channel {channel} illumination is set to {intensity}.')
             self.task_status[task_name] = "finished"
             return f'The intensity of the channel {channel} illumination is set to {intensity}.'
@@ -541,7 +557,7 @@ class Microscope:
             raise e
     
     @schema_function(skip_self=True)
-    def set_camera_exposure(self, exposure_time: int=Field(100, description="Exposure time in milliseconds"), context=None):
+    def set_camera_exposure(self,channel: int=Field(0, description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), exposure_time: int=Field(100, description="Exposure time in milliseconds"), context=None):
         """
         Set the exposure time of the camera
         Returns: A string message
@@ -550,6 +566,18 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             self.squidController.camera.set_exposure_time(exposure_time)
+            
+            param_name = self.channel_param_map.get(channel)
+            self.squidController.current_channel = channel
+            if param_name:
+                current_params = getattr(self, param_name, [50, exposure_time]) # Default intensity if not found
+                if not (isinstance(current_params, list) and len(current_params) == 2):
+                    logger.warning(f"Parameter {param_name} for channel {channel} was not a list of two items. Resetting with default intensity.")
+                    current_params = [50, exposure_time] # Default intensity
+                setattr(self, param_name, [current_params[0], exposure_time])
+            else:
+                logger.warning(f"Unknown channel {channel} in set_camera_exposure, parameters not updated for exposure attributes.")
+
             logger.info(f'The exposure time of the camera is set to {exposure_time}.')
             self.task_status[task_name] = "finished"
             return f'The exposure time of the camera is set to {exposure_time}.'
