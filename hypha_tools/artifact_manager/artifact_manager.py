@@ -366,7 +366,7 @@ class ZarrImageManager:
     async def connect(self, workspace_token=None, server_url="https://hypha.aicell.io"):
         """Connect to the Artifact Manager service and initialize http session."""
         try:
-            self.server_url = server_url
+            self.server_url = server_url.rstrip('/') # Ensure no trailing slash
             token = workspace_token or os.environ.get("SQUID_WORKSPACE_TOKEN")
             if not token:
                 raise ValueError("Workspace token not provided")
