@@ -307,7 +307,7 @@ class SquidController:
         self.drift_correction_x = -1.6
         self.drift_correction_y = -2.1
         # simulated sample data alias
-        self.sample_data_alias = "squid-control/image-map-20250429-treatment-zip"
+        self.sample_data_alias = "agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38"
         self.get_pixel_size()
 
 
