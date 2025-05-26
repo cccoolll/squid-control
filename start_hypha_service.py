@@ -784,7 +784,7 @@ class Microscope:
 
     class InspectToolInput(BaseModel):
         """Inspect the images with GPT4-o's vision model."""
-        images: List[dict] = Field(..., description="A list of images to be inspected, each with a http url and title")
+        images: List[dict] = Field(..., description="A list of images to be inspected, each with a 'http_url' and 'title'")
         query: str = Field(..., description="User query about the image")
         context_description: str = Field(..., description="Context for the visual inspection task, inspect images taken from the microscope")
 
