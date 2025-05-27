@@ -874,47 +874,6 @@ class Microscope:
             "navigate_to_well": self.NavigateToWellInput.model_json_schema()
         }
 
-    async def check_service_health(self):
-        """Check if the service is healthy and rerun setup if needed"""
-        while True:
-            try:
-                # Try to get the service status
-                if self.service_id:
-                    service = await self.server.get_service(self.service_id)
-                    # Try a simple operation to verify service is working
-                    await service.hello_world()
-                    #print("Service health check passed")
-                else:
-                    logger.info("Service ID not set, waiting for service registration")
-            except Exception as e:
-                logger.error(f"Service health check failed: {e}")
-                logger.info("Attempting to rerun setup...")
-                # Clean up Hypha service-related connections and variables
-                try:
-                    if self.server:
-                        await self.server.disconnect()
-                        self.server = None
-                    if self.setup_task:
-                        self.setup_task.cancel()  # Cancel the previous setup task
-                        self.setup_task = None
-                except Exception as disconnect_error:
-                    logger.error(f"Error during disconnect: {disconnect_error}")
-                finally:
-                    self.server = None
-
-                while True:
-                    try:
-                        # Rerun the setup method
-                        self.setup_task = asyncio.create_task(self.setup())
-                        await self.setup_task
-                        logger.info("Setup successful")
-                        break  # Exit the loop if setup is successful
-                    except Exception as setup_error:
-                        logger.error(f"Failed to rerun setup: {setup_error}")
-                        await asyncio.sleep(30)  # Wait before retrying
-            
-            await asyncio.sleep(30)  # Check every half minute
-
     async def start_hypha_service(self, server, service_id):
         self.server = server
         self.service_id = service_id
@@ -972,9 +931,6 @@ class Microscope:
 
         logger.info(f"You can also test the service via the HTTP proxy: {self.server_url}{server.config.workspace}/services/{id}")
 
-        # Start the health check task
-        if not self.is_simulation:
-            asyncio.create_task(self.check_service_health())
 
     async def start_chatbot_service(self, server, service_id):
         chatbot_extension = {
