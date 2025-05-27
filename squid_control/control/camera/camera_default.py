@@ -538,8 +538,8 @@ class Camera_Simulation(object):
         self.artifact_manager = None
 
         # Use scale1 instead of scale0 for lower resolution
-        self.scale_level = 2
-        self.scale_factor = 16  # scale1 is 1/4 of scale0
+        self.scale_level = 1
+        self.scale_factor = 4  # scale1 is 1/4 of scale0
 
     def open(self, index=0):
         pass
