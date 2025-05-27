@@ -1,3 +1,5 @@
+import os  # Add os import
+import dotenv  # Add dotenv import
 # Initialize chatpt vision
 from openai import AsyncOpenAI
 import base64
@@ -6,9 +8,13 @@ from PIL import Image
 from io import BytesIO
 import matplotlib.pyplot as plt
 
+dotenv.load_dotenv() # Load environment variables from .env file
 
 async def aask(images, messages, max_tokens=1024):
-    aclient = AsyncOpenAI()
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable not set.")
+    aclient = AsyncOpenAI(api_key=api_key)
     user_message = []
     # download the images and save it into a list of PIL image objects
     img_objs = []

@@ -784,7 +784,7 @@ class Microscope:
 
     class InspectToolInput(BaseModel):
         """Inspect the images with GPT4-o's vision model."""
-        images: List[dict] = Field(..., description="A list of images to be inspected, each with a http url and title")
+        images: List[dict] = Field(..., description="A list of images to be inspected, each with a 'http_url' and 'title'")
         query: str = Field(..., description="User query about the image")
         context_description: str = Field(..., description="Context for the visual inspection task, inspect images taken from the microscope")
 
@@ -809,9 +809,12 @@ class Microscope:
         title: Optional[str] = Field(None, description="The title of the image.")
 
     async def inspect_tool(self, images: List[dict], query: str, context_description: str) -> str:
-        image_infos = [self.ImageInfo(**image) for image in images]
-        for image in image_infos:
-            assert image.url.startswith("http"), "Image URL must start with http."
+        image_infos = [
+            self.ImageInfo(url=image_dict['http_url'], title=image_dict.get('title'))
+            for image_dict in images
+        ]
+        for image_info_obj in image_infos:
+            assert image_info_obj.url.startswith("http"), "Image URL must start with http."
         response = await aask(image_infos, [context_description, query])
         return response
 
