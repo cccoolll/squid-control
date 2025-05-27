@@ -67,6 +67,7 @@ class Microscope:
         self.is_simulation = is_simulation
         self.is_local = is_local
         self.squidController = SquidController(is_simulation=is_simulation)
+        self.squidController.move_to_well('C',3)
         self.dx = 1
         self.dy = 1
         self.dz = 1
