@@ -81,8 +81,8 @@ class Microscope:
             0: 'BF_intensity_exposure',
             11: 'F405_intensity_exposure',
             12: 'F488_intensity_exposure',
-            13: 'F561_intensity_exposure',
-            14: 'F638_intensity_exposure',
+            13: 'F638_intensity_exposure',
+            14: 'F561_intensity_exposure',
             15: 'F730_intensity_exposure',
         }
         self.parameters = {
