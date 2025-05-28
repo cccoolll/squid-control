@@ -1157,6 +1157,10 @@ class Microscope:
             @peer_connection.on("connectionstatechange")
             async def on_connectionstatechange():
                 logger.info(f"WebRTC connection state changed to: {peer_connection.connectionState}")
+                if peer_connection.connectionState in ["closed", "failed", "disconnected"]:
+                    if self.video_track and self.video_track.running:
+                        logger.info(f"Connection state is {peer_connection.connectionState}. Stopping video track.")
+                        self.video_track.stop()
             
             @peer_connection.on("track")
             def on_track(track):
