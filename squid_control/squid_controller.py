@@ -4,6 +4,7 @@ import squid_control.control.core_reef as core
 import squid_control.control.microcontroller as microcontroller
 from squid_control.control.config import *
 from squid_control.control.camera import get_camera
+from squid_control.control.utils import rotate_and_flip_image
 import cv2
 import logging
 import squid_control.control.serial_peripherals as serial_peripherals
@@ -592,7 +593,9 @@ class SquidController:
 
         while self.microcontroller.is_busy():
             await asyncio.sleep(0.005)
+
         gray_img = self.camera.read_frame()
+        gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
         self.liveController.turn_off_illumination()
         while self.microcontroller.is_busy():
             await asyncio.sleep(0.005)
