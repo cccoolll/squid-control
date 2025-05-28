@@ -78,6 +78,7 @@ class StreamHandler(QObject):
     packet_image_to_write = Signal(np.ndarray, int, float)
     packet_image_for_tracking = Signal(np.ndarray, int, float)
     signal_new_frame_received = Signal()
+    signal_raw_frame_for_webrtc = Signal(np.ndarray) # New signal for WebRTC
 
     def __init__(
         self,
@@ -169,6 +170,9 @@ class StreamHandler(QObject):
                 rotate_image_angle=camera.rotate_image_angle,
                 flip_image=camera.flip_image,
             )
+
+            # Emit the raw cropped frame for WebRTC before any resizing for display
+            self.signal_raw_frame_for_webrtc.emit(image_cropped.copy()) # Send a copy for safety
 
             # send image to display
             time_now = time.time()

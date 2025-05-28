@@ -17,6 +17,7 @@ import io
 from PIL import Image  
 # Now you can import squid_control
 from squid_control.squid_controller import SquidController
+from squid_control.control.camera import TriggerModeSetting
 from pydantic import Field, BaseModel
 from typing import List, Optional
 from hypha_tools.hypha_storage import HyphaDataStore
@@ -26,6 +27,11 @@ from pydantic import Field
 from hypha_rpc.utils.schema import schema_function
 import signal
 from hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
+
+# WebRTC imports
+import aiohttp
+from av import VideoFrame
+from aiortc import MediaStreamTrack
 
 dotenv.load_dotenv()  
 ENV_FILE = dotenv.find_dotenv()  
@@ -52,6 +58,219 @@ def setup_logging(log_file="squid_control_service.log", max_bytes=100000, backup
     return logger
 
 logger = setup_logging()
+
+class MicroscopeVideoTrack(MediaStreamTrack):
+    """
+    A video stream track that provides real-time microscope images.
+    """
+
+    kind = "video"
+
+    def __init__(self, microscope_instance):
+        super().__init__()
+        self.microscope_instance = microscope_instance
+        self.live_controller = self.microscope_instance.squidController.liveController
+        self.stream_handler = self.microscope_instance.squidController.streamHandler
+        self.frame_queue = asyncio.Queue(maxsize=2) # Buffer a couple of frames
+        
+        self.count = 0
+        self.running = True
+        self.start_time = None
+        self.fps = 3
+        self.frame_width = 640
+        self.frame_height = 480
+        self.was_live_before = False
+        self.original_trigger_mode = None
+        self.original_trigger_fps = None
+        self._is_signal_connected = False # Flag to track signal connection
+
+        logger.info("MicroscopeVideoTrack initialized")
+
+    def _handle_new_frame(self, frame_array):
+        try:
+            if self.frame_queue.full():
+                self.frame_queue.get_nowait() # Discard oldest frame if queue is full
+            self.frame_queue.put_nowait(frame_array)
+        except Exception as e:
+            logger.error(f"Error in _handle_new_frame: {e}")
+
+    async def _start_live_if_needed(self):
+        if not self.live_controller.is_live:
+            self.was_live_before = False
+            logger.info("LiveController was not active. Starting for WebRTC.")
+            self.original_trigger_mode = self.live_controller.get_trigger_mode()
+            self.original_trigger_fps = self.live_controller.fps_trigger
+            
+            # Ensure a compatible mode is selected, e.g., a default BF mode
+            # This part might need adjustment based on how configurations are named/managed
+            default_config_name = self.microscope_instance.squidController.liveController.configurationManager.configurations[0].name
+            default_config = next((c for c in self.microscope_instance.squidController.liveController.configurationManager.configurations if c.name == default_config_name), None)
+            if default_config:
+                 self.live_controller.set_microscope_mode(default_config)
+
+            self.live_controller.set_trigger_mode(TriggerModeSetting.SOFTWARE.value)
+            self.live_controller.set_trigger_fps(self.fps) # Match WebRTC FPS
+            self.live_controller.start_live()
+        else:
+            self.was_live_before = True
+            logger.info("LiveController was already active.")
+        
+        # Connect to the new signal from StreamHandler
+        self.stream_handler.signal_raw_frame_for_webrtc.connect(self._handle_new_frame)
+        self._is_signal_connected = True
+
+    async def _stop_live_if_started_by_us(self):
+        if self._is_signal_connected:
+            try:
+                self.stream_handler.signal_raw_frame_for_webrtc.disconnect(self._handle_new_frame)
+                self._is_signal_connected = False
+                logger.info("Disconnected _handle_new_frame from signal_raw_frame_for_webrtc")
+            except TypeError:
+                # This can happen if disconnect is called when not connected or already disconnected
+                logger.warning("TypeError when trying to disconnect _handle_new_frame. It might have already been disconnected or was never connected.")
+                self._is_signal_connected = False # Ensure flag is reset
+            except Exception as e:
+                logger.error(f"Unexpected error during signal disconnect: {e}")
+                self._is_signal_connected = False # Ensure flag is reset
+        
+        if not self.was_live_before and self.live_controller.is_live:
+            logger.info("Stopping LiveController that was started for WebRTC.")
+            self.live_controller.stop_live()
+            # Restore original trigger mode and FPS if they were changed
+            if self.original_trigger_mode is not None:
+                self.live_controller.set_trigger_mode(self.original_trigger_mode)
+            if self.original_trigger_fps is not None:
+                self.live_controller.set_trigger_fps(self.original_trigger_fps)
+        logger.info("MicroscopeVideoTrack resources released.")
+
+    def draw_crosshair(self, img, center_x, center_y, size=20, color=[255, 255, 255]):
+        """Draw a crosshair at the specified position"""
+        height, width = img.shape[:2]
+        
+        # Horizontal line
+        if 0 <= center_y < height:
+            start_x = max(0, center_x - size)
+            end_x = min(width, center_x + size)
+            img[center_y, start_x:end_x] = color
+        
+        # Vertical line
+        if 0 <= center_x < width:
+            start_y = max(0, center_y - size)
+            end_y = min(height, center_y + size)
+            img[start_y:end_y, center_x] = color
+
+    def add_overlay_info(self, img):
+        """Add position and status information overlay to the image"""
+        try:
+            status = self.microscope_instance.get_status()
+            overlay_height = 60
+            overlay = np.zeros((overlay_height, img.shape[1], 3), dtype=np.uint8)
+            overlay[:] = [10, 10, 10]  # Dark gray background
+            
+            if 'current_x' in status and 'current_y' in status:
+                x_pos_mm = status['current_x']
+                y_pos_mm = status['current_y']
+                z_pos_mm = status.get('current_z', 0)
+                
+                # Display position text
+                pos_text = f"X: {x_pos_mm:.2f}mm  Y: {y_pos_mm:.2f}mm  Z: {z_pos_mm:.2f}mm"
+                cv2.putText(overlay, pos_text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 255), 1)
+            
+            # Display FPS and frame count
+            fps_text = f"FPS: {self.fps} Stream: {self.count}"
+            cv2.putText(overlay, fps_text, (10, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 255), 1)
+            
+            # Combine overlay with image
+            result_img = cv2.resize(img, (self.frame_width, self.frame_height - overlay_height))
+            if len(result_img.shape) == 2: # if grayscale
+                result_img = cv2.cvtColor(result_img, cv2.COLOR_GRAY2RGB)
+            result = np.vstack([overlay, result_img])
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Failed to add overlay info: {e} - Image shape: {img.shape}")
+            # Fallback: just resize and convert to RGB if needed
+            resized_img = cv2.resize(img, (self.frame_width, self.frame_height))
+            if len(resized_img.shape) == 2:
+                return cv2.cvtColor(resized_img, cv2.COLOR_GRAY2RGB)
+            return resized_img
+
+    async def recv(self):
+        if not self.running:
+            logger.warning("MicroscopeVideoTrack: recv() called but track is not running")
+            await self._stop_live_if_started_by_us()
+            raise Exception("Track stopped")
+            
+        try:
+            if self.count == 0:
+                await self._start_live_if_needed()
+
+            # Initialize start time on first frame processed
+            if self.start_time is None:
+                self.start_time = time.time()
+            
+            # Calculate proper timing for frame delivery
+            expected_pts = int((time.time() - self.start_time) * self.fps)
+            if self.count < expected_pts:
+                # We are behind, try to catch up by processing available frames quickly
+                pass # Allow processing the next available frame from queue
+            elif self.count > expected_pts:
+                # We are ahead, wait for the next frame time
+                await asyncio.sleep((self.count - expected_pts) / self.fps)
+
+            try:
+                # Get frame from our internal queue, with a timeout
+                raw_frame = await asyncio.wait_for(self.frame_queue.get(), timeout=1.0 / self.fps + 0.1)
+            except asyncio.TimeoutError:
+                # Timeout waiting for a frame, create a placeholder indicating no new frame
+                logger.debug(f"Timeout waiting for frame {self.count}")
+                placeholder_img = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
+                cv2.putText(placeholder_img, "No new frame", (self.frame_width//2 - 100, self.frame_height//2), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
+                # Add overlay to placeholder too
+                processed_frame = self.add_overlay_info(placeholder_img)
+                new_video_frame = VideoFrame.from_ndarray(processed_frame, format="rgb24")
+                new_video_frame.pts = self.count # Use current count as PTS
+                new_video_frame.time_base = fractions.Fraction(1, self.fps)
+                self.count += 1
+                return new_video_frame
+            
+            # Add overlay information
+            processed_frame = self.add_overlay_info(raw_frame.copy())
+
+            # Ensure the image is RGB
+            if len(processed_frame.shape) == 2:
+                 processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
+            elif processed_frame.shape[2] == 1:
+                 processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
+            
+            # Create video frame
+            new_video_frame = VideoFrame.from_ndarray(processed_frame, format="rgb24")
+            
+            new_video_frame.pts = self.count
+            new_video_frame.time_base = fractions.Fraction(1, self.fps)
+            
+            if self.count % (self.fps * 5) == 0:  # Log every 5 seconds
+                logger.info(f"MicroscopeVideoTrack: Sent frame {self.count}")
+            
+            self.count += 1
+            return new_video_frame
+            
+        except Exception as e:
+            logger.error(f"MicroscopeVideoTrack: Error in recv(): {e}", exc_info=True)
+            await self._stop_live_if_started_by_us()
+            self.running = False
+            raise
+
+    async def stop(self):
+        logger.info("MicroscopeVideoTrack stop() called.")
+        self.running = False
+        # Drain the queue
+        while not self.frame_queue.empty():
+            try:
+                self.frame_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        await self._stop_live_if_started_by_us()
 
 class Microscope:
     def __init__(self, is_simulation, is_local):
@@ -108,6 +327,12 @@ class Microscope:
         self.server = None
         self.service_id = os.environ.get("MICROSCOPE_SERVICE_ID")
         self.setup_task = None  # Track the setup task
+        
+        # WebRTC related attributes
+        self.video_track = None
+        self.webrtc_service_id = None
+        self.is_streaming = False
+        
         # Add task status tracking
         self.task_status = {
             "move_by_distance": "not_started",
@@ -755,6 +980,50 @@ class Microscope:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to get chatbot URL: {e}")
             raise e
+
+    async def fetch_ice_servers(self):
+        """Fetch ICE servers from the coturn service"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get('https://ai.imjoy.io/public/services/coturn/get_rtc_ice_servers') as response:
+                    if response.status == 200:
+                        ice_servers = await response.json()
+                        logger.info("Successfully fetched ICE servers")
+                        return ice_servers
+                    else:
+                        logger.warning(f"Failed to fetch ICE servers, status: {response.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"Error fetching ICE servers: {e}")
+            return None
+
+    def start_video_streaming(self, context=None):
+        """Start WebRTC video streaming"""
+        try:
+            if not self.is_streaming:
+                self.is_streaming = True
+                logger.info("Video streaming started")
+                return {"status": "streaming_started", "message": "WebRTC video streaming has been started"}
+            else:
+                return {"status": "already_streaming", "message": "Video streaming is already active"}
+        except Exception as e:
+            logger.error(f"Failed to start video streaming: {e}")
+            raise e
+
+    def stop_video_streaming(self, context=None):
+        """Stop WebRTC video streaming"""
+        try:
+            if self.is_streaming:
+                self.is_streaming = False
+                if self.video_track:
+                    self.video_track.running = False
+                logger.info("Video streaming stopped")
+                return {"status": "streaming_stopped", "message": "WebRTC video streaming has been stopped"}
+            else:
+                return {"status": "not_streaming", "message": "Video streaming is not currently active"}
+        except Exception as e:
+            logger.error(f"Failed to stop video streaming: {e}")
+            raise e
     
     class MoveByDistanceInput(BaseModel):
         """Move the stage by a distance in x, y, z axis."""
@@ -915,7 +1184,10 @@ class Microscope:
                 "get_task_status": self.get_task_status,
                 "get_all_task_status": self.get_all_task_status,
                 "reset_task_status": self.reset_task_status,
-                "reset_all_task_status": self.reset_all_task_status
+                "reset_all_task_status": self.reset_all_task_status,
+                # Add WebRTC streaming functions
+                "start_video_streaming": self.start_video_streaming,
+                "stop_video_streaming": self.stop_video_streaming
             },
         )
 
@@ -931,7 +1203,6 @@ class Microscope:
         id = svc.id.split(":")[1]
 
         logger.info(f"You can also test the service via the HTTP proxy: {self.server_url}{server.config.workspace}/services/{id}")
-
 
     async def start_chatbot_service(self, server, service_id):
         chatbot_extension = {
@@ -960,6 +1231,71 @@ class Microscope:
         self.chatbot_service_url = f"https://bioimage.io/chat?server=https://chat.bioimage.io&extension={svc.id}&assistant=Skyler"
         logger.info(f"Extension service registered with id: {svc.id}, you can visit the service at:\n {self.chatbot_service_url}")
 
+    async def start_webrtc_service(self, server, webrtc_service_id_arg):
+        """Start the WebRTC video streaming service"""
+        # Ensure webrtc_service_id is unique and assigned to self for reference
+        self.webrtc_service_id = webrtc_service_id_arg 
+        
+        async def on_init(peer_connection):
+            logger.info("WebRTC peer connection initialized")
+            
+            @peer_connection.on("connectionstatechange")
+            async def on_connectionstatechange():
+                logger.info(f"WebRTC connection state changed to: {peer_connection.connectionState}")
+            
+            @peer_connection.on("track")
+            def on_track(track):
+                logger.info(f"Track {track.kind} received from client")
+                
+                if self.video_track and self.video_track.running:
+                    asyncio.ensure_future(self.video_track.stop())
+                
+                self.video_track = MicroscopeVideoTrack(self) 
+                peer_connection.addTrack(self.video_track)
+                logger.info("Added MicroscopeVideoTrack to peer connection")
+                
+                @track.on("ended")
+                async def on_ended():
+                    logger.info(f"Client track {track.kind} ended")
+                    if self.video_track:
+                        logger.info("Stopping MicroscopeVideoTrack.")
+                        await self.video_track.stop()
+                        self.video_track = None
+
+        ice_servers = await self.fetch_ice_servers()
+        if not ice_servers:
+            logger.warning("Using fallback ICE servers")
+            ice_servers = [{"urls": ["stun:stun.l.google.com:19302"]}]
+
+        try:
+            await register_rtc_service(
+                server,
+                service_id=self.webrtc_service_id, # Use the unique ID stored in self
+                config={
+                    "visibility": "public",
+                    "ice_servers": ice_servers,
+                    "on_init": on_init,
+                },
+            )
+            logger.info(f"WebRTC service registered with id: {self.webrtc_service_id}")
+            logger.info(f"You can access the WebRTC stream at: https://oeway.github.io/webrtc-hypha-demo/?service_id={self.webrtc_service_id}")
+        except Exception as e:
+            logger.error(f"Failed to register WebRTC service ({self.webrtc_service_id}): {e}")
+            # If service already exists, try to get it instead of re-registering
+            # This handles the case where setup might be called multiple times or service persists
+            if "Service already exists" in str(e):
+                logger.info(f"WebRTC service {self.webrtc_service_id} already exists. Attempting to retrieve it.")
+                try:
+                    # Try to get the existing service if registration fails due to it already existing.
+                    # This doesn't re-run on_init, assumes prior setup was correct or client handles reconnection.
+                    _ = await server.get_service(self.webrtc_service_id)
+                    logger.info(f"Successfully retrieved existing WebRTC service: {self.webrtc_service_id}")
+                except Exception as get_e:
+                    logger.error(f"Failed to retrieve existing WebRTC service {self.webrtc_service_id}: {get_e}")
+                    raise # Re-raise if getting also fails
+            else:
+                raise # Re-raise original error if not "Service already exists"
+
     async def setup(self):
         data_store_token = os.environ.get("SQUID_WORKSPACE_TOKEN")
         data_store_server = await connect_to_server(
@@ -982,20 +1318,27 @@ class Microscope:
             server = await connect_to_server(
                 {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
             )
+        
+        self.server = server
+        
         if self.is_simulation:
-            await self.start_hypha_service(server, service_id=self.service_id)
+            await self.start_hypha_service(self.server, service_id=self.service_id)
             datastore_id = f'data-store-simu-{self.service_id}'
             chatbot_id = f"squid-chatbot-simu-{self.service_id}"
+            # Ensure WebRTC service ID is unique for simulation
+            webrtc_id = f"webrtc-stream-simu-{self.service_id}"
         else:
-            await self.start_hypha_service(server, service_id=self.service_id)
+            await self.start_hypha_service(self.server, service_id=self.service_id)
             datastore_id = f'data-store-real-{self.service_id}'
             chatbot_id = f"squid-chatbot-real-{self.service_id}"
+            # Ensure WebRTC service ID is unique for real mode
+            webrtc_id = f"webrtc-stream-real-{self.service_id}"
+        
         self.datastore = HyphaDataStore()
         try:
             await self.datastore.setup(data_store_server, service_id=datastore_id)
         except TypeError as e:
             if "Future" in str(e):
-                # If config is a Future, wait for it to resolve
                 config = await asyncio.wrap_future(server.config)
                 await self.datastore.setup(data_store_server, service_id=datastore_id, config=config)
             else:
@@ -1008,6 +1351,9 @@ class Microscope:
             chatbot_token = await login({"server_url": chatbot_server_url})
         chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
         await self.start_chatbot_service(chatbot_server, chatbot_id)
+        
+        # Start WebRTC service on the main server (self.server)
+        await self.start_webrtc_service(self.server, webrtc_id)
 
     async def register_service_probes(self, server):
         """Register readiness and liveness probes for Kubernetes health checks"""
