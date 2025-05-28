@@ -482,9 +482,9 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             self.squidController.liveController.turn_off_illumination()
-            logger.info('Bright field illumination turned off.')
+            logger.info('Illumination turned off.')
             self.task_status[task_name] = "finished"
-            return 'Bright field illumination turned off.'
+            return 'Illumination turned off.'
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to close illumination: {e}")
