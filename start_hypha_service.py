@@ -73,8 +73,8 @@ class MicroscopeVideoTrack(MediaStreamTrack):
         self.running = True
         self.start_time = None
         self.fps = 3 # Target FPS for WebRTC stream
-        self.frame_width = 640
-        self.frame_height = 480
+        self.frame_width = 2048
+        self.frame_height = 2048
         logger.info("MicroscopeVideoTrack initialized")
 
     def draw_crosshair(self, img, center_x, center_y, size=20, color=[255, 255, 255]):
