@@ -107,8 +107,11 @@ class MicroscopeVideoTrack(MediaStreamTrack):
             if sleep_duration > 0:
                 await asyncio.sleep(sleep_duration)
 
-            # Get frame using the get_video_frame method
-            processed_frame = await self.microscope_instance.get_video_frame()
+            # Get frame using the get_video_frame method with frame dimensions
+            processed_frame = await self.microscope_instance.get_video_frame(
+                frame_width=self.frame_width,
+                frame_height=self.frame_height
+            )
             
             new_video_frame = VideoFrame.from_ndarray(processed_frame, format="rgb24")
             new_video_frame.pts = self.count
@@ -498,10 +501,10 @@ class Microscope:
             raise e
 
     @schema_function(skip_self=True)
-    async def get_video_frame(self, context=None):
+    async def get_video_frame(self, frame_width: int=Field(640, description="Width of the video frame"), frame_height: int=Field(480, description="Height of the video frame"), context=None):
         """
         Get the raw frame from the microscope
-        Returns: A base64 encoded image
+        Returns: A processed frame ready for video streaming
         """
         try:
             # Get current channel and parameters
@@ -524,15 +527,15 @@ class Microscope:
                 raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_GRAY2RGB)
                 
             # Resize to standard dimensions
-            raw_frame = cv2.resize(raw_frame, (self.frame_width, self.frame_height))
+            raw_frame = cv2.resize(raw_frame, (frame_width, frame_height))
             
             return raw_frame
             
         except Exception as e:
-            logger.error(f"Error getting raw frame: {e}", exc_info=True)
+            logger.error(f"Error getting video frame: {e}", exc_info=True)
             # Return a blank frame with error message
-            placeholder_img = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
-            cv2.putText(placeholder_img, f"Error: {str(e)}", (10, self.frame_height//2), 
+            placeholder_img = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+            cv2.putText(placeholder_img, f"Error: {str(e)}", (10, frame_height//2), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
             return placeholder_img
 
