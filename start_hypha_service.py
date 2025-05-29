@@ -107,41 +107,10 @@ class MicroscopeVideoTrack(MediaStreamTrack):
             if sleep_duration > 0:
                 await asyncio.sleep(sleep_duration)
 
-            try:
-                # Get current channel and parameters
-                channel = self.microscope_instance.squidController.current_channel
-                param_name = self.microscope_instance.channel_param_map.get(channel)
-                intensity, exposure_time = 10, 10  # Default values
-                if param_name:
-                    stored_params = getattr(self.microscope_instance, param_name, None)
-                    if stored_params and isinstance(stored_params, list) and len(stored_params) == 2:
-                        intensity, exposure_time = stored_params
-
-                # Get frame directly using snap_image
-                raw_frame = await self.microscope_instance.squidController.snap_image(channel, intensity, exposure_time)
-                raw_frame = raw_frame.astype(np.uint8)  # Convert to 8-bit image
-
-            except Exception as e_frame:
-                logger.error(f"Error getting frame from snap_image: {e_frame}", exc_info=True)
-                logger.debug(f"Timeout or error waiting for frame {self.count}")
-                placeholder_img = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
-                cv2.putText(placeholder_img, f"No new frame {self.count}", (self.frame_width//2 - 100, self.frame_height//2), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
-                processed_frame = placeholder_img
-                new_video_frame = VideoFrame.from_ndarray(processed_frame, format="rgb24")
-                new_video_frame.pts = self.count
-                new_video_frame.time_base = fractions.Fraction(1, self.fps)
-                self.count += 1
-                return new_video_frame
-            
-            # Resize and convert to RGB if needed
-            processed_frame = cv2.resize(raw_frame, (self.frame_width, self.frame_height))
-            if len(processed_frame.shape) == 2:
-                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
-            elif processed_frame.shape[2] == 1:
-                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
+            # Get frame using the get_video_frame method
+            processed_frame = await self.microscope_instance.get_video_frame()
             
             new_video_frame = VideoFrame.from_ndarray(processed_frame, format="rgb24")
-            
             new_video_frame.pts = self.count
             new_video_frame.time_base = fractions.Fraction(1, self.fps)
             
@@ -527,6 +496,45 @@ class Microscope:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to get new frame: {e}")
             raise e
+
+    @schema_function(skip_self=True)
+    async def get_video_frame(self, context=None):
+        """
+        Get the raw frame from the microscope
+        Returns: A base64 encoded image
+        """
+        try:
+            # Get current channel and parameters
+            channel = self.squidController.current_channel
+            param_name = self.channel_param_map.get(channel)
+            intensity, exposure_time = 10, 10  # Default values
+            if param_name:
+                stored_params = getattr(self, param_name, None)
+                if stored_params and isinstance(stored_params, list) and len(stored_params) == 2:
+                    intensity, exposure_time = stored_params
+
+            # Get frame directly using snap_image
+            raw_frame = await self.squidController.snap_image(channel, intensity, exposure_time)
+            raw_frame = raw_frame.astype(np.uint8)  # Convert to 8-bit image
+            
+            # Convert to RGB if needed
+            if len(raw_frame.shape) == 2:
+                raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_GRAY2RGB)
+            elif raw_frame.shape[2] == 1:
+                raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_GRAY2RGB)
+                
+            # Resize to standard dimensions
+            raw_frame = cv2.resize(raw_frame, (self.frame_width, self.frame_height))
+            
+            return raw_frame
+            
+        except Exception as e:
+            logger.error(f"Error getting raw frame: {e}", exc_info=True)
+            # Return a blank frame with error message
+            placeholder_img = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
+            cv2.putText(placeholder_img, f"Error: {str(e)}", (10, self.frame_height//2), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
+            return placeholder_img
 
     @schema_function(skip_self=True)
     async def snap(self, exposure_time: int=Field(100, description="Exposure time, in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
@@ -1048,6 +1056,7 @@ class Microscope:
                 "move_by_distance": self.move_by_distance,
                 "snap": self.snap,
                 "one_new_frame": self.one_new_frame,
+                "get_video_frame": self.get_video_frame,
                 "off_illumination": self.close_illumination,
                 "on_illumination": self.open_illumination,
                 "set_illumination": self.set_illumination,
