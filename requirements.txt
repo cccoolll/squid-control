@@ -21,3 +21,4 @@ blosc==1.11.2
 aiohttp==3.10.1
 scipy==1.15.1
 pydantic==2.10.6
+av==11.0.0

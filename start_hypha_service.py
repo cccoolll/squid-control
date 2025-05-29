@@ -144,17 +144,21 @@ class MicroscopeVideoTrack(MediaStreamTrack):
                 await asyncio.sleep(sleep_duration)
 
             try:
-                base64_image = await self.microscope_instance.one_new_frame()
-                image_bytes = base64.b64decode(base64_image)
-                pil_image = Image.open(io.BytesIO(image_bytes))
-                raw_frame = np.array(pil_image)
-                if len(raw_frame.shape) == 2: # Grayscale to RGB
-                    raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_GRAY2RGB)
-                elif raw_frame.shape[2] == 4: # RGBA to RGB
-                    raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_RGBA2RGB)
+                # Get current channel and parameters
+                channel = self.microscope_instance.squidController.current_channel
+                param_name = self.microscope_instance.channel_param_map.get(channel)
+                intensity, exposure_time = 10, 10  # Default values
+                if param_name:
+                    stored_params = getattr(self.microscope_instance, param_name, None)
+                    if stored_params and isinstance(stored_params, list) and len(stored_params) == 2:
+                        intensity, exposure_time = stored_params
+
+                # Get frame directly using snap_image
+                raw_frame = await self.microscope_instance.squidController.snap_image(channel, intensity, exposure_time)
+                raw_frame = raw_frame.astype(np.uint8)  # Convert to 8-bit image
 
             except Exception as e_frame:
-                logger.error(f"Error getting frame from one_new_frame: {e_frame}", exc_info=True)
+                logger.error(f"Error getting frame from snap_image: {e_frame}", exc_info=True)
                 logger.debug(f"Timeout or error waiting for frame {self.count}")
                 placeholder_img = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
                 cv2.putText(placeholder_img, f"No new frame {self.count}", (self.frame_width//2 - 100, self.frame_height//2), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
@@ -1197,7 +1201,6 @@ class Microscope:
                 },
             )
             logger.info(f"WebRTC service registered with id: {self.webrtc_service_id}")
-            logger.info(f"You can access the WebRTC stream at: https://oeway.github.io/webrtc-hypha-demo/?service_id={self.webrtc_service_id}")
         except Exception as e:
             logger.error(f"Failed to register WebRTC service ({self.webrtc_service_id}): {e}")
             if "Service already exists" in str(e):
@@ -1212,9 +1215,9 @@ class Microscope:
                 raise
 
     async def setup(self):
-        data_store_token = os.environ.get("SQUID_WORKSPACE_TOKEN")
-        data_store_server = await connect_to_server(
-                {"server_url": "https://hypha.aicell.io", "token": data_store_token, "workspace": "squid-control", "ping_interval": None}
+        remote_token = os.environ.get("SQUID_WORKSPACE_TOKEN")
+        remote_server = await connect_to_server(
+                {"server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": "squid-control", "ping_interval": None}
             )
         if not self.service_id:
             raise ValueError("MICROSCOPE_SERVICE_ID is not set in the environment variables.")
@@ -1249,11 +1252,11 @@ class Microscope:
         
         self.datastore = HyphaDataStore()
         try:
-            await self.datastore.setup(data_store_server, service_id=datastore_id)
+            await self.datastore.setup(remote_server, service_id=datastore_id)
         except TypeError as e:
             if "Future" in str(e):
                 config = await asyncio.wrap_future(server.config)
-                await self.datastore.setup(data_store_server, service_id=datastore_id, config=config)
+                await self.datastore.setup(remote_server, service_id=datastore_id, config=config)
             else:
                 raise e
     
@@ -1265,7 +1268,7 @@ class Microscope:
         chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
         await self.start_chatbot_service(chatbot_server, chatbot_id)
         
-        await self.start_webrtc_service(self.server, webrtc_id)
+        await self.start_webrtc_service(remote_server, webrtc_id)
 
     async def register_service_probes(self, server):
         async def is_service_healthy():
