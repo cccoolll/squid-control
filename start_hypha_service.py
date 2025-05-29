@@ -17,6 +17,7 @@ import io
 from PIL import Image  
 # Now you can import squid_control
 from squid_control.squid_controller import SquidController
+from squid_control.control.camera import TriggerModeSetting
 from pydantic import Field, BaseModel
 from typing import List, Optional
 from hypha_tools.hypha_storage import HyphaDataStore
@@ -26,6 +27,11 @@ from pydantic import Field
 from hypha_rpc.utils.schema import schema_function
 import signal
 from hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
+
+# WebRTC imports
+import aiohttp
+from av import VideoFrame
+from aiortc import MediaStreamTrack
 
 dotenv.load_dotenv()  
 ENV_FILE = dotenv.find_dotenv()  
@@ -53,6 +59,79 @@ def setup_logging(log_file="squid_control_service.log", max_bytes=100000, backup
 
 logger = setup_logging()
 
+class MicroscopeVideoTrack(MediaStreamTrack):
+    """
+    A video stream track that provides real-time microscope images.
+    """
+
+    kind = "video"
+
+    def __init__(self, microscope_instance):
+        super().__init__()
+        self.microscope_instance = microscope_instance
+        self.count = 0
+        self.running = True
+        self.start_time = None
+        self.fps = 3 # Target FPS for WebRTC stream
+        self.frame_width = 2048
+        self.frame_height = 2048
+        logger.info("MicroscopeVideoTrack initialized")
+
+    def draw_crosshair(self, img, center_x, center_y, size=20, color=[255, 255, 255]):
+        """Draw a crosshair at the specified position"""
+        height, width = img.shape[:2]
+        
+        # Horizontal line
+        if 0 <= center_y < height:
+            start_x = max(0, center_x - size)
+            end_x = min(width, center_x + size)
+            img[center_y, start_x:end_x] = color
+        
+        # Vertical line
+        if 0 <= center_x < width:
+            start_y = max(0, center_y - size)
+            end_y = min(height, center_y + size)
+            img[start_y:end_y, center_x] = color
+
+    async def recv(self):
+        if not self.running:
+            logger.warning("MicroscopeVideoTrack: recv() called but track is not running")
+            raise Exception("Track stopped")
+            
+        try:
+            if self.start_time is None:
+                self.start_time = time.time()
+            
+            next_frame_time = self.start_time + (self.count / self.fps)
+            sleep_duration = next_frame_time - time.time()
+            if sleep_duration > 0:
+                await asyncio.sleep(sleep_duration)
+
+            # Get frame using the get_video_frame method with frame dimensions
+            processed_frame = await self.microscope_instance.get_video_frame(
+                frame_width=self.frame_width,
+                frame_height=self.frame_height
+            )
+            
+            new_video_frame = VideoFrame.from_ndarray(processed_frame, format="rgb24")
+            new_video_frame.pts = self.count
+            new_video_frame.time_base = fractions.Fraction(1, self.fps)
+            
+            if self.count % (self.fps * 5) == 0:  # Log every 5 seconds
+                logger.info(f"MicroscopeVideoTrack: Sent frame {self.count}")
+            
+            self.count += 1
+            return new_video_frame
+            
+        except Exception as e:
+            logger.error(f"MicroscopeVideoTrack: Error in recv(): {e}", exc_info=True)
+            self.running = False
+            raise
+
+    def stop(self):
+        logger.info("MicroscopeVideoTrack stop() called.")
+        self.running = False
+
 class Microscope:
     def __init__(self, is_simulation, is_local):
         self.login_required = True
@@ -67,6 +146,7 @@ class Microscope:
         self.is_simulation = is_simulation
         self.is_local = is_local
         self.squidController = SquidController(is_simulation=is_simulation)
+        self.squidController.move_to_well('C',3)
         self.dx = 1
         self.dy = 1
         self.dz = 1
@@ -80,8 +160,8 @@ class Microscope:
             0: 'BF_intensity_exposure',
             11: 'F405_intensity_exposure',
             12: 'F488_intensity_exposure',
-            13: 'F561_intensity_exposure',
-            14: 'F638_intensity_exposure',
+            13: 'F638_intensity_exposure',
+            14: 'F561_intensity_exposure',
             15: 'F730_intensity_exposure',
         }
         self.parameters = {
@@ -107,6 +187,12 @@ class Microscope:
         self.server = None
         self.service_id = os.environ.get("MICROSCOPE_SERVICE_ID")
         self.setup_task = None  # Track the setup task
+        
+        # WebRTC related attributes
+        self.video_track = None
+        self.webrtc_service_id = None
+        self.is_streaming = False
+        
         # Add task status tracking
         self.task_status = {
             "move_by_distance": "not_started",
@@ -415,6 +501,45 @@ class Microscope:
             raise e
 
     @schema_function(skip_self=True)
+    async def get_video_frame(self, frame_width: int=Field(640, description="Width of the video frame"), frame_height: int=Field(480, description="Height of the video frame"), context=None):
+        """
+        Get the raw frame from the microscope
+        Returns: A processed frame ready for video streaming
+        """
+        try:
+            # Get current channel and parameters
+            channel = self.squidController.current_channel
+            param_name = self.channel_param_map.get(channel)
+            intensity, exposure_time = 10, 10  # Default values
+            if param_name:
+                stored_params = getattr(self, param_name, None)
+                if stored_params and isinstance(stored_params, list) and len(stored_params) == 2:
+                    intensity, exposure_time = stored_params
+
+            # Get frame directly using snap_image
+            raw_frame = await self.squidController.snap_image(channel, intensity, exposure_time)
+            raw_frame = raw_frame.astype(np.uint8)  # Convert to 8-bit image
+            
+            # Convert to RGB if needed
+            if len(raw_frame.shape) == 2:
+                raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_GRAY2RGB)
+            elif raw_frame.shape[2] == 1:
+                raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_GRAY2RGB)
+                
+            # Resize to standard dimensions
+            raw_frame = cv2.resize(raw_frame, (frame_width, frame_height))
+            
+            return raw_frame
+            
+        except Exception as e:
+            logger.error(f"Error getting video frame: {e}", exc_info=True)
+            # Return a blank frame with error message
+            placeholder_img = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+            cv2.putText(placeholder_img, f"Error: {str(e)}", (10, frame_height//2), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
+            return placeholder_img
+
+    @schema_function(skip_self=True)
     async def snap(self, exposure_time: int=Field(100, description="Exposure time, in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
         """
         Get an image from microscope
@@ -481,9 +606,9 @@ class Microscope:
         self.task_status[task_name] = "started"
         try:
             self.squidController.liveController.turn_off_illumination()
-            logger.info('Bright field illumination turned off.')
+            logger.info('Illumination turned off.')
             self.task_status[task_name] = "finished"
-            return 'Bright field illumination turned off.'
+            return 'Illumination turned off.'
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to close illumination: {e}")
@@ -754,6 +879,50 @@ class Microscope:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to get chatbot URL: {e}")
             raise e
+
+    async def fetch_ice_servers(self):
+        """Fetch ICE servers from the coturn service"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get('https://ai.imjoy.io/public/services/coturn/get_rtc_ice_servers') as response:
+                    if response.status == 200:
+                        ice_servers = await response.json()
+                        logger.info("Successfully fetched ICE servers")
+                        return ice_servers
+                    else:
+                        logger.warning(f"Failed to fetch ICE servers, status: {response.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"Error fetching ICE servers: {e}")
+            return None
+
+    def start_video_streaming(self, context=None):
+        """Start WebRTC video streaming"""
+        try:
+            if not self.is_streaming:
+                self.is_streaming = True
+                logger.info("Video streaming started")
+                return {"status": "streaming_started", "message": "WebRTC video streaming has been started"}
+            else:
+                return {"status": "already_streaming", "message": "Video streaming is already active"}
+        except Exception as e:
+            logger.error(f"Failed to start video streaming: {e}")
+            raise e
+
+    def stop_video_streaming(self, context=None):
+        """Stop WebRTC video streaming"""
+        try:
+            if self.is_streaming:
+                self.is_streaming = False
+                if self.video_track:
+                    self.video_track.running = False
+                logger.info("Video streaming stopped")
+                return {"status": "streaming_stopped", "message": "WebRTC video streaming has been stopped"}
+            else:
+                return {"status": "not_streaming", "message": "Video streaming is not currently active"}
+        except Exception as e:
+            logger.error(f"Failed to stop video streaming: {e}")
+            raise e
     
     class MoveByDistanceInput(BaseModel):
         """Move the stage by a distance in x, y, z axis."""
@@ -874,47 +1043,6 @@ class Microscope:
             "navigate_to_well": self.NavigateToWellInput.model_json_schema()
         }
 
-    async def check_service_health(self):
-        """Check if the service is healthy and rerun setup if needed"""
-        while True:
-            try:
-                # Try to get the service status
-                if self.service_id:
-                    service = await self.server.get_service(self.service_id)
-                    # Try a simple operation to verify service is working
-                    await service.hello_world()
-                    #print("Service health check passed")
-                else:
-                    logger.info("Service ID not set, waiting for service registration")
-            except Exception as e:
-                logger.error(f"Service health check failed: {e}")
-                logger.info("Attempting to rerun setup...")
-                # Clean up Hypha service-related connections and variables
-                try:
-                    if self.server:
-                        await self.server.disconnect()
-                        self.server = None
-                    if self.setup_task:
-                        self.setup_task.cancel()  # Cancel the previous setup task
-                        self.setup_task = None
-                except Exception as disconnect_error:
-                    logger.error(f"Error during disconnect: {disconnect_error}")
-                finally:
-                    self.server = None
-
-                while True:
-                    try:
-                        # Rerun the setup method
-                        self.setup_task = asyncio.create_task(self.setup())
-                        await self.setup_task
-                        logger.info("Setup successful")
-                        break  # Exit the loop if setup is successful
-                    except Exception as setup_error:
-                        logger.error(f"Failed to rerun setup: {setup_error}")
-                        await asyncio.sleep(30)  # Wait before retrying
-            
-            await asyncio.sleep(30)  # Check every half minute
-
     async def start_hypha_service(self, server, service_id):
         self.server = server
         self.service_id = service_id
@@ -931,6 +1059,7 @@ class Microscope:
                 "move_by_distance": self.move_by_distance,
                 "snap": self.snap,
                 "one_new_frame": self.one_new_frame,
+                "get_video_frame": self.get_video_frame,
                 "off_illumination": self.close_illumination,
                 "on_illumination": self.open_illumination,
                 "set_illumination": self.set_illumination,
@@ -951,11 +1080,12 @@ class Microscope:
                 "get_status": self.get_status,
                 "update_parameters_from_client": self.update_parameters_from_client,
                 "get_chatbot_url": self.get_chatbot_url,
-                # Add status functions
                 "get_task_status": self.get_task_status,
                 "get_all_task_status": self.get_all_task_status,
                 "reset_task_status": self.reset_task_status,
-                "reset_all_task_status": self.reset_all_task_status
+                "reset_all_task_status": self.reset_all_task_status,
+                "start_video_streaming": self.start_video_streaming,
+                "stop_video_streaming": self.stop_video_streaming
             },
         )
 
@@ -963,7 +1093,6 @@ class Microscope:
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
 
-        # Register health probes when service is has not 'local' in the service id
         if "local" not in service_id:
             await self.register_service_probes(server)
         
@@ -971,10 +1100,6 @@ class Microscope:
         id = svc.id.split(":")[1]
 
         logger.info(f"You can also test the service via the HTTP proxy: {self.server_url}{server.config.workspace}/services/{id}")
-
-        # Start the health check task
-        if not self.is_simulation:
-            asyncio.create_task(self.check_service_health())
 
     async def start_chatbot_service(self, server, service_id):
         chatbot_extension = {
@@ -1003,10 +1128,72 @@ class Microscope:
         self.chatbot_service_url = f"https://bioimage.io/chat?server=https://chat.bioimage.io&extension={svc.id}&assistant=Skyler"
         logger.info(f"Extension service registered with id: {svc.id}, you can visit the service at:\n {self.chatbot_service_url}")
 
+    async def start_webrtc_service(self, server, webrtc_service_id_arg):
+        self.webrtc_service_id = webrtc_service_id_arg 
+        
+        async def on_init(peer_connection):
+            logger.info("WebRTC peer connection initialized")
+            
+            @peer_connection.on("connectionstatechange")
+            async def on_connectionstatechange():
+                logger.info(f"WebRTC connection state changed to: {peer_connection.connectionState}")
+                if peer_connection.connectionState in ["closed", "failed", "disconnected"]:
+                    if self.video_track and self.video_track.running:
+                        logger.info(f"Connection state is {peer_connection.connectionState}. Stopping video track.")
+                        self.video_track.stop()
+            
+            @peer_connection.on("track")
+            def on_track(track):
+                logger.info(f"Track {track.kind} received from client")
+                
+                if self.video_track and self.video_track.running:
+                    self.video_track.stop() 
+                
+                self.video_track = MicroscopeVideoTrack(self) 
+                peer_connection.addTrack(self.video_track)
+                logger.info("Added MicroscopeVideoTrack to peer connection")
+                
+                @track.on("ended")
+                def on_ended():
+                    logger.info(f"Client track {track.kind} ended")
+                    if self.video_track:
+                        logger.info("Stopping MicroscopeVideoTrack.")
+                        self.video_track.stop()  # Now synchronous
+                        self.video_track = None
+
+        ice_servers = await self.fetch_ice_servers()
+        if not ice_servers:
+            logger.warning("Using fallback ICE servers")
+            ice_servers = [{"urls": ["stun:stun.l.google.com:19302"]}]
+
+        try:
+            await register_rtc_service(
+                server,
+                service_id=self.webrtc_service_id,
+                config={
+                    "visibility": "public",
+                    "ice_servers": ice_servers,
+                    "on_init": on_init,
+                },
+            )
+            logger.info(f"WebRTC service registered with id: {self.webrtc_service_id}")
+        except Exception as e:
+            logger.error(f"Failed to register WebRTC service ({self.webrtc_service_id}): {e}")
+            if "Service already exists" in str(e):
+                logger.info(f"WebRTC service {self.webrtc_service_id} already exists. Attempting to retrieve it.")
+                try:
+                    _ = await server.get_service(self.webrtc_service_id)
+                    logger.info(f"Successfully retrieved existing WebRTC service: {self.webrtc_service_id}")
+                except Exception as get_e:
+                    logger.error(f"Failed to retrieve existing WebRTC service {self.webrtc_service_id}: {get_e}")
+                    raise
+            else:
+                raise
+
     async def setup(self):
-        data_store_token = os.environ.get("SQUID_WORKSPACE_TOKEN")
-        data_store_server = await connect_to_server(
-                {"server_url": "https://hypha.aicell.io", "token": data_store_token, "workspace": "squid-control", "ping_interval": None}
+        remote_token = os.environ.get("SQUID_WORKSPACE_TOKEN")
+        remote_server = await connect_to_server(
+                {"server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": "squid-control", "ping_interval": None}
             )
         if not self.service_id:
             raise ValueError("MICROSCOPE_SERVICE_ID is not set in the environment variables.")
@@ -1025,22 +1212,25 @@ class Microscope:
             server = await connect_to_server(
                 {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
             )
+        
+        self.server = server
+        
         if self.is_simulation:
-            await self.start_hypha_service(server, service_id=self.service_id)
+            await self.start_hypha_service(self.server, service_id=self.service_id)
             datastore_id = f'data-store-simu-{self.service_id}'
             chatbot_id = f"squid-chatbot-simu-{self.service_id}"
         else:
-            await self.start_hypha_service(server, service_id=self.service_id)
+            await self.start_hypha_service(self.server, service_id=self.service_id)
             datastore_id = f'data-store-real-{self.service_id}'
             chatbot_id = f"squid-chatbot-real-{self.service_id}"
+        
         self.datastore = HyphaDataStore()
         try:
-            await self.datastore.setup(data_store_server, service_id=datastore_id)
+            await self.datastore.setup(remote_server, service_id=datastore_id)
         except TypeError as e:
             if "Future" in str(e):
-                # If config is a Future, wait for it to resolve
                 config = await asyncio.wrap_future(server.config)
-                await self.datastore.setup(data_store_server, service_id=datastore_id, config=config)
+                await self.datastore.setup(remote_server, service_id=datastore_id, config=config)
             else:
                 raise e
     
@@ -1051,40 +1241,34 @@ class Microscope:
             chatbot_token = await login({"server_url": chatbot_server_url})
         chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
         await self.start_chatbot_service(chatbot_server, chatbot_id)
+        webrtc_id = f"video-track-{self.service_id}"
+        if not self.is_local: # only start webrtc service in remote mode
+            await self.start_webrtc_service(self.server, webrtc_id)
 
     async def register_service_probes(self, server):
-        """Register readiness and liveness probes for Kubernetes health checks"""
-        
         async def is_service_healthy():
             try:
-                # Check microscope service
                 microscope_svc = await server.get_service(self.service_id)
                 if microscope_svc is None:
                     raise RuntimeError("Microscope service not found")
                 
-                # Test microscope hello_world functionality
                 result = await microscope_svc.hello_world()
                 if result != "Hello world":
                     raise RuntimeError(f"Microscope service returned unexpected response: {result}")
                 
-                # Check datastore service
                 datastore_id = f'data-store-{"simu" if self.is_simulation else "real"}-{self.service_id}'
                 datastore_svc = await server.get_service(datastore_id)
                 if datastore_svc is None:
                     raise RuntimeError("Datastore service not found")
                 
-                # check the current artifact manager is working or not
                 try:
-                    # Get the ZarrImageManager instance from the simulated camera
                     if not self.is_simulation:
                         logger.info("Skipping Zarr access check in non-simulation mode.")
                     else:
-                        # Check if zarr_image_manager exists and initialize it if needed
                         if not hasattr(self.squidController.camera, 'zarr_image_manager') or self.squidController.camera.zarr_image_manager is None:
                             logger.info("ZarrImageManager not initialized yet, initializing it for health check")
                             
                             try:
-                                # Initialize with timeout
                                 await asyncio.wait_for(
                                     self.initialize_zarr_manager(self.squidController.camera),
                                     timeout=30
@@ -1095,8 +1279,6 @@ class Microscope:
                         
                         logger.info("Testing existing ZarrImageManager instance from simulated camera.")
                         
-                        # Test Zarr access using the dedicated test function with the new dataset alias
-                        # Added timeout to prevent probe from hanging indefinitely
                         test_result = await asyncio.wait_for(
                             self.squidController.camera.zarr_image_manager.test_zarr_access(
                                 dataset_id="agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38",
@@ -1110,7 +1292,6 @@ class Microscope:
                             error_msg = test_result.get("message", "Unknown error")
                             raise RuntimeError(f"Zarr access test failed for existing instance: {error_msg}")
                         else:
-                            # Log successful test with some stats
                             stats = test_result.get("chunk_stats", {})
                             non_zero = stats.get("non_zero_count", 0)
                             total = stats.get("total_size", 1)
@@ -1126,10 +1307,8 @@ class Microscope:
                     logger.error(f"Zarr access health check failed: {str(artifact_error)}")
                     raise RuntimeError(f"Zarr access health check failed: {str(artifact_error)}")
                 
-                # Check chatbot service
                 chatbot_id = f"squid-chatbot-{'simu' if self.is_simulation else 'real'}-{self.service_id}"
                 
-                # We need to check the chatbot server, not the main server
                 chatbot_server_url = "https://chat.bioimage.io"
                 try:
                     chatbot_token = os.environ.get("WORKSPACE_TOKEN_CHATBOT")
@@ -1141,7 +1320,6 @@ class Microscope:
                             "token": chatbot_token,
                             "ping_interval": None
                         })
-                        # Add timeout for getting chatbot service
                         chatbot_svc = await asyncio.wait_for(chatbot_server.get_service(chatbot_id), 10)
                         if chatbot_svc is None:
                             raise RuntimeError("Chatbot service not found")
@@ -1164,14 +1342,10 @@ class Microscope:
         logger.info("Health probes registered successfully")
 
     async def initialize_zarr_manager(self, camera):
-        """Initialize the ZarrImageManager for the simulated camera."""
-        # Import ZarrImageManager if needed
         from hypha_tools.artifact_manager.artifact_manager import ZarrImageManager
         
-        # Create and initialize the ZarrImageManager
         camera.zarr_image_manager = ZarrImageManager()
         
-        # Connect to the server
         workspace_token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
         if not workspace_token:
             logger.error("AGENT_LENS_WORKSPACE_TOKEN environment variable not set")
@@ -1185,7 +1359,6 @@ class Microscope:
         if not init_success:
             raise RuntimeError("Failed to initialize ZarrImageManager")
         
-        # Set the scale_key to match the camera's scale level
         if hasattr(camera, 'scale_level'):
             camera.zarr_image_manager.scale_key = f'scale{camera.scale_level}'
         

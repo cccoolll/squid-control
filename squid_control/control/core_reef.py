@@ -32,6 +32,7 @@ import imageio as iio
 import importlib.util
 import os
 from importlib import import_module
+import asyncio
 
 
 def _load_multipoint_function(module_path, entrypoint):
@@ -77,7 +78,8 @@ class StreamHandler(QObject):
     image_to_display = Signal(np.ndarray)
     packet_image_to_write = Signal(np.ndarray, int, float)
     packet_image_for_tracking = Signal(np.ndarray, int, float)
-    signal_new_frame_received = Signal()
+    # Remove the Qt signal and replace with direct callback
+    # signal_raw_frame_for_webrtc = Signal(np.ndarray) # New signal for WebRTC
 
     def __init__(
         self,
@@ -105,6 +107,10 @@ class StreamHandler(QObject):
         self.timestamp_last = 0
         self.counter = 0
         self.fps_real = 0
+        
+        # Direct callback for WebRTC instead of signal
+        self.webrtc_frame_callback = None
+        self.general_frame_callback = None # New callback for general frame updates
 
     def start_recording(self):
         self.save_image_flag = True
@@ -132,13 +138,29 @@ class StreamHandler(QObject):
         self.display_resolution_scaling = display_resolution_scaling / 100
         print(self.display_resolution_scaling)
 
+    def set_webrtc_frame_callback(self, callback):
+        """Set a direct callback for WebRTC frame handling"""
+        self.webrtc_frame_callback = callback
+    
+    def remove_webrtc_frame_callback(self):
+        """Remove the WebRTC frame callback"""
+        self.webrtc_frame_callback = None
+
+    def set_general_frame_callback(self, callback):
+        """Set a direct callback for general frame updates"""
+        self.general_frame_callback = callback
+
+    def remove_general_frame_callback(self):
+        """Remove the general frame callback"""
+        self.general_frame_callback = None
+
     def on_new_frame(self, camera):
 
         if camera.is_live:
 
             camera.image_locked = True
             self.handler_busy = True
-            self.signal_new_frame_received.emit()  # self.liveController.turn_off_illumination()
+            # self.signal_new_frame_received.emit()  # self.liveController.turn_off_illumination()
 
             # measure real fps
             timestamp_now = round(time.time())
@@ -170,6 +192,13 @@ class StreamHandler(QObject):
                 flip_image=camera.flip_image,
             )
 
+            # Send the raw cropped frame for WebRTC using direct callback instead of signal
+            if self.webrtc_frame_callback is not None:
+                try:
+                    self.webrtc_frame_callback(image_cropped.copy())  # Send a copy for safety
+                except Exception as e:
+                    print(f"Error in WebRTC frame callback: {e}")
+
             # send image to display
             time_now = time.time()
             if time_now - self.timestamp_last_display >= 1 / self.fps_display:
@@ -195,7 +224,12 @@ class StreamHandler(QObject):
                 )
                 self.timestamp_last_save = time_now
 
-            self.signal_new_frame_received.emit(image_cropped, camera.frame_ID, camera.timestamp)
+            # Call the general frame callback if it's set
+            if self.general_frame_callback:
+                try:
+                    self.general_frame_callback(image_cropped, camera.frame_ID, camera.timestamp)
+                except Exception as e:
+                    print(f"Error in general frame callback: {e}")
 
             # send image to track
             if (
@@ -516,9 +550,7 @@ class LiveController(QObject):
         self.fps_trigger = 1
         self.timer_trigger_interval = (1 / self.fps_trigger) * 1000
 
-        self.timer_trigger = QTimer()
-        self.timer_trigger.setInterval(int(self.timer_trigger_interval))
-        self.timer_trigger.timeout.connect(self.trigger_acquisition)
+        self._trigger_task = None # asyncio task for triggering
 
         self.trigger_ID = -1
 
@@ -591,9 +623,13 @@ class LiveController(QObject):
             if self.control_illumination and self.illumination_on == False:
                 self.turn_on_illumination()
             self.trigger_ID = self.trigger_ID + 1
-            #if self.is_simulation: TODO: implement simulation
-            #    self.camera.send_trigger_simulation()
-            self.camera.send_trigger()
+            
+            # Handle camera trigger: schedule if async (simulation), call directly if sync (real camera)
+            if asyncio.iscoroutinefunction(self.camera.send_trigger):
+                asyncio.create_task(self.camera.send_trigger()) 
+            else:
+                self.camera.send_trigger()
+
             # measure real fps
             timestamp_now = round(time.time())
             if timestamp_now == self.timestamp_last:
@@ -610,16 +646,34 @@ class LiveController(QObject):
                 illumination_on_time_us=self.camera.exposure_time * 1000,
             )
 
+    async def _trigger_loop(self):
+        while self.is_live:
+            try:
+                if self.trigger_mode == TriggerModeSetting.SOFTWARE or \
+                   (self.trigger_mode == TriggerModeSetting.HARDWARE and self.use_internal_timer_for_hardware_trigger):
+                    self.trigger_acquisition()
+                await asyncio.sleep(self.timer_trigger_interval / 1000.0) # interval is in ms
+            except asyncio.CancelledError:
+                break # Exit loop if cancelled
+            except Exception as e:
+                print(f"Error in trigger loop: {e}") # Log other errors
+                break
+
     def _start_triggerred_acquisition(self):
-        self.timer_trigger.start()
+        # self.timer_trigger.start()
+        if self._trigger_task is None or self._trigger_task.done():
+            self._trigger_task = asyncio.create_task(self._trigger_loop())
 
     def _set_trigger_fps(self, fps_trigger):
         self.fps_trigger = fps_trigger
         self.timer_trigger_interval = (1 / self.fps_trigger) * 1000
-        self.timer_trigger.setInterval(int(self.timer_trigger_interval))
+        # self.timer_trigger.setInterval(int(self.timer_trigger_interval))
 
     def _stop_triggerred_acquisition(self):
-        self.timer_trigger.stop()
+        # self.timer_trigger.stop()
+        if self._trigger_task and not self._trigger_task.done():
+            self._trigger_task.cancel()
+        self._trigger_task = None
 
     # trigger mode and settings
     def set_trigger_mode(self, mode):
@@ -665,7 +719,7 @@ class LiveController(QObject):
 
         # temporarily stop live while changing mode
         if self.is_live is True:
-            self.timer_trigger.stop()
+            self._stop_triggerred_acquisition()
             if self.control_illumination:
                 self.turn_off_illumination()
 
@@ -684,7 +738,7 @@ class LiveController(QObject):
         if self.is_live is True:
             if self.control_illumination:
                 self.turn_on_illumination()
-            self.timer_trigger.start()
+            self._start_triggerred_acquisition()
 
     def get_trigger_mode(self):
         return self.trigger_mode
