@@ -22,3 +22,4 @@ aiohttp==3.10.1
 scipy==1.15.1
 pydantic==2.10.6
 av==11.0.0
+aiortc==1.13.0
