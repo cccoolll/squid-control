@@ -1219,12 +1219,10 @@ class Microscope:
             await self.start_hypha_service(self.server, service_id=self.service_id)
             datastore_id = f'data-store-simu-{self.service_id}'
             chatbot_id = f"squid-chatbot-simu-{self.service_id}"
-            webrtc_id = f"webrtc-stream-simu-{self.service_id}"
         else:
             await self.start_hypha_service(self.server, service_id=self.service_id)
             datastore_id = f'data-store-real-{self.service_id}'
             chatbot_id = f"squid-chatbot-real-{self.service_id}"
-            webrtc_id = f"webrtc-stream-real-{self.service_id}"
         
         self.datastore = HyphaDataStore()
         try:
@@ -1243,7 +1241,7 @@ class Microscope:
             chatbot_token = await login({"server_url": chatbot_server_url})
         chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
         await self.start_chatbot_service(chatbot_server, chatbot_id)
-        
+        webrtc_id = f"video-track-{self.service_id}"
         if not self.is_local: # only start webrtc service in remote mode
             await self.start_webrtc_service(self.server, webrtc_id)
 
