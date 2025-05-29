@@ -1268,7 +1268,8 @@ class Microscope:
         chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
         await self.start_chatbot_service(chatbot_server, chatbot_id)
         
-        await self.start_webrtc_service(remote_server, webrtc_id)
+        if not self.is_local: # only start webrtc service in remote mode
+            await self.start_webrtc_service(self.server, webrtc_id)
 
     async def register_service_probes(self, server):
         async def is_service_healthy():
