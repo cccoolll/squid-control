@@ -93,42 +93,6 @@ class MicroscopeVideoTrack(MediaStreamTrack):
             end_y = min(height, center_y + size)
             img[start_y:end_y, center_x] = color
 
-    def add_overlay_info(self, img):
-        """Add position and status information overlay to the image"""
-        try:
-            status = self.microscope_instance.get_status()
-            overlay_height = 60
-            overlay = np.zeros((overlay_height, img.shape[1], 3), dtype=np.uint8)
-            overlay[:] = [10, 10, 10]  # Dark gray background
-            
-            if 'current_x' in status and 'current_y' in status:
-                x_pos_mm = status['current_x']
-                y_pos_mm = status['current_y']
-                z_pos_mm = status.get('current_z', 0)
-                
-                # Display position text
-                pos_text = f"X: {x_pos_mm:.2f}mm  Y: {y_pos_mm:.2f}mm  Z: {z_pos_mm:.2f}mm"
-                cv2.putText(overlay, pos_text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 255), 1)
-            
-            # Display FPS and frame count
-            fps_text = f"FPS: {self.fps} Stream: {self.count}"
-            cv2.putText(overlay, fps_text, (10, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 255), 1)
-            
-            # Combine overlay with image
-            result_img = cv2.resize(img, (self.frame_width, self.frame_height - overlay_height))
-            if len(result_img.shape) == 2: # if grayscale
-                result_img = cv2.cvtColor(result_img, cv2.COLOR_GRAY2RGB)
-            result = np.vstack([overlay, result_img])
-            return result
-            
-        except Exception as e:
-            logger.warning(f"Failed to add overlay info: {e} - Image shape: {img.shape}")
-            # Fallback: just resize and convert to RGB if needed
-            resized_img = cv2.resize(img, (self.frame_width, self.frame_height))
-            if len(resized_img.shape) == 2:
-                return cv2.cvtColor(resized_img, cv2.COLOR_GRAY2RGB)
-            return resized_img
-
     async def recv(self):
         if not self.running:
             logger.warning("MicroscopeVideoTrack: recv() called but track is not running")
@@ -162,19 +126,19 @@ class MicroscopeVideoTrack(MediaStreamTrack):
                 logger.debug(f"Timeout or error waiting for frame {self.count}")
                 placeholder_img = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
                 cv2.putText(placeholder_img, f"No new frame {self.count}", (self.frame_width//2 - 100, self.frame_height//2), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
-                processed_frame = self.add_overlay_info(placeholder_img)
+                processed_frame = placeholder_img
                 new_video_frame = VideoFrame.from_ndarray(processed_frame, format="rgb24")
                 new_video_frame.pts = self.count
                 new_video_frame.time_base = fractions.Fraction(1, self.fps)
                 self.count += 1
                 return new_video_frame
             
-            processed_frame = self.add_overlay_info(raw_frame.copy())
-
+            # Resize and convert to RGB if needed
+            processed_frame = cv2.resize(raw_frame, (self.frame_width, self.frame_height))
             if len(processed_frame.shape) == 2:
-                 processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
+                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
             elif processed_frame.shape[2] == 1:
-                 processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
+                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
             
             new_video_frame = VideoFrame.from_ndarray(processed_frame, format="rgb24")
             
