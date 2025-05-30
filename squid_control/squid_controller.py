@@ -302,7 +302,7 @@ class SquidController:
         # set the default infomation, this will be used for the simulated camera
         self.dz = 0
         self.current_channel = 0
-        self.current_expousre_time = 100
+        self.current_exposure_time = 100
         self.current_intensity = 100
         self.pixel_size_xy = 0.333
         self.pixel_size_adjument_factor = 0.936
@@ -382,7 +382,7 @@ class SquidController:
         self.dz = current_z - SIMULATED_CAMERA.ORIN_Z
         self.current_channel = channel
         magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
-        self.current_expousre_time = exposure_time
+        self.current_exposure_time = exposure_time
         self.current_intensity = intensity
         corrected_x = current_x + self.drift_correction_x
         corrected_y = current_y + self.drift_correction_y
@@ -409,7 +409,7 @@ class SquidController:
         
         random_z = SIMULATED_CAMERA.ORIN_Z + np.random.normal(0,0.001)
         self.navigationController.move_z_to(random_z)
-        self.send_trigger_simulation(self.current_channel, self.current_intensity, self.current_expousre_time)
+        self.send_trigger_simulation(self.current_channel, self.current_intensity, self.current_exposure_time)
         
     def init_laser_autofocus(self):
         self.laserAutofocusController.initialize_auto()

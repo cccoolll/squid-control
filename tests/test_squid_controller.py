@@ -89,7 +89,7 @@ async def test_snap_image_simulation(sim_controller_fixture):
         
         assert controller.current_channel == test_channel
         assert controller.current_intensity == test_intensity
-        assert controller.current_expousre_time == test_exposure
+        assert controller.current_exposure_time == test_exposure
         break
 
 async def test_autofocus_simulation(sim_controller_fixture):
