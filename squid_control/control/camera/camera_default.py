@@ -12,7 +12,7 @@ from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting
 from scipy.ndimage import gaussian_filter
 import zarr
-from hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager, ZarrImageManager
+from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager, ZarrImageManager
 import asyncio
 script_dir = os.path.dirname(__file__)
 
@@ -530,7 +530,6 @@ class Camera_Simulation(object):
         }
         # Configuration for ZarrImageManager
         self.SERVER_URL = "https://hypha.aicell.io"
-        self.WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
         self.DEFAULT_TIMESTAMP = "20250506-scan-time-lapse-2025-05-06_17-56-38"  # Default timestamp for the dataset
         
         # Initialize these to None, will be set up lazily when needed
@@ -713,7 +712,7 @@ class Camera_Simulation(object):
             print("Creating new ZarrImageManager instance...")
             self.zarr_image_manager = ZarrImageManager()
             print("Connecting to ZarrImageManager...")
-            await self.zarr_image_manager.connect(workspace_token=self.WORKSPACE_TOKEN, server_url=self.SERVER_URL)
+            await self.zarr_image_manager.connect(server_url=self.SERVER_URL)
             print("Connected to ZarrImageManager")
         
         # Convert microscope coordinates (mm) to pixel coordinates - fix conversion factor

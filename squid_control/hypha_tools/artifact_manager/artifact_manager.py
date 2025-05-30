@@ -274,7 +274,6 @@ class SquidArtifactManager:
 
 # Constants
 SERVER_URL = "https://hypha.aicell.io"
-WORKSPACE_TOKEN = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
 ARTIFACT_ALIAS = "20250506-scan-time-lapse-2025-05-06_17-56-38"
 DEFAULT_CHANNEL = "BF_LED_matrix_full"
 
@@ -365,18 +364,14 @@ class ZarrImageManager:
             print(traceback.format_exc())
             return None
 
-    async def connect(self, workspace_token=None, server_url="https://hypha.aicell.io"):
+    async def connect(self,server_url="https://hypha.aicell.io"):
         """Connect to the Artifact Manager service and initialize http session."""
         try:
             self.server_url = server_url.rstrip('/') # Ensure no trailing slash
-            token = workspace_token or os.environ.get("SQUID_WORKSPACE_TOKEN")
-            if not token:
-                raise ValueError("Workspace token not provided")
-            
+
             self.artifact_manager_server = await connect_to_server({
                 "name": "zarr-image-client",
                 "server_url": server_url,
-                "token": token,
             })
             
             self.artifact_manager = SquidArtifactManager()

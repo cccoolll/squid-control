@@ -6,10 +6,22 @@ The Squid Control software is a Python package that provides a simple interface 
 
 See the [installation guide](./docs/installation.md) for instructions on how to install and use the software.
 
+### Installation Options
+
+Basic installation:
+```bash
+pip install .
+```
+
+For development (recommend):
+```bash
+pip install .[dev]
+```
+
 ### Usage
 
 To run the software, use the following command:
-```
+```bash
 python -m squid_control --config HCS_v2
 ```
 
