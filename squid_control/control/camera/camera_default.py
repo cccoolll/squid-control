@@ -530,7 +530,6 @@ class Camera_Simulation(object):
         }
         # Configuration for ZarrImageManager
         self.SERVER_URL = "https://hypha.aicell.io"
-        self.WORKSPACE_TOKEN = os.getenv("AGENT_LENS_WORKSPACE_TOKEN")
         self.DEFAULT_TIMESTAMP = "20250506-scan-time-lapse-2025-05-06_17-56-38"  # Default timestamp for the dataset
         
         # Initialize these to None, will be set up lazily when needed
@@ -713,7 +712,7 @@ class Camera_Simulation(object):
             print("Creating new ZarrImageManager instance...")
             self.zarr_image_manager = ZarrImageManager()
             print("Connecting to ZarrImageManager...")
-            await self.zarr_image_manager.connect(workspace_token=self.WORKSPACE_TOKEN, server_url=self.SERVER_URL)
+            await self.zarr_image_manager.connect(server_url=self.SERVER_URL)
             print("Connected to ZarrImageManager")
         
         # Convert microscope coordinates (mm) to pixel coordinates - fix conversion factor
