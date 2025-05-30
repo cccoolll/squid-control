@@ -10,10 +10,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     container:
-      image: python:3.11-slim
+      image: python:3.10.13-slim
     strategy:
       matrix:
-        python-version: ["3.11"]
+        python-version: ["3.10", "3.11"]
 
     steps:
     - uses: actions/checkout@v4
