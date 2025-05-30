@@ -43,7 +43,7 @@ class SquidController:
         self.is_simulation = is_simulation
         self.is_busy = False
         if is_simulation:
-            config_path = os.path.join(os.path.dirname(path), 'configuration_HCS_v2_for_simulation.ini')
+            config_path = os.path.join(os.path.dirname(path), 'configuration_HCS_v2_example.ini')
         else:
             config_path = os.path.join(os.path.dirname(path), 'configuration_HCS_v2.ini')
 
