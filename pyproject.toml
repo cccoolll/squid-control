@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,56 +7,86 @@ name = "squid-control"
 version = "0.1.0"
 readme = "README.md"
 description = "Squid Microscope Control Software"
-requires-python = ">=3.6"
-license = {text = "MIT"}
+requires-python = ">=3.8"
+license = {file = "LICENSE"}
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
 ]
 classifiers = [
-    "Programming Language :: Python :: 3",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent"
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "pyserial",
-    "pandas",
-    "imageio",
-    "scipy",
-    "crc",
-    "tifffile",
-    "opencv-python",
-    "lxml",
-    "scikit-image",
-    "hypha-rpc",
-    "pydantic",
-    "requests",
-    "numpy",
-    "matplotlib",
-    "zarr",
-    "flask",
-    "python-dotenv",
-    "openai",
-    "blosc",
-    "aiohttp",
+    "pyserial>=3.5",
+    "pandas>=2.2.0",
+    "imageio>=2.31.1",
+    "scipy>=1.10.0,<1.13",
+    "crc>=1.3.0",
+    "tifffile>=2021.8.30,<2023.3.15",
+    "opencv-python>=4.8.0",
+    "lxml>=4.6,<5",
+    "scikit-image>=0.19.3",
+    "hypha-rpc>=0.20.53",
+    "pydantic>=2.0",
+    "requests>=2.26.0",
+    "numpy>=1.23",
+    "matplotlib>=3.7.0",
+    "zarr>=2.11.3",
+    "flask>=3.0.0",
+    "python-dotenv>=1.0.0",
+    "openai>=1.0.0",
+    "blosc>=1.11.1",
+    "aiohttp>=3.9.0",
+    "av>=11.0.0",
+    "aiortc>=1.5.0",
+    "jax>=0.3.10,<=0.4.23",
+    "jaxlib>=0.3.10,<=0.4.23",
 ]
 
 [project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "pytest-asyncio",
+    "qtpy>=2.4.0",
+    "PyQt5>=5.15.10",
+    "pyqtgraph>=0.13.3",
+    "appdirs>=1.4.0",
+    "numpy<=2.0",
+    "numba",
+    "ruff",
+    "mypy",
+    "pre-commit",
+]
 all = [
-    "qtpy",
-    "pyqt5",
+    "qtpy>=2.4.0",
+    "pyqt5>=5.15.10",
     "pyqt5-tools",
-    "pyqtgraph",
+    "pyqtgraph>=0.13.3",
     "tensorrt",
 ]
 qt = [
-    "qtpy",
-    "pyqt5",
+    "qtpy>=2.4.0",
+    "pyqt5>=5.15.10",
     "pyqt5-tools",
-    "pyqtgraph",
+    "pyqtgraph>=0.13.3",
 ]
 tracking = [
     "tensorrt",
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/yourusername/squid-control"
+"Bug Tracker" = "https://github.com/yourusername/squid-control/issues"
 
 [project.scripts]
 squid-control = "squid_control.__main__:main"
@@ -65,5 +95,36 @@ squid-control = "squid_control.__main__:main"
 include-package-data = true
 
 [tool.setuptools.packages.find]
+where = ["."]
 include = ["squid_control*"]
 exclude = ["tests*", "scripts*"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --cov=squid_control --cov-report=term-missing"
+testpaths = [
+    "tests",
+]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+
+[tool.coverage.run]
+source = ["squid_control"]
+
+[tool.ruff]
+line-length = 88
+select = ["E", "W", "F", "I", "UP", "PL", "T20"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
