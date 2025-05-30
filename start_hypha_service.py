@@ -662,6 +662,10 @@ class Microscope:
         task_name = "set_illumination"
         self.task_status[task_name] = "started"
         try:
+            # if light is on, turn it off first
+            if self.squidController.liveController.illumination_on:
+                self.squidController.liveController.turn_off_illumination()
+                time.sleep(0.05)
             self.squidController.liveController.set_illumination(channel, intensity)
             
             param_name = self.channel_param_map.get(channel)
