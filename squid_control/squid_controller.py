@@ -30,12 +30,7 @@ if os.path.exists(cache_file_path):
     except:
         pass
 
-# If no cached path or file doesn't exist, use the default path
-if not config_path or not os.path.exists(config_path):
-    config_path = os.path.join(os.path.dirname(path), 'configuration_HCS_v2.ini')
 
-print(f"Loading configuration from: {config_path}")
-load_config(config_path, False)
 class SquidController:
     fps_software_trigger= 10
 
@@ -47,6 +42,13 @@ class SquidController:
         camera, camera_fc = get_camera(CONFIG.CAMERA_TYPE)
         self.is_simulation = is_simulation
         self.is_busy = False
+        if is_simulation:
+            config_path = os.path.join(os.path.dirname(path), 'configuration_HCS_v2_for_simulation.ini')
+        else:
+            config_path = os.path.join(os.path.dirname(path), 'configuration_HCS_v2.ini')
+
+        print(f"Loading configuration from: {config_path}")
+        load_config(config_path, False)
         # load objects
         if self.is_simulation:
             if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL:
