@@ -12,7 +12,7 @@ from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting
 from scipy.ndimage import gaussian_filter
 import zarr
-from hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager, ZarrImageManager
+from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager, ZarrImageManager
 import asyncio
 script_dir = os.path.dirname(__file__)
 
