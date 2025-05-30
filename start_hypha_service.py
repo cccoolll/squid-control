@@ -20,13 +20,14 @@ from squid_control.squid_controller import SquidController
 from squid_control.control.camera import TriggerModeSetting
 from pydantic import Field, BaseModel
 from typing import List, Optional
-from hypha_tools.hypha_storage import HyphaDataStore
-from hypha_tools.chatbot.aask import aask
+
+from squid_control.hypha_tools.hypha_storage import HyphaDataStore
+from squid_control.hypha_tools.chatbot.aask import aask
 import base64
 from pydantic import Field
 from hypha_rpc.utils.schema import schema_function
 import signal
-from hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
+from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
 
 # WebRTC imports
 import aiohttp
@@ -662,6 +663,10 @@ class Microscope:
         task_name = "set_illumination"
         self.task_status[task_name] = "started"
         try:
+            # if light is on, turn it off first
+            if self.squidController.liveController.illumination_on:
+                self.squidController.liveController.turn_off_illumination()
+                time.sleep(0.05)
             self.squidController.liveController.set_illumination(channel, intensity)
             
             param_name = self.channel_param_map.get(channel)

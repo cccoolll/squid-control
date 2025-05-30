@@ -30,12 +30,7 @@ if os.path.exists(cache_file_path):
     except:
         pass
 
-# If no cached path or file doesn't exist, use the default path
-if not config_path or not os.path.exists(config_path):
-    config_path = os.path.join(os.path.dirname(path), 'configuration_HCS_v2.ini')
 
-print(f"Loading configuration from: {config_path}")
-load_config(config_path, False)
 class SquidController:
     fps_software_trigger= 10
 
@@ -47,6 +42,13 @@ class SquidController:
         camera, camera_fc = get_camera(CONFIG.CAMERA_TYPE)
         self.is_simulation = is_simulation
         self.is_busy = False
+        if is_simulation:
+            config_path = os.path.join(os.path.dirname(path), 'configuration_HCS_v2_example.ini')
+        else:
+            config_path = os.path.join(os.path.dirname(path), 'configuration_HCS_v2.ini')
+
+        print(f"Loading configuration from: {config_path}")
+        load_config(config_path, False)
         # load objects
         if self.is_simulation:
             if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL:
@@ -300,7 +302,7 @@ class SquidController:
         # set the default infomation, this will be used for the simulated camera
         self.dz = 0
         self.current_channel = 0
-        self.current_expousre_time = 100
+        self.current_exposure_time = 100
         self.current_intensity = 100
         self.pixel_size_xy = 0.333
         self.pixel_size_adjument_factor = 0.936
@@ -380,7 +382,7 @@ class SquidController:
         self.dz = current_z - SIMULATED_CAMERA.ORIN_Z
         self.current_channel = channel
         magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
-        self.current_expousre_time = exposure_time
+        self.current_exposure_time = exposure_time
         self.current_intensity = intensity
         corrected_x = current_x + self.drift_correction_x
         corrected_y = current_y + self.drift_correction_y
@@ -407,7 +409,7 @@ class SquidController:
         
         random_z = SIMULATED_CAMERA.ORIN_Z + np.random.normal(0,0.001)
         self.navigationController.move_z_to(random_z)
-        self.send_trigger_simulation(self.current_channel, self.current_intensity, self.current_expousre_time)
+        self.send_trigger_simulation(self.current_channel, self.current_intensity, self.current_exposure_time)
         
     def init_laser_autofocus(self):
         self.laserAutofocusController.initialize_auto()
