@@ -35,6 +35,13 @@ RUN git clean -fdX && rm -rf .git
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install .
 
+# Diagnostic steps:
+RUN echo "Listing site-packages to check for squid_control installation:" && \
+    pip show squid_control && \
+    ls -R $(python -c "import site; print(site.getsitepackages()[0])")/squid_control && \
+    echo "Attempting to import hypha_tools from squid_control directly:" && \
+    python -c "from squid_control.hypha_tools.artifact_manager import artifact_manager; print('Successfully imported artifact_manager')"
+
 # Run the application as the non-root user "squid-user"
 USER squid-user
 CMD ["python", "start_hypha_service.py", "--simulation"]

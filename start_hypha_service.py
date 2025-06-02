@@ -1347,7 +1347,7 @@ class Microscope:
         logger.info("Health probes registered successfully")
 
     async def initialize_zarr_manager(self, camera):
-        from hypha_tools.artifact_manager.artifact_manager import ZarrImageManager
+        from squid_control.hypha_tools.artifact_manager.artifact_manager import ZarrImageManager
         
         camera.zarr_image_manager = ZarrImageManager()
         
