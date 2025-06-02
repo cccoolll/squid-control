@@ -6,7 +6,7 @@ digraph ZarrImageWorkflow {
     
     // User Interaction
     user [label="User Interaction", fillcolor=lightyellow];
-    request_image [label="Request Image\n(dataset_id, timestamp, channel, scale, x, y)"];
+    request_image [label="Request Image\n(dataset_id, channel, scale, x, y)"];
     user -> request_image;
     
     // Backend Services
@@ -15,40 +15,45 @@ digraph ZarrImageWorkflow {
         style=filled;
         color=lightgrey;
         
-        artifact_manager [label="Artifact Manager\nGenerate Pre-signed URL"];
-        fsspec_access [label="fsspec Access\n(zip::URL)"];
-        zarr_cache [label="Zarr Group Cache\n(40 min expiry)"];
-        lru_cache [label="LRU Chunk Cache\n(256MB)"];
-        zarr_extraction [label="Zarr Array Extraction\n(Slice by coordinates)"];
+        zarr_manager [label="ZarrImageManager\nConstruct Chunk URL"];
+        artifact_manager [label="Artifact Manager\nZip Endpoint Access"];
+        metadata_cache [label="Metadata Cache\n(.zarray, .zgroup)\n40 min expiry"];
+        tile_cache [label="Processed Tile Cache\n40 min expiry, 1000 tiles"];
+        empty_regions_cache [label="Empty Regions Cache\n40 min expiry, 500 entries"];
+        chunk_processing [label="Chunk Processing\n(Decompress, Decode, Format)"];
         
-        request_image -> artifact_manager;
-        artifact_manager -> fsspec_access [label="Retrieve URL"];
-        fsspec_access -> zarr_cache [label="Access Zarr Group"];
-        zarr_cache -> lru_cache [label="Cache Chunks"];
-        lru_cache -> zarr_extraction [label="Extract Data"];
+        request_image -> zarr_manager;
+        zarr_manager -> metadata_cache [label="Check Metadata"];
+        metadata_cache -> zarr_manager [label="Get Chunk Info"];
+        zarr_manager -> tile_cache [label="Check Cache"];
+        tile_cache -> zarr_manager [label="Return if Cached"];
+        zarr_manager -> empty_regions_cache [label="Check Empty"];
+        zarr_manager -> artifact_manager [label="Construct URL\n{server}/{workspace}/artifacts/{name}/zip-files/{path}?path={chunk}"];
+        artifact_manager -> chunk_processing [label="HTTP GET\n(aiohttp)"];
+        chunk_processing -> tile_cache [label="Cache Result"];
     }
     
-    // S3 Storage
-    subgraph cluster_s3 {
-        label="S3 Storage";
+    // Storage Backend
+    subgraph cluster_storage {
+        label="Hypha Storage";
         style=filled;
         color=lightgrey;
         
-        s3_bucket [label="S3 Bucket\n(ZIP Archives)"];
-        pre_signed_url [label="Pre-signed URL\n(Secure Access)"];
+        zip_archives [label="ZIP Archives\n(Zarr Chunks)"];
+        zip_endpoint [label="Artifact Manager\nZip Endpoint\n(Direct Access)"];
         
-        s3_bucket -> pre_signed_url [label="Generate URL"];
-        pre_signed_url -> artifact_manager;
+        zip_archives -> zip_endpoint [label="Serve Chunks"];
+        zip_endpoint -> artifact_manager;
     }
     
     // Data Flow Explanation
     data_flow1 [shape=note, fillcolor=lightyellow, label="1. User selects image parameters"];
-    data_flow2 [shape=note, fillcolor=lightyellow, label="2. Backend generates pre-signed URL"];
-    data_flow3 [shape=note, fillcolor=lightyellow, label="3. fsspec accesses Zarr data"];
-    data_flow4 [shape=note, fillcolor=lightyellow, label="4. Data cached and extracted"];
+    data_flow2 [shape=note, fillcolor=lightyellow, label="2. Manager constructs zip endpoint URL"];
+    data_flow3 [shape=note, fillcolor=lightyellow, label="3. Direct HTTP access to chunks"];
+    data_flow4 [shape=note, fillcolor=lightyellow, label="4. Decompress, cache, and return data"];
     
     data_flow1 -> request_image [style=invis];
-    data_flow2 -> artifact_manager [style=invis];
-    data_flow3 -> fsspec_access [style=invis];
-    data_flow4 -> zarr_extraction [style=invis];
+    data_flow2 -> zarr_manager [style=invis];
+    data_flow3 -> artifact_manager [style=invis];
+    data_flow4 -> chunk_processing [style=invis];
 }
