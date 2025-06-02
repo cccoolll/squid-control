@@ -303,7 +303,6 @@ class ZarrImageManager:
         self.processed_tile_ttl = 40 * 60  # 40 minutes in seconds
         self.processed_tile_cache_size = 1000  # Max number of tiles to cache
         self.empty_regions_cache = {}  # Cache for known empty regions
-        self.empty_regions_ttl = 40 * 60  # 40 minutes in seconds
         self.empty_regions_cache_size = 500  # Max number of empty regions to cache
         self.http_session_lock = asyncio.Lock()
         self.server_url = "https://hypha.aicell.io"
@@ -414,28 +413,19 @@ class ZarrImageManager:
             self.artifact_manager = None
 
     def _add_to_empty_regions_cache(self, key):
-        """Add a region key to the empty regions cache with expiration"""
-        # Set expiration time
-        expiry_time = time.time() + self.empty_regions_ttl
-        
+        """Add a region key to the empty regions cache."""
         # Add to cache
-        self.empty_regions_cache[key] = expiry_time
+        self.empty_regions_cache[key] = True # Store True instead of expiry_time
         
-        # Clean up if cache is too large
+        # Basic FIFO size control if cache exceeds max size
         if len(self.empty_regions_cache) > self.empty_regions_cache_size:
-            # Get the entries sorted by expiry time (oldest first)
-            sorted_entries = sorted(
-                self.empty_regions_cache.items(),
-                key=lambda item: item[1]
-            )
-            
-            # Remove oldest 25% of entries
-            entries_to_remove = len(self.empty_regions_cache) // 4
-            for i in range(entries_to_remove):
-                if i < len(sorted_entries):
-                    del self.empty_regions_cache[sorted_entries[i][0]]
-            
-            print(f"Cleaned up {entries_to_remove} oldest entries from empty regions cache")
+            try:
+                # Get the first key inserted (FIFO)
+                first_key = next(iter(self.empty_regions_cache))
+                del self.empty_regions_cache[first_key]
+                print(f"Cleaned up oldest entry {first_key} from empty regions cache due to size limit.")
+            except StopIteration: # pragma: no cover
+                pass # Cache might have been cleared by another operation concurrently
 
     async def get_chunk_np_data(self, dataset_id, channel, scale, x, y):
         """
@@ -464,12 +454,9 @@ class ZarrImageManager:
 
         # 2. Check empty regions cache
         if tile_cache_key in self.empty_regions_cache:
-            expiry_time = self.empty_regions_cache[tile_cache_key]
-            if time.time() < expiry_time:
-                print(f"Skipping known empty tile: {tile_cache_key}")
-                return None
-            else:
-                del self.empty_regions_cache[tile_cache_key]
+            # No TTL check, if it's in the cache, it's considered empty
+            print(f"Skipping known empty tile: {tile_cache_key}")
+            return None
 
         # Construct path to .zarray metadata
         zarray_path_in_dataset = f"{channel}/scale{scale}/.zarray"
