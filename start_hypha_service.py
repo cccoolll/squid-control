@@ -1196,9 +1196,9 @@ class Microscope:
                 raise
 
     async def setup(self):
-        remote_token = os.environ.get("SQUID_WORKSPACE_TOKEN")
+        remote_token = os.environ.get("REEF_WORKSPACE_TOKEN")
         remote_server = await connect_to_server(
-                {"server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": "squid-control", "ping_interval": None}
+                {"server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": "reef-imaging", "ping_interval": None}
             )
         if not self.service_id:
             raise ValueError("MICROSCOPE_SERVICE_ID is not set in the environment variables.")
@@ -1210,12 +1210,12 @@ class Microscope:
             )
         else:
             try:  
-                token = os.environ.get("SQUID_WORKSPACE_TOKEN")  
+                token = os.environ.get("REEF_WORKSPACE_TOKEN")  
             except:  
                 token = await login({"server_url": self.server_url})
             
             server = await connect_to_server(
-                {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
+                {"server_url": self.server_url, "token": token, "workspace": "reef-imaging",  "ping_interval": None}
             )
         
         self.server = server
