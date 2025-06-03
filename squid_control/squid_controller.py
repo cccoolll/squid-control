@@ -352,29 +352,68 @@ class SquidController:
             if time.time() - t0 > 5:
                 print('z return timeout, the program will exit')
                 exit()
-    
-    
-    def plate_scan(self, well_plate_type='96', illuminate_channels=['BF LED matrix full', 'Fluorescence 488 nm Ex', 'Fluorescence 561 nm Ex'], do_contrast_autofocus=False, do_reflection_af=True, scanning_zone=[(0,0),(2,2)],Nx=3,Ny=3, action_ID='testPlateScan'):
+
+    def plate_scan(self, well_plate_type='96', illumination_settings=None, do_contrast_autofocus=False, do_reflection_af=True, scanning_zone=[(0,0),(2,2)], Nx=3, Ny=3, action_ID='testPlateScanNew'):
+        """
+        New well plate scanning function with custom illumination settings.
+        
+        Args:
+            well_plate_type (str): Type of well plate ('96', '384', etc.)
+            illumination_settings (list): List of dictionaries with illumination settings
+                Each dict should contain:
+                {
+                    'channel': 'BF LED matrix full',  # Channel name
+                    'intensity': 50.0,               # Illumination intensity (0-100)
+                    'exposure_time': 25.0            # Exposure time in ms
+                }
+            do_contrast_autofocus (bool): Whether to perform contrast-based autofocus
+            do_reflection_af (bool): Whether to perform reflection-based autofocus
+            scanning_zone (list): List of two tuples [(start_row, start_col), (end_row, end_col)]
+            Nx (int): Number of X positions per well
+            Ny (int): Number of Y positions per well
+            action_ID (str): Identifier for this scan
+        """
+        if illumination_settings is None:
+            # Default settings if none provided
+            illumination_settings = [
+                {'channel': 'BF LED matrix full', 'intensity': 28.0, 'exposure_time': 20.0},
+                {'channel': 'Fluorescence 488 nm Ex', 'intensity': 27.0, 'exposure_time': 60.0},
+                {'channel': 'Fluorescence 561 nm Ex', 'intensity': 98.0, 'exposure_time': 100.0}
+            ]
+        
+        # Update configurations with custom settings
+        self.multipointController.set_selected_configurations_with_settings(illumination_settings)
+        
+        # Move to scanning position
         self.move_to_scaning_position()
+        
+        # Set up scan coordinates
         self.scanCoordinates.well_selector.set_selected_wells(scanning_zone[0], scanning_zone[1])
         self.scanCoordinates.get_selected_wells_to_coordinates()
+        
+        # Configure multipoint controller
         self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)
-        self.multipointController.set_selected_configurations(illuminate_channels)
         self.multipointController.do_autofocus = do_contrast_autofocus
         self.multipointController.do_reflection_af = do_reflection_af
         self.multipointController.set_NX(Nx)
         self.multipointController.set_NY(Ny)
         self.multipointController.start_new_experiment(action_ID)
+        
+        # Start scanning
         self.is_busy = True
-        print('Starting plate scan')
+        print('Starting new plate scan with custom illumination settings')
         self.multipointController.run_acquisition()
-        print('Plate scan completed')
+        print('New plate scan completed')
         self.is_busy = False
     
     def stop_plate_scan(self):
         self.multipointController.abort_acqusition_requested = True
         self.is_busy = False
         print('Plate scan stopped')
+        
+    def stop_scan_well_plate_new(self):
+        """Stop the new well plate scan - alias for stop_plate_scan"""
+        self.stop_plate_scan()
         
     async def send_trigger_simulation(self, channel=0, intensity=100, exposure_time=100):
         print('Getting simulated image')
@@ -635,7 +674,28 @@ async def try_microscope():
     #image = await squid_controller.snap_image()
     # save image
     #cv2.imwrite('test_image.jpg', image)
-    squid_controller.plate_scan()
+    
+    # Example using the original plate_scan function
+    # squid_controller.plate_scan()
+    
+    # Example using the new scan_well_plate_new function with custom settings
+    custom_illumination_settings = [
+        {'channel': 'BF LED matrix full', 'intensity': 35.0, 'exposure_time': 15.0},
+        {'channel': 'Fluorescence 488 nm Ex', 'intensity': 50.0, 'exposure_time': 80.0},
+        {'channel': 'Fluorescence 561 nm Ex', 'intensity': 75.0, 'exposure_time': 120.0}
+    ]
+    
+    squid_controller.scan_well_plate_new(
+        well_plate_type='96',
+        illumination_settings=custom_illumination_settings,
+        do_contrast_autofocus=False,
+        do_reflection_af=True,
+        scanning_zone=[(0,0),(1,1)],  # Scan wells A1 to B2
+        Nx=2,
+        Ny=2,
+        action_ID='customIlluminationTest'
+    )
+    
     squid_controller.close()
 
 
