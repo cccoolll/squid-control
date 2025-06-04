@@ -674,10 +674,13 @@ class Microscope:
             if self.squidController.liveController.illumination_on:
                 self.squidController.liveController.turn_off_illumination()
                 time.sleep(0.005)
-            self.squidController.liveController.set_illumination(channel, intensity)
-            if not self.squidController.liveController.illumination_on:
+                self.squidController.liveController.set_illumination(channel, intensity)
                 self.squidController.liveController.turn_on_illumination()
                 time.sleep(0.005)
+            else:
+                self.squidController.liveController.set_illumination(channel, intensity)
+                time.sleep(0.005)
+                
             param_name = self.channel_param_map.get(channel)
             self.squidController.current_channel = channel
             if param_name:
