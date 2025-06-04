@@ -702,7 +702,7 @@ class Microscope:
             raise e
     
     @schema_function(skip_self=True)
-    def set_camera_exposure(self,channel: int=Field(0, description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), exposure_time: int=Field(100, description="Exposure time in milliseconds"), context=None):
+    def set_camera_exposure(self,channel: int=Field(..., description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), exposure_time: int=Field(..., description="Exposure time in milliseconds"), context=None):
         """
         Set the exposure time of the camera
         Returns: A string message
@@ -956,6 +956,25 @@ class Microscope:
     class MoveToLoadingPositionInput(BaseModel):
         """Move the stage to the loading position."""
 
+    class SetIlluminationInput(BaseModel):
+        """Set the intensity of light source."""
+        channel: int = Field(..., description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)")
+        intensity: int = Field(..., description="Intensity of the illumination source")
+
+    class SetCameraExposureInput(BaseModel):
+        """Set the exposure time of the camera."""
+        channel: int = Field(..., description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)")
+        exposure_time: int = Field(..., description="Exposure time in milliseconds")
+
+    class DoLaserAutofocusInput(BaseModel):
+        """Do reflection-based autofocus."""
+
+    class SetLaserReferenceInput(BaseModel):
+        """Set the reference of the laser."""
+
+    class GetStatusInput(BaseModel):
+        """Get the current status of the microscope."""
+
     class HomeStageInput(BaseModel):
         """Home the stage in z, y, and x axis."""
 
@@ -1020,6 +1039,26 @@ class Microscope:
         response = self.return_stage(context)
         return {"result": response}
 
+    def set_illumination_schema(self, config: SetIlluminationInput, context=None):
+        response = self.set_illumination(config.channel, config.intensity, context)
+        return {"result": response}
+
+    def set_camera_exposure_schema(self, config: SetCameraExposureInput, context=None):
+        response = self.set_camera_exposure(config.channel, config.exposure_time, context)
+        return {"result": response}
+
+    def do_laser_autofocus_schema(self, context=None):
+        response = self.do_laser_autofocus(context)
+        return {"result": response}
+
+    def set_laser_reference_schema(self, context=None):
+        response = self.set_laser_reference(context)
+        return {"result": response}
+
+    def get_status_schema(self, context=None):
+        response = self.get_status(context)
+        return {"result": response}
+
     def get_schema(self, context=None):
         return {
             "move_by_distance": self.MoveByDistanceInput.model_json_schema(),
@@ -1030,7 +1069,12 @@ class Microscope:
             "snap_image": self.SnapImageInput.model_json_schema(),
             "inspect_tool": self.InspectToolInput.model_json_schema(),
             "load_position": self.MoveToLoadingPositionInput.model_json_schema(),
-            "navigate_to_well": self.NavigateToWellInput.model_json_schema()
+            "navigate_to_well": self.NavigateToWellInput.model_json_schema(),
+            "set_illumination": self.SetIlluminationInput.model_json_schema(),
+            "set_camera_exposure": self.SetCameraExposureInput.model_json_schema(),
+            "do_laser_autofocus": self.DoLaserAutofocusInput.model_json_schema(),
+            "set_laser_reference": self.SetLaserReferenceInput.model_json_schema(),
+            "get_status": self.GetStatusInput.model_json_schema()
         }
 
     async def start_hypha_service(self, server, service_id):
@@ -1109,6 +1153,11 @@ class Microscope:
                 "load_position": self.move_to_loading_position,
                 "navigate_to_well": self.navigate_to_well_schema,
                 "inspect_tool": self.inspect_tool_schema,
+                "set_illumination": self.set_illumination_schema,
+                "set_camera_exposure": self.set_camera_exposure_schema,
+                "do_laser_autofocus": self.do_laser_autofocus_schema,
+                "set_laser_reference": self.set_laser_reference_schema,
+                "get_status": self.get_status_schema
             }
         }
 
