@@ -395,6 +395,7 @@ class Microscope:
                 'dy': self.dy,
                 'dz': self.dz,
                 'current_channel': self.squidController.current_channel,
+                'current_channel_name': self.channel_param_map[self.squidController.current_channel],
                 'BF_intensity_exposure': self.BF_intensity_exposure,
                 'F405_intensity_exposure': self.F405_intensity_exposure,
                 'F488_intensity_exposure': self.F488_intensity_exposure,
@@ -912,34 +913,6 @@ class Microscope:
         except Exception as e:
             logger.error(f"Error fetching ICE servers: {e}")
             return None
-
-    def start_video_streaming(self, context=None):
-        """Start WebRTC video streaming"""
-        try:
-            if not self.is_streaming:
-                self.is_streaming = True
-                logger.info("Video streaming started")
-                return {"status": "streaming_started", "message": "WebRTC video streaming has been started"}
-            else:
-                return {"status": "already_streaming", "message": "Video streaming is already active"}
-        except Exception as e:
-            logger.error(f"Failed to start video streaming: {e}")
-            raise e
-
-    def stop_video_streaming(self, context=None):
-        """Stop WebRTC video streaming"""
-        try:
-            if self.is_streaming:
-                self.is_streaming = False
-                if self.video_track:
-                    self.video_track.running = False
-                logger.info("Video streaming stopped")
-                return {"status": "streaming_stopped", "message": "WebRTC video streaming has been stopped"}
-            else:
-                return {"status": "not_streaming", "message": "Video streaming is not currently active"}
-        except Exception as e:
-            logger.error(f"Failed to stop video streaming: {e}")
-            raise e
     
     class MoveByDistanceInput(BaseModel):
         """Move the stage by a distance in x, y, z axis."""
@@ -1101,8 +1074,6 @@ class Microscope:
                 "get_all_task_status": self.get_all_task_status,
                 "reset_task_status": self.reset_task_status,
                 "reset_all_task_status": self.reset_all_task_status,
-                "start_video_streaming": self.start_video_streaming,
-                "stop_video_streaming": self.stop_video_streaming
             },
         )
 
