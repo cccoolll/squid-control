@@ -395,6 +395,7 @@ class Microscope:
                 'dy': self.dy,
                 'dz': self.dz,
                 'current_channel': self.squidController.current_channel,
+                'current_channel_name': self.channel_param_map[self.squidController.current_channel],
                 'BF_intensity_exposure': self.BF_intensity_exposure,
                 'F405_intensity_exposure': self.F405_intensity_exposure,
                 'F488_intensity_exposure': self.F488_intensity_exposure,
@@ -518,7 +519,10 @@ class Microscope:
                     intensity, exposure_time = stored_params
 
             # Get frame directly using snap_image
-            raw_frame = await self.squidController.snap_image(channel, intensity, exposure_time)
+            if self.is_simulation:
+                raw_frame = await self.squidController.get_camera_frame_simulation(channel, intensity, exposure_time)
+            else:
+                raw_frame = self.squidController.get_camera_frame(channel, intensity, exposure_time)
             raw_frame = raw_frame.astype(np.uint8)  # Convert to 8-bit image
             
             # Convert to RGB if needed
@@ -616,18 +620,22 @@ class Microscope:
             raise e
 
     @schema_function(skip_self=True)
-    def scan_well_plate(self, well_plate_type: str=Field("96", description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), illuminate_channels: List[str]=Field(default_factory=lambda: ['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex'], description="Light source to illuminate the well plate"), do_contrast_autofocus: bool=Field(False, description="Whether to do contrast based autofocus"), do_reflection_af: bool=Field(True, description="Whether to do reflection based autofocus"), scanning_zone: List[tuple]=Field(default_factory=lambda: [(0,0),(0,0)], description="The scanning zone of the well plate, for 91 well plate, it should be[(0,0),(7,11)] "), Nx: int=Field(3, description="Number of columns to scan"), Ny: int=Field(3, description="Number of rows to scan"), action_ID: str=Field('testPlateScan', description="The ID of the action"), context=None):
+    def scan_well_plate(self, well_plate_type: str=Field("96", description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), illumination_settings: List[dict]=Field(default_factory=lambda: [{'channel': 'BF LED matrix full', 'intensity': 28.0, 'exposure_time': 20.0}, {'channel': 'Fluorescence 488 nm Ex', 'intensity': 27.0, 'exposure_time': 60.0}, {'channel': 'Fluorescence 561 nm Ex', 'intensity': 98.0, 'exposure_time': 100.0}], description="Illumination settings with channel name, intensity (0-100), and exposure time (ms) for each channel"), do_contrast_autofocus: bool=Field(False, description="Whether to do contrast based autofocus"), do_reflection_af: bool=Field(True, description="Whether to do reflection based autofocus"), scanning_zone: List[tuple]=Field(default_factory=lambda: [(0,0),(0,0)], description="The scanning zone of the well plate, for 96 well plate, it should be[(0,0),(7,11)] "), Nx: int=Field(3, description="Number of columns to scan"), Ny: int=Field(3, description="Number of rows to scan"), action_ID: str=Field('testPlateScan', description="The ID of the action"), context=None):
         """
-        Scan the well plate according to the pre-defined position list
+        Scan the well plate according to the pre-defined position list with custom illumination settings
         Returns: The message of the action
         """
         task_name = "scan_well_plate"
         self.task_status[task_name] = "started"
         try:
-            if illuminate_channels is None:
-                illuminate_channels = ['BF LED matrix full','Fluorescence 488 nm Ex','Fluorescence 561 nm Ex']
-            logger.info("Start scanning well plate")
-            self.squidController.plate_scan(well_plate_type, illuminate_channels, do_contrast_autofocus, do_reflection_af, scanning_zone, Nx, Ny, action_ID)
+            if illumination_settings is None:
+                illumination_settings = [
+                    {'channel': 'BF LED matrix full', 'intensity': 28.0, 'exposure_time': 20.0},
+                    {'channel': 'Fluorescence 488 nm Ex', 'intensity': 27.0, 'exposure_time': 60.0},
+                    {'channel': 'Fluorescence 561 nm Ex', 'intensity': 98.0, 'exposure_time': 100.0}
+                ]
+            logger.info("Start scanning well plate with custom illumination settings")
+            self.squidController.plate_scan(well_plate_type, illumination_settings, do_contrast_autofocus, do_reflection_af, scanning_zone, Nx, Ny, action_ID)
             logger.info("Well plate scanning completed")
             self.task_status[task_name] = "finished"
             return "Well plate scanning completed"
@@ -666,9 +674,14 @@ class Microscope:
             # if light is on, turn it off first
             if self.squidController.liveController.illumination_on:
                 self.squidController.liveController.turn_off_illumination()
-                time.sleep(0.05)
-            self.squidController.liveController.set_illumination(channel, intensity)
-            
+                time.sleep(0.005)
+                self.squidController.liveController.set_illumination(channel, intensity)
+                self.squidController.liveController.turn_on_illumination()
+                time.sleep(0.005)
+            else:
+                self.squidController.liveController.set_illumination(channel, intensity)
+                time.sleep(0.005)
+                
             param_name = self.channel_param_map.get(channel)
             self.squidController.current_channel = channel
             if param_name:
@@ -689,7 +702,7 @@ class Microscope:
             raise e
     
     @schema_function(skip_self=True)
-    def set_camera_exposure(self,channel: int=Field(0, description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), exposure_time: int=Field(100, description="Exposure time in milliseconds"), context=None):
+    def set_camera_exposure(self,channel: int=Field(..., description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), exposure_time: int=Field(..., description="Exposure time in milliseconds"), context=None):
         """
         Set the exposure time of the camera
         Returns: A string message
@@ -900,34 +913,6 @@ class Microscope:
         except Exception as e:
             logger.error(f"Error fetching ICE servers: {e}")
             return None
-
-    def start_video_streaming(self, context=None):
-        """Start WebRTC video streaming"""
-        try:
-            if not self.is_streaming:
-                self.is_streaming = True
-                logger.info("Video streaming started")
-                return {"status": "streaming_started", "message": "WebRTC video streaming has been started"}
-            else:
-                return {"status": "already_streaming", "message": "Video streaming is already active"}
-        except Exception as e:
-            logger.error(f"Failed to start video streaming: {e}")
-            raise e
-
-    def stop_video_streaming(self, context=None):
-        """Stop WebRTC video streaming"""
-        try:
-            if self.is_streaming:
-                self.is_streaming = False
-                if self.video_track:
-                    self.video_track.running = False
-                logger.info("Video streaming stopped")
-                return {"status": "streaming_stopped", "message": "WebRTC video streaming has been stopped"}
-            else:
-                return {"status": "not_streaming", "message": "Video streaming is not currently active"}
-        except Exception as e:
-            logger.error(f"Failed to stop video streaming: {e}")
-            raise e
     
     class MoveByDistanceInput(BaseModel):
         """Move the stage by a distance in x, y, z axis."""
@@ -970,6 +955,25 @@ class Microscope:
 
     class MoveToLoadingPositionInput(BaseModel):
         """Move the stage to the loading position."""
+
+    class SetIlluminationInput(BaseModel):
+        """Set the intensity of light source."""
+        channel: int = Field(..., description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)")
+        intensity: int = Field(..., description="Intensity of the illumination source")
+
+    class SetCameraExposureInput(BaseModel):
+        """Set the exposure time of the camera."""
+        channel: int = Field(..., description="Light source (e.g., 0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)")
+        exposure_time: int = Field(..., description="Exposure time in milliseconds")
+
+    class DoLaserAutofocusInput(BaseModel):
+        """Do reflection-based autofocus."""
+
+    class SetLaserReferenceInput(BaseModel):
+        """Set the reference of the laser."""
+
+    class GetStatusInput(BaseModel):
+        """Get the current status of the microscope."""
 
     class HomeStageInput(BaseModel):
         """Home the stage in z, y, and x axis."""
@@ -1035,6 +1039,26 @@ class Microscope:
         response = self.return_stage(context)
         return {"result": response}
 
+    def set_illumination_schema(self, config: SetIlluminationInput, context=None):
+        response = self.set_illumination(config.channel, config.intensity, context)
+        return {"result": response}
+
+    def set_camera_exposure_schema(self, config: SetCameraExposureInput, context=None):
+        response = self.set_camera_exposure(config.channel, config.exposure_time, context)
+        return {"result": response}
+
+    def do_laser_autofocus_schema(self, context=None):
+        response = self.do_laser_autofocus(context)
+        return {"result": response}
+
+    def set_laser_reference_schema(self, context=None):
+        response = self.set_laser_reference(context)
+        return {"result": response}
+
+    def get_status_schema(self, context=None):
+        response = self.get_status(context)
+        return {"result": response}
+
     def get_schema(self, context=None):
         return {
             "move_by_distance": self.MoveByDistanceInput.model_json_schema(),
@@ -1045,7 +1069,12 @@ class Microscope:
             "snap_image": self.SnapImageInput.model_json_schema(),
             "inspect_tool": self.InspectToolInput.model_json_schema(),
             "load_position": self.MoveToLoadingPositionInput.model_json_schema(),
-            "navigate_to_well": self.NavigateToWellInput.model_json_schema()
+            "navigate_to_well": self.NavigateToWellInput.model_json_schema(),
+            "set_illumination": self.SetIlluminationInput.model_json_schema(),
+            "set_camera_exposure": self.SetCameraExposureInput.model_json_schema(),
+            "do_laser_autofocus": self.DoLaserAutofocusInput.model_json_schema(),
+            "set_laser_reference": self.SetLaserReferenceInput.model_json_schema(),
+            "get_status": self.GetStatusInput.model_json_schema()
         }
 
     async def start_hypha_service(self, server, service_id):
@@ -1089,8 +1118,6 @@ class Microscope:
                 "get_all_task_status": self.get_all_task_status,
                 "reset_task_status": self.reset_task_status,
                 "reset_all_task_status": self.reset_all_task_status,
-                "start_video_streaming": self.start_video_streaming,
-                "stop_video_streaming": self.stop_video_streaming
             },
         )
 
@@ -1126,6 +1153,11 @@ class Microscope:
                 "load_position": self.move_to_loading_position,
                 "navigate_to_well": self.navigate_to_well_schema,
                 "inspect_tool": self.inspect_tool_schema,
+                "set_illumination": self.set_illumination_schema,
+                "set_camera_exposure": self.set_camera_exposure_schema,
+                "do_laser_autofocus": self.do_laser_autofocus_schema,
+                "set_laser_reference": self.set_laser_reference_schema,
+                "get_status": self.get_status_schema
             }
         }
 
@@ -1347,17 +1379,11 @@ class Microscope:
         logger.info("Health probes registered successfully")
 
     async def initialize_zarr_manager(self, camera):
-        from hypha_tools.artifact_manager.artifact_manager import ZarrImageManager
+        from squid_control.hypha_tools.artifact_manager.artifact_manager import ZarrImageManager
         
         camera.zarr_image_manager = ZarrImageManager()
         
-        workspace_token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
-        if not workspace_token:
-            logger.error("AGENT_LENS_WORKSPACE_TOKEN environment variable not set")
-            raise RuntimeError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set")
-            
         init_success = await camera.zarr_image_manager.connect(
-            workspace_token=workspace_token,
             server_url=self.server_url
         )
         

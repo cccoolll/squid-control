@@ -3112,6 +3112,57 @@ class MultiPointController(QObject):
                 )
             )
 
+    def set_selected_configurations_with_settings(self, illumination_settings):
+        """
+        Set selected configurations with custom illumination settings.
+        
+        Args:
+            illumination_settings (list): List of dictionaries containing:
+                - 'channel': Channel name (str)
+                - 'intensity': Illumination intensity (float, 0-100)
+                - 'exposure_time': Exposure time in ms (float)
+        """
+        self.selected_configurations = []
+        
+        for setting in illumination_settings:
+            channel_name = setting['channel']
+            intensity = setting['intensity']
+            exposure_time = setting['exposure_time']
+            
+            # Find the configuration by name
+            config = None
+            for cfg in self.configurationManager.configurations:
+                if cfg.name == channel_name:
+                    config = cfg
+                    break
+            
+            if config is None:
+                print(f"Warning: Configuration '{channel_name}' not found, skipping...")
+                continue
+            
+            # Update the configuration in memory with new settings
+            # Update intensity
+            self.configurationManager.update_configuration_without_writing(
+                config.id, 'IlluminationIntensity', intensity
+            )
+            # Update exposure time  
+            self.configurationManager.update_configuration_without_writing(
+                config.id, 'ExposureTime', exposure_time
+            )
+            
+            # Update the config object itself for immediate use
+            config.illumination_intensity = float(intensity)
+            config.exposure_time = float(exposure_time)
+            
+            # Add to selected configurations
+            self.selected_configurations.append(config)
+            
+            print(f"Updated configuration '{channel_name}': intensity={intensity}, exposure_time={exposure_time}")
+        
+        # Save the updated configurations to file
+        self.configurationManager.save_configurations()
+        print(f"Selected {len(self.selected_configurations)} configurations with custom settings")
+
     def run_acquisition(self, location_list=None): 
         print('start acquisition')
         self.tile_stitchers = {}
@@ -3826,8 +3877,6 @@ class LaserAutofocusController(QObject):
         self.microcontroller.turn_off_AF_laser()
         self.wait_till_operation_is_completed()
         self.x_reference = x
-        self.initialize_manual(self.x_offset, self.y_offset, self.width, self.height, self.pixel_to_um, self.x_reference,write_to_cache=True)
-        self.wait_till_operation_is_completed()
         self.signal_displacement_um.emit(0)
 
     def _caculate_centroid(self, image):
