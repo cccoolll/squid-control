@@ -518,7 +518,10 @@ class Microscope:
                     intensity, exposure_time = stored_params
 
             # Get frame directly using snap_image
-            raw_frame = await self.squidController.snap_image(channel, intensity, exposure_time)
+            if self.is_simulation:
+                raw_frame = await self.squidController.get_camera_frame_simulation(channel, intensity, exposure_time)
+            else:
+                raw_frame = self.squidController.get_camera_frame(channel, intensity, exposure_time)
             raw_frame = raw_frame.astype(np.uint8)  # Convert to 8-bit image
             
             # Convert to RGB if needed
@@ -670,9 +673,11 @@ class Microscope:
             # if light is on, turn it off first
             if self.squidController.liveController.illumination_on:
                 self.squidController.liveController.turn_off_illumination()
-                time.sleep(0.05)
+                time.sleep(0.005)
             self.squidController.liveController.set_illumination(channel, intensity)
-            
+            if not self.squidController.liveController.illumination_on:
+                self.squidController.liveController.turn_on_illumination()
+                time.sleep(0.005)
             param_name = self.channel_param_map.get(channel)
             self.squidController.current_channel = channel
             if param_name:

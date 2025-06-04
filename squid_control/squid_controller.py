@@ -643,6 +643,20 @@ class SquidController:
 
         return gray_img
     
+    async def get_camera_frame_simulation(self, channel=0, intensity=100, exposure_time=100):
+        self.camera.set_exposure_time(exposure_time)
+        self.liveController.set_illumination(channel, intensity)
+        await self.send_trigger_simulation(channel, intensity, exposure_time)
+        gray_img = self.camera.read_frame() 
+        gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
+        return gray_img
+
+    def get_camera_frame(self, channel=0, intensity=100, exposure_time=100):
+        self.camera.send_trigger()
+        gray_img = self.camera.read_frame()
+        gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
+        return gray_img
+    
 
     def close(self):
 
