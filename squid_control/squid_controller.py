@@ -620,6 +620,13 @@ class SquidController:
                 print('z return timeout, the program will exit')
 
     async def snap_image(self, channel=0, intensity=100, exposure_time=100):
+        # turn off the illumination if it is on
+        need_to_turn_illumination_back = False
+        if self.liveController.illumination_on:
+            need_to_turn_illumination_back = True
+            self.liveController.turn_off_illumination()
+            while self.microcontroller.is_busy():
+                await asyncio.sleep(0.005)
         self.camera.set_exposure_time(exposure_time)
         self.liveController.set_illumination(channel, intensity)
         self.liveController.turn_on_illumination()
@@ -637,9 +644,11 @@ class SquidController:
 
         gray_img = self.camera.read_frame()
         gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
-        self.liveController.turn_off_illumination()
-        while self.microcontroller.is_busy():
-            await asyncio.sleep(0.005)
+        
+        if not need_to_turn_illumination_back:
+            self.liveController.turn_off_illumination()
+            while self.microcontroller.is_busy():
+                await asyncio.sleep(0.005)
 
         return gray_img
     
