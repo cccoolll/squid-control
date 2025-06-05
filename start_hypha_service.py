@@ -193,7 +193,8 @@ class Microscope:
         self.video_track = None
         self.webrtc_service_id = None
         self.is_streaming = False
-        
+        self.similarity_search_svc = None
+
         # Add task status tracking
         self.task_status = {
             "move_by_distance": "not_started",
@@ -897,6 +898,67 @@ class Microscope:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to get chatbot URL: {e}")
             raise e
+    
+    def _format_similarity_results(self, results):
+        if not results:
+            return "No similar images found."
+
+        response_parts = ["Found similar images:"]
+        for res in results:
+            img_str = res.get('image_base64')
+            if not img_str:
+                continue
+            
+            image_bytes = base64.b64decode(img_str)
+            file_path = res.get('file_path', '')
+            file_name = os.path.basename(file_path) if file_path else "similar_image.png"
+            description = res.get('text_description', 'No description available.')
+
+            file_id = self.datastore.put('file', image_bytes, file_name, f"Similar image found: {description}")
+            img_url = self.datastore.get_url(file_id)
+
+            similarity = res.get('similarity', 0.0)
+            
+            response_parts.append(f"![Found image]({img_url})\nDescription: {description}\nSimilarity: {similarity:.4f}")
+
+        return "\n\n".join(response_parts)
+
+    @schema_function(skip_self=True)
+    async def find_similar_image_text(self, query_input: str, top_k: int, context=None):
+        """
+        Find similar image with text query.
+        Returns: A list of image information.
+        """
+        try:
+            results = await self.similarity_search_svc.find_similar_images(query_input, top_k)
+            return self._format_similarity_results(results)
+        except Exception as e:
+            logger.error(f"Failed to find similar images by text: {e}")
+            return f"An error occurred while searching for similar images: {e}"
+
+    @schema_function(skip_self=True)
+    async def find_similar_image_image(self, query_input: str, top_k: int, context=None):
+        """
+        Find similar image with image's URL query.
+        Returns: A list of image information.
+        """
+        try:
+            # download the image from query_input url
+            async with aiohttp.ClientSession() as session:
+                async with session.get(query_input) as resp:
+                    if resp.status != 200:
+                        return f"Failed to download image from {query_input}"
+                    image_bytes = await resp.read()
+        except Exception as e:
+            logger.error(f"Failed to download image from {query_input}: {e}")
+            return f"Failed to download image from {query_input}: {e}"
+        
+        try:
+            results = await self.similarity_search_svc.find_similar_images(image_bytes, top_k)
+            return self._format_similarity_results(results)
+        except Exception as e:
+            logger.error(f"Failed to find similar images by image: {e}")
+            return f"An error occurred while searching for similar images: {e}"
 
     async def fetch_ice_servers(self):
         """Fetch ICE servers from the coturn service"""
@@ -985,6 +1047,16 @@ class Microscope:
         """Image information."""
         url: str = Field(..., description="The URL of the image.")
         title: Optional[str] = Field(None, description="The title of the image.")
+    
+    class FindSimilarImageTextInput(BaseModel):
+        """Find similar image with text query."""
+        query_input: str = Field(..., description="The text of the query input for the similarity search.")
+        top_k: int = Field(..., description="The number of similar images to return.")
+
+    class FindSimilarImageImageInput(BaseModel):
+        """Find similar image with image's URL query."""
+        query_input: str = Field(..., description="The URL of the image of the query input for the similarity search.")
+        top_k: int = Field(..., description="The number of similar images to return.")
 
     async def inspect_tool(self, images: List[dict], query: str, context_description: str) -> str:
         image_infos = [
@@ -1039,6 +1111,14 @@ class Microscope:
         response = self.return_stage(context)
         return {"result": response}
 
+    async def find_similar_image_text_schema(self, config: FindSimilarImageTextInput, context=None):
+        response = await self.find_similar_image_text(config.query_input, config.top_k, context)
+        return {"result": response}
+
+    async def find_similar_image_image_schema(self, config: FindSimilarImageImageInput, context=None):
+        response = await self.find_similar_image_image(config.query_input, config.top_k, context)
+        return {"result": response}
+
     def set_illumination_schema(self, config: SetIlluminationInput, context=None):
         response = self.set_illumination(config.channel, config.intensity, context)
         return {"result": response}
@@ -1074,7 +1154,9 @@ class Microscope:
             "set_camera_exposure": self.SetCameraExposureInput.model_json_schema(),
             "do_laser_autofocus": self.DoLaserAutofocusInput.model_json_schema(),
             "set_laser_reference": self.SetLaserReferenceInput.model_json_schema(),
-            "get_status": self.GetStatusInput.model_json_schema()
+            "get_status": self.GetStatusInput.model_json_schema(),
+            "find_similar_image_text": self.FindSimilarImageTextInput.model_json_schema(),
+            "find_similar_image_image": self.FindSimilarImageImageInput.model_json_schema()
         }
 
     async def start_hypha_service(self, server, service_id):
@@ -1157,7 +1239,9 @@ class Microscope:
                 "set_camera_exposure": self.set_camera_exposure_schema,
                 "do_laser_autofocus": self.do_laser_autofocus_schema,
                 "set_laser_reference": self.set_laser_reference_schema,
-                "get_status": self.get_status_schema
+                "get_status": self.get_status_schema,
+                "find_similar_image_text": self.find_similar_image_text_schema,
+                "find_similar_image_image": self.find_similar_image_image_schema
             }
         }
 
@@ -1226,8 +1310,18 @@ class Microscope:
                     raise
             else:
                 raise
+    
+    async def connect_to_similarity_search_service(self):
+        similarity_search_server = await connect_to_server(
+            {"server_url": "http://192.168.2.1:9527", "token": os.environ.get("REEF_LOCAL_TOKEN"), "workspace": os.environ.get("REEF_LOCAL_WORKSPACE"), "ping_interval": None}
+        )
+        similarity_search_svc = await similarity_search_server.get_service("image-text-similarity-search")
+        return similarity_search_svc
 
     async def setup(self):
+
+        self.similarity_search_svc = await self.connect_to_similarity_search_service()
+
         remote_token = os.environ.get("SQUID_WORKSPACE_TOKEN")
         remote_server = await connect_to_server(
                 {"server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": "squid-control", "ping_interval": None}
