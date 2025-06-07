@@ -194,6 +194,8 @@ class Microscope:
         self.webrtc_service_id = None
         self.is_streaming = False
         self.similarity_search_svc = None
+        self.video_contrast_min = 0
+        self.video_contrast_max = None
 
         # Add task status tracking
         self.task_status = {
@@ -218,6 +220,7 @@ class Microscope:
             "set_laser_reference": "not_started",
             "navigate_to_well": "not_started",
             "get_chatbot_url": "not_started",
+            "adjust_video_frame": "not_started",
         }
 
     def load_authorized_emails(self, login_required=True):
@@ -519,18 +522,34 @@ class Microscope:
                 raw_frame = await self.squidController.get_camera_frame_simulation(channel, intensity, exposure_time)
             else:
                 raw_frame = self.squidController.get_camera_frame(channel, intensity, exposure_time)
-            raw_frame = raw_frame.astype(np.uint8)  # Convert to 8-bit image
+            
+            # Adjust contrast
+            min_val = self.video_contrast_min
+            max_val = self.video_contrast_max
+
+            if max_val is None:
+                if raw_frame.dtype == np.uint16:
+                    max_val = 65535
+                else:
+                    max_val = 255
+            
+            # Clip and scale to 0-255
+            processed_frame = np.clip(raw_frame, min_val, max_val)
+            if max_val > min_val:
+                processed_frame = ((processed_frame.astype(np.float32) - min_val) / (max_val - min_val) * 255).astype(np.uint8)
+            else:
+                processed_frame = np.zeros_like(raw_frame, dtype=np.uint8)
             
             # Convert to RGB if needed
-            if len(raw_frame.shape) == 2:
-                raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_GRAY2RGB)
-            elif raw_frame.shape[2] == 1:
-                raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_GRAY2RGB)
+            if len(processed_frame.shape) == 2:
+                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
+            elif processed_frame.shape[2] == 1:
+                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
                 
             # Resize to standard dimensions
-            raw_frame = cv2.resize(raw_frame, (frame_width, frame_height))
+            processed_frame = cv2.resize(processed_frame, (frame_width, frame_height))
             
-            return raw_frame
+            return processed_frame
             
         except Exception as e:
             logger.error(f"Error getting video frame: {e}", exc_info=True)
@@ -539,6 +558,22 @@ class Microscope:
             cv2.putText(placeholder_img, f"Error: {str(e)}", (10, frame_height//2), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
             return placeholder_img
+
+    @schema_function(skip_self=True)
+    def adjust_video_frame(self, min_val: int = Field(0, description="Minimum intensity value for contrast stretching"), max_val: Optional[int] = Field(None, description="Maximum intensity value for contrast stretching"), context=None):
+        """Adjust the contrast of the video stream by setting min and max intensity values."""
+        task_name = "adjust_video_frame"
+        self.task_status[task_name] = "started"
+        try:
+            self.video_contrast_min = min_val
+            self.video_contrast_max = max_val
+            logger.info(f"Video contrast adjusted: min={min_val}, max={max_val}")
+            self.task_status[task_name] = "finished"
+            return {"success": True, "message": f"Video contrast adjusted to min={min_val}, max={max_val}."}
+        except Exception as e:
+            self.task_status[task_name] = "failed"
+            logger.error(f"Failed to adjust video frame: {e}")
+            raise e
 
     @schema_function(skip_self=True)
     async def snap(self, exposure_time: int=Field(100, description="Exposure time, in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
@@ -1195,6 +1230,7 @@ class Microscope:
                 "get_all_task_status": self.get_all_task_status,
                 "reset_task_status": self.reset_task_status,
                 "reset_all_task_status": self.reset_all_task_status,
+                "adjust_video_frame": self.adjust_video_frame,
             },
         )
 
