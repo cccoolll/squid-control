@@ -463,7 +463,7 @@ class Microscope:
     async def one_new_frame(self, context=None):
         """
         Get an image from the microscope
-        Returns: A base64 encoded image
+        Returns: A numpy array with preserved bit depth
         """
         task_name = "one_new_frame"
         self.task_status[task_name] = "started"
@@ -481,23 +481,18 @@ class Microscope:
             else:
                 logger.warning(f"Unknown channel {channel} in one_new_frame. Using default intensity/exposure.")
             
-            gray_img = await self.squidController.snap_image(channel, intensity, exposure_time)
-
-            gray_img = gray_img.astype(np.uint8)  # Convert to 8-bit image
-            #resize to 2048x2048
-            resized_img = cv2.resize(gray_img, (2048, 2048))
-            gray_img = Image.fromarray(resized_img)
-            gray_img = gray_img.convert("L")  # Convert to grayscale  
-            # Save the image to a BytesIO object as PNG  
-            buffer = io.BytesIO()  
-            gray_img.save(buffer, format="PNG")  
-            buffer.seek(0) 
-            image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            # Get the raw image from the camera with original bit depth preserved
+            raw_img = await self.squidController.snap_image(channel, intensity, exposure_time)
             
-
+            # Resize to 2048x2048 while preserving bit depth
+            resized_img = cv2.resize(raw_img, (2048, 2048))
+            
             self.get_status()
             self.task_status[task_name] = "finished"
-            return image_base64  
+            
+            # Return the numpy array directly with preserved bit depth
+            return resized_img
+            
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to get new frame: {e}")
