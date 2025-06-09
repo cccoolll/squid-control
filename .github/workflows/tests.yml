@@ -31,5 +31,7 @@ jobs:
         pip install .[dev]
 
     - name: Run tests with pytest
+      env:
+        AGENT_LENS_WORKSPACE_TOKEN: ${{ secrets.AGENT_LENS_WORKSPACE_TOKEN }}
       run: |
         PYTHONPATH=. pytest
