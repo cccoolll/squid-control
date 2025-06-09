@@ -1350,7 +1350,7 @@ class Microscope:
             similarity_search_svc = await similarity_search_server.get_service("image-text-similarity-search")
         else:
             similarity_search_server = await connect_to_server(
-                {"server_url": "https://hypha.aicell.io", "token": os.environ.get("REEF_WORKSPACE_TOKEN"), "workspace": "reef-imaging", "ping_interval": None}
+                {"server_url": "https://hypha.aicell.io", "token": os.environ.get("AGENT_LENS_WORKSPACE_TOKEN"), "workspace": "agent-lens", "ping_interval": None}
             )
             similarity_search_svc = await similarity_search_server.get_service("image-text-similarity-search")
         return similarity_search_svc
