@@ -1494,6 +1494,18 @@ class Microscope:
                 except Exception as chatbot_error:
                     raise RuntimeError(f"Chatbot service health check failed: {str(chatbot_error)}")
                 
+                try:
+                    if self.similarity_search_svc is None:
+                        raise RuntimeError("Similarity search service not found")
+                    
+                    result = await self.similarity_search_svc.hello_world()
+                    if result != "Hello world":
+                        raise RuntimeError(f"Similarity search service returned unexpected response: {result}")
+                    logger.info("Similarity search service is healthy")
+                except Exception as similarity_error:
+                    logger.error(f"Similarity search service health check failed: {str(similarity_error)}")
+                    raise RuntimeError(f"Similarity search service health check failed: {str(similarity_error)}")
+
                 logger.info("All services are healthy")
                 return {"status": "ok", "message": "All services are healthy"}
             except Exception as e:
