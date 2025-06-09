@@ -193,7 +193,10 @@ class Microscope:
         self.video_track = None
         self.webrtc_service_id = None
         self.is_streaming = False
-        
+        self.similarity_search_svc = None
+        self.video_contrast_min = 0
+        self.video_contrast_max = None
+
         # Add task status tracking
         self.task_status = {
             "move_by_distance": "not_started",
@@ -217,6 +220,7 @@ class Microscope:
             "set_laser_reference": "not_started",
             "navigate_to_well": "not_started",
             "get_chatbot_url": "not_started",
+            "adjust_video_frame": "not_started",
         }
 
     def load_authorized_emails(self, login_required=True):
@@ -462,7 +466,7 @@ class Microscope:
     async def one_new_frame(self, context=None):
         """
         Get an image from the microscope
-        Returns: A base64 encoded image
+        Returns: A numpy array with preserved bit depth
         """
         task_name = "one_new_frame"
         self.task_status[task_name] = "started"
@@ -480,23 +484,18 @@ class Microscope:
             else:
                 logger.warning(f"Unknown channel {channel} in one_new_frame. Using default intensity/exposure.")
             
-            gray_img = await self.squidController.snap_image(channel, intensity, exposure_time)
-
-            gray_img = gray_img.astype(np.uint8)  # Convert to 8-bit image
-            #resize to 2048x2048
-            resized_img = cv2.resize(gray_img, (2048, 2048))
-            gray_img = Image.fromarray(resized_img)
-            gray_img = gray_img.convert("L")  # Convert to grayscale  
-            # Save the image to a BytesIO object as PNG  
-            buffer = io.BytesIO()  
-            gray_img.save(buffer, format="PNG")  
-            buffer.seek(0) 
-            image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            # Get the raw image from the camera with original bit depth preserved
+            raw_img = await self.squidController.snap_image(channel, intensity, exposure_time)
             
-
+            # Resize to 2048x2048 while preserving bit depth
+            resized_img = cv2.resize(raw_img, (2048, 2048))
+            
             self.get_status()
             self.task_status[task_name] = "finished"
-            return image_base64  
+            
+            # Return the numpy array directly with preserved bit depth
+            return resized_img
+            
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to get new frame: {e}")
@@ -523,18 +522,34 @@ class Microscope:
                 raw_frame = await self.squidController.get_camera_frame_simulation(channel, intensity, exposure_time)
             else:
                 raw_frame = self.squidController.get_camera_frame(channel, intensity, exposure_time)
-            raw_frame = raw_frame.astype(np.uint8)  # Convert to 8-bit image
+            
+            # Adjust contrast
+            min_val = self.video_contrast_min
+            max_val = self.video_contrast_max
+
+            if max_val is None:
+                if raw_frame.dtype == np.uint16:
+                    max_val = 65535
+                else:
+                    max_val = 255
+            
+            # Clip and scale to 0-255
+            processed_frame = np.clip(raw_frame, min_val, max_val)
+            if max_val > min_val:
+                processed_frame = ((processed_frame.astype(np.float32) - min_val) / (max_val - min_val) * 255).astype(np.uint8)
+            else:
+                processed_frame = np.zeros_like(raw_frame, dtype=np.uint8)
             
             # Convert to RGB if needed
-            if len(raw_frame.shape) == 2:
-                raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_GRAY2RGB)
-            elif raw_frame.shape[2] == 1:
-                raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_GRAY2RGB)
+            if len(processed_frame.shape) == 2:
+                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
+            elif processed_frame.shape[2] == 1:
+                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
                 
             # Resize to standard dimensions
-            raw_frame = cv2.resize(raw_frame, (frame_width, frame_height))
+            processed_frame = cv2.resize(processed_frame, (frame_width, frame_height))
             
-            return raw_frame
+            return processed_frame
             
         except Exception as e:
             logger.error(f"Error getting video frame: {e}", exc_info=True)
@@ -543,6 +558,22 @@ class Microscope:
             cv2.putText(placeholder_img, f"Error: {str(e)}", (10, frame_height//2), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
             return placeholder_img
+
+    @schema_function(skip_self=True)
+    def adjust_video_frame(self, min_val: int = Field(0, description="Minimum intensity value for contrast stretching"), max_val: Optional[int] = Field(None, description="Maximum intensity value for contrast stretching"), context=None):
+        """Adjust the contrast of the video stream by setting min and max intensity values."""
+        task_name = "adjust_video_frame"
+        self.task_status[task_name] = "started"
+        try:
+            self.video_contrast_min = min_val
+            self.video_contrast_max = max_val
+            logger.info(f"Video contrast adjusted: min={min_val}, max={max_val}")
+            self.task_status[task_name] = "finished"
+            return {"success": True, "message": f"Video contrast adjusted to min={min_val}, max={max_val}."}
+        except Exception as e:
+            self.task_status[task_name] = "failed"
+            logger.error(f"Failed to adjust video frame: {e}")
+            raise e
 
     @schema_function(skip_self=True)
     async def snap(self, exposure_time: int=Field(100, description="Exposure time, in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
@@ -897,6 +928,67 @@ class Microscope:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to get chatbot URL: {e}")
             raise e
+    
+    def _format_similarity_results(self, results):
+        if not results:
+            return "No similar images found."
+
+        response_parts = ["Found similar images:"]
+        for res in results:
+            img_str = res.get('image_base64')
+            if not img_str:
+                continue
+            
+            image_bytes = base64.b64decode(img_str)
+            file_path = res.get('file_path', '')
+            file_name = os.path.basename(file_path) if file_path else "similar_image.png"
+            description = res.get('text_description', 'No description available.')
+
+            file_id = self.datastore.put('file', image_bytes, file_name, f"Similar image found: {description}")
+            img_url = self.datastore.get_url(file_id)
+
+            similarity = res.get('similarity', 0.0)
+            
+            response_parts.append(f"![Found image]({img_url})\nDescription: {description}\nSimilarity: {similarity:.4f}")
+
+        return "\n\n".join(response_parts)
+
+    @schema_function(skip_self=True)
+    async def find_similar_image_text(self, query_input: str, top_k: int, context=None):
+        """
+        Find similar image with text query.
+        Returns: A list of image information.
+        """
+        try:
+            results = await self.similarity_search_svc.find_similar_images(query_input, top_k)
+            return self._format_similarity_results(results)
+        except Exception as e:
+            logger.error(f"Failed to find similar images by text: {e}")
+            return f"An error occurred while searching for similar images: {e}"
+
+    @schema_function(skip_self=True)
+    async def find_similar_image_image(self, query_input: str, top_k: int, context=None):
+        """
+        Find similar image with image's URL query.
+        Returns: A list of image information.
+        """
+        try:
+            # download the image from query_input url
+            async with aiohttp.ClientSession() as session:
+                async with session.get(query_input) as resp:
+                    if resp.status != 200:
+                        return f"Failed to download image from {query_input}"
+                    image_bytes = await resp.read()
+        except Exception as e:
+            logger.error(f"Failed to download image from {query_input}: {e}")
+            return f"Failed to download image from {query_input}: {e}"
+        
+        try:
+            results = await self.similarity_search_svc.find_similar_images(image_bytes, top_k)
+            return self._format_similarity_results(results)
+        except Exception as e:
+            logger.error(f"Failed to find similar images by image: {e}")
+            return f"An error occurred while searching for similar images: {e}"
 
     async def fetch_ice_servers(self):
         """Fetch ICE servers from the coturn service"""
@@ -985,6 +1077,16 @@ class Microscope:
         """Image information."""
         url: str = Field(..., description="The URL of the image.")
         title: Optional[str] = Field(None, description="The title of the image.")
+    
+    class FindSimilarImageTextInput(BaseModel):
+        """Find similar image with text query."""
+        query_input: str = Field(..., description="The text of the query input for the similarity search.")
+        top_k: int = Field(..., description="The number of similar images to return.")
+
+    class FindSimilarImageImageInput(BaseModel):
+        """Find similar image with image's URL query."""
+        query_input: str = Field(..., description="The URL of the image of the query input for the similarity search.")
+        top_k: int = Field(..., description="The number of similar images to return.")
 
     async def inspect_tool(self, images: List[dict], query: str, context_description: str) -> str:
         image_infos = [
@@ -1039,6 +1141,14 @@ class Microscope:
         response = self.return_stage(context)
         return {"result": response}
 
+    async def find_similar_image_text_schema(self, config: FindSimilarImageTextInput, context=None):
+        response = await self.find_similar_image_text(config.query_input, config.top_k, context)
+        return {"result": response}
+
+    async def find_similar_image_image_schema(self, config: FindSimilarImageImageInput, context=None):
+        response = await self.find_similar_image_image(config.query_input, config.top_k, context)
+        return {"result": response}
+
     def set_illumination_schema(self, config: SetIlluminationInput, context=None):
         response = self.set_illumination(config.channel, config.intensity, context)
         return {"result": response}
@@ -1074,7 +1184,9 @@ class Microscope:
             "set_camera_exposure": self.SetCameraExposureInput.model_json_schema(),
             "do_laser_autofocus": self.DoLaserAutofocusInput.model_json_schema(),
             "set_laser_reference": self.SetLaserReferenceInput.model_json_schema(),
-            "get_status": self.GetStatusInput.model_json_schema()
+            "get_status": self.GetStatusInput.model_json_schema(),
+            "find_similar_image_text": self.FindSimilarImageTextInput.model_json_schema(),
+            "find_similar_image_image": self.FindSimilarImageImageInput.model_json_schema()
         }
 
     async def start_hypha_service(self, server, service_id):
@@ -1118,6 +1230,7 @@ class Microscope:
                 "get_all_task_status": self.get_all_task_status,
                 "reset_task_status": self.reset_task_status,
                 "reset_all_task_status": self.reset_all_task_status,
+                "adjust_video_frame": self.adjust_video_frame,
             },
         )
 
@@ -1157,7 +1270,9 @@ class Microscope:
                 "set_camera_exposure": self.set_camera_exposure_schema,
                 "do_laser_autofocus": self.do_laser_autofocus_schema,
                 "set_laser_reference": self.set_laser_reference_schema,
-                "get_status": self.get_status_schema
+                "get_status": self.get_status_schema,
+                "find_similar_image_text": self.find_similar_image_text_schema,
+                "find_similar_image_image": self.find_similar_image_image_schema
             }
         }
 
@@ -1226,8 +1341,18 @@ class Microscope:
                     raise
             else:
                 raise
+    
+    async def connect_to_similarity_search_service(self):
+        similarity_search_server = await connect_to_server(
+            {"server_url": "http://192.168.2.1:9527", "token": os.environ.get("REEF_LOCAL_TOKEN"), "workspace": os.environ.get("REEF_LOCAL_WORKSPACE"), "ping_interval": None}
+        )
+        similarity_search_svc = await similarity_search_server.get_service("image-text-similarity-search")
+        return similarity_search_svc
 
     async def setup(self):
+
+        self.similarity_search_svc = await self.connect_to_similarity_search_service()
+
         remote_token = os.environ.get("SQUID_WORKSPACE_TOKEN")
         remote_server = await connect_to_server(
                 {"server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": "squid-control", "ping_interval": None}
