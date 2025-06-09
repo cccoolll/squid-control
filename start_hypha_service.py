@@ -74,8 +74,8 @@ class MicroscopeVideoTrack(MediaStreamTrack):
         self.running = True
         self.start_time = None
         self.fps = 3 # Target FPS for WebRTC stream
-        self.frame_width = 2048
-        self.frame_height = 2048
+        self.frame_width = 720
+        self.frame_height = 720
         logger.info("MicroscopeVideoTrack initialized")
 
     def draw_crosshair(self, img, center_x, center_y, size=20, color=[255, 255, 255]):
@@ -487,8 +487,8 @@ class Microscope:
             # Get the raw image from the camera with original bit depth preserved
             raw_img = await self.squidController.snap_image(channel, intensity, exposure_time)
             
-            # Resize to 2048x2048 while preserving bit depth
-            resized_img = cv2.resize(raw_img, (2048, 2048))
+            # Resize to 3000x3000 while preserving bit depth
+            resized_img = cv2.resize(raw_img, (3000, 3000))
             
             self.get_status()
             self.task_status[task_name] = "finished"
