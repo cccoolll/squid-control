@@ -30,9 +30,49 @@ jobs:
         python -m pip install --upgrade pip
         pip install .[dev]
 
-    - name: Run tests with pytest
+    - name: Run tests with coverage
       env:
         AGENT_LENS_WORKSPACE_TOKEN: ${{ secrets.AGENT_LENS_WORKSPACE_TOKEN }}
         SQUID_WORKSPACE_TOKEN: ${{ secrets.SQUID_WORKSPACE_TOKEN }}
       run: |
-        PYTHONPATH=. pytest
+        PYTHONPATH=. pytest \
+          --cov=squid_control \
+          --cov-report=xml:coverage.xml \
+          --cov-report=html:htmlcov \
+          --cov-report=term-missing \
+          --junitxml=pytest-results.xml
+
+    - name: Upload coverage reports to Codecov
+      if: matrix.python-version == '3.10'
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+    - name: Upload coverage HTML report as artifact
+      if: matrix.python-version == '3.10'
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-html-report
+        path: htmlcov/
+        retention-days: 30
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: pytest-results-${{ matrix.python-version }}
+        path: pytest-results.xml
+        retention-days: 30
+
+    - name: Coverage comment
+      if: github.event_name == 'pull_request' && matrix.python-version == '3.10'
+      uses: py-cov-action/python-coverage-comment-action@v3
+      with:
+        GITHUB_TOKEN: ${{ github.token }}
+        MINIMUM_GREEN: 60
+        MINIMUM_ORANGE: 40

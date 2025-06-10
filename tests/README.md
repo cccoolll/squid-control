@@ -228,11 +228,70 @@ When contributing new tests:
 
 ### Coverage Reports
 
-Generate HTML coverage reports:
+The project now has comprehensive coverage reporting integrated into both local development and CI/CD workflows.
+
+#### Local Coverage Generation
+
+**Using the test runner script:**
 ```bash
-pytest --cov=squid_control --cov=start_hypha_service --cov-report=html
-open htmlcov/index.html
+# Basic coverage with terminal output
+python scripts/run_tests.py --coverage
+
+# Generate HTML report and open in browser
+python scripts/run_tests.py --coverage --html --open-html
+
+# Coverage for unit tests only
+python scripts/run_tests.py --unit-only --coverage --html
 ```
+
+**Using pytest directly:**
+```bash
+# Terminal coverage report
+pytest --cov=squid_control --cov-report=term-missing
+
+# Generate HTML coverage report
+pytest --cov=squid_control --cov-report=html:htmlcov --cov-report=term-missing
+
+# Generate XML coverage for integration tools
+pytest --cov=squid_control --cov-report=xml:coverage.xml --cov-report=term-missing
+```
+
+#### GitHub Actions Coverage Integration
+
+The CI/CD pipeline now automatically generates coverage reports for every push and pull request:
+
+**Coverage Features in CI:**
+- ✅ **Automatic Coverage Generation**: Every test run generates coverage data
+- ✅ **Multiple Report Formats**: XML for tools, HTML for human viewing, terminal for quick checks
+- ✅ **Codecov Integration**: Coverage reports automatically uploaded to Codecov
+- ✅ **Artifact Upload**: HTML coverage reports stored as downloadable artifacts
+- ✅ **PR Comments**: Coverage changes commented on pull requests
+- ✅ **Coverage Thresholds**: Green ≥60%, Orange ≥40%, Red <40%
+
+**Viewing Coverage in GitHub Actions:**
+1. **Actions Tab**: View coverage summary in test job output
+2. **Artifacts**: Download HTML coverage report from completed workflow runs
+3. **PR Comments**: View coverage changes directly in pull request discussions
+4. **Codecov Dashboard**: Detailed coverage analysis at codecov.io
+
+**Setting up Codecov (Optional):**
+1. Sign up at [codecov.io](https://codecov.io) with your GitHub account
+2. Add your repository to Codecov
+3. Add `CODECOV_TOKEN` to your repository secrets in GitHub Settings > Secrets and variables > Actions
+4. Coverage will be automatically uploaded on every CI run
+
+#### Coverage Thresholds and Quality Gates
+
+The project maintains coverage quality standards:
+- **Minimum Acceptable**: 40% (Orange/Warning level)
+- **Good Coverage**: 60% (Green/Passing level)  
+- **Current Coverage**: ~39% (as of last test run)
+
+**Improving Coverage:**
+- Focus on testing core functionality in `squid_control/control/`
+- Add tests for edge cases and error conditions
+- Test both simulation and hardware code paths
+- Prioritize testing public APIs and critical business logic
 
 ### Performance Testing
 

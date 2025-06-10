@@ -361,7 +361,7 @@ async def test_service_error_handling(test_microscope_service):
     microscope, service = test_microscope_service
     
     # Test movement with extreme values (should be handled gracefully)
-    result = await service.move_by_distance(x=10.0, y=10.0, z=1.0)
+    result = await service.move_by_distance(x=1000.0, y=1000.0, z=1.0)
     
     assert isinstance(result, dict)
     assert "success" in result
