@@ -114,12 +114,23 @@ class MicroscopeVideoTrack(MediaStreamTrack):
                 frame_height=self.frame_height
             )
             
+            current_time = time.time()
+            # Use a 90kHz timebase, common for video, to provide accurate frame timing.
+            # This prevents video from speeding up if frame acquisition is slow.
+            time_base = fractions.Fraction(1, 90000)
+            pts = int((current_time - self.start_time) * time_base.denominator)
+
             new_video_frame = VideoFrame.from_ndarray(processed_frame, format="rgb24")
-            new_video_frame.pts = self.count
-            new_video_frame.time_base = fractions.Fraction(1, self.fps)
+            new_video_frame.pts = pts
+            new_video_frame.time_base = time_base
             
             if self.count % (self.fps * 5) == 0:  # Log every 5 seconds
-                logger.info(f"MicroscopeVideoTrack: Sent frame {self.count}")
+                duration = current_time - self.start_time
+                if duration > 0:
+                    actual_fps = (self.count + 1) / duration
+                    logger.info(f"MicroscopeVideoTrack: Sent frame {self.count}, actual FPS: {actual_fps:.2f}")
+                else:
+                    logger.info(f"MicroscopeVideoTrack: Sent frame {self.count}")
             
             self.count += 1
             return new_video_frame
