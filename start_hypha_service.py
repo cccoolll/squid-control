@@ -1249,7 +1249,7 @@ class Microscope:
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
 
-        if "local" not in service_id:
+        if "local" not in service_id and "test" not in service_id:
             await self.register_service_probes(server)
         
         logger.info(f'You can use this service using the service id: {svc.id}')
