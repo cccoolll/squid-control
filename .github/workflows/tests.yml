@@ -35,6 +35,16 @@ jobs:
         echo "AGENT_LENS_WORKSPACE_TOKEN is set: ${{ secrets.AGENT_LENS_WORKSPACE_TOKEN != '' }}"
         if [ -n "$SQUID_WORKSPACE_TOKEN" ]; then
           echo "SQUID_WORKSPACE_TOKEN is available in environment"
+          echo "Token length: ${#SQUID_WORKSPACE_TOKEN}"
+          echo "Token starts with: ${SQUID_WORKSPACE_TOKEN:0:10}..."
+          echo "Token ends with: ...${SQUID_WORKSPACE_TOKEN: -10}"
+          # Check for common issues
+          if [[ "$SQUID_WORKSPACE_TOKEN" == *$'\n'* ]]; then
+            echo "⚠️  WARNING: Token contains newlines"
+          fi
+          if [[ "$SQUID_WORKSPACE_TOKEN" == *" "* ]]; then
+            echo "⚠️  WARNING: Token contains spaces"
+          fi
         else
           echo "SQUID_WORKSPACE_TOKEN is NOT available in environment"
         fi
