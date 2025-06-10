@@ -599,8 +599,8 @@ class Camera_Simulation(object):
         pass
 
     def close(self):
+        self.stop_streaming()
         self.cleanup_zarr_resources()
-        pass
         
     def cleanup_zarr_resources(self):
         """
@@ -675,9 +675,10 @@ class Camera_Simulation(object):
 
     def start_streaming(self):
         self.frame_ID_software = 0
+        self.is_streaming = True
 
     def stop_streaming(self):
-        pass
+        self.is_streaming = False
 
     def set_pixel_format(self, pixel_format):
         self.pixel_format = pixel_format
