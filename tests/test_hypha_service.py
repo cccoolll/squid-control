@@ -8,8 +8,8 @@ from hypha_rpc import connect_to_server, login
 from start_hypha_service import Microscope
 from squid_control.hypha_tools.hypha_storage import HyphaDataStore
 
-# Mark all tests in this module as asyncio
-pytestmark = pytest.mark.asyncio
+# Mark all tests in this module as asyncio and integration tests
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 # Test configuration
 TEST_SERVER_URL = "https://hypha.aicell.io"

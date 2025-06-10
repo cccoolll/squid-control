@@ -28,66 +28,23 @@ jobs:
         python -m pip install --upgrade pip
         pip install .[dev]
 
-    - name: Debug environment variables
-      shell: bash
-      run: |
-        echo "Checking environment variables..."
-        echo "SQUID_WORKSPACE_TOKEN is set: ${{ secrets.SQUID_WORKSPACE_TOKEN != '' }}"
-        echo "AGENT_LENS_WORKSPACE_TOKEN is set: ${{ secrets.AGENT_LENS_WORKSPACE_TOKEN != '' }}"
-        if [ -n "$SQUID_WORKSPACE_TOKEN" ]; then
-          echo "✅ SQUID_WORKSPACE_TOKEN is available in environment"
-          echo "Token length: ${#SQUID_WORKSPACE_TOKEN}"
-          echo "Token starts with: ${SQUID_WORKSPACE_TOKEN:0:10}..."
-          echo "Token ends with: ...${SQUID_WORKSPACE_TOKEN: -10}"
-          
-          # Check JWT format (should have 3 parts separated by dots)
-          IFS='.' read -ra TOKEN_PARTS <<< "$SQUID_WORKSPACE_TOKEN"
-          echo "Token parts (should be 3 for JWT): ${#TOKEN_PARTS[@]}"
-          
-          # Check for common issues
-          if [[ "$SQUID_WORKSPACE_TOKEN" == *$'\n'* ]]; then
-            echo "⚠️  WARNING: Token contains newlines"
-          fi
-          if [[ "$SQUID_WORKSPACE_TOKEN" == *" "* ]]; then
-            echo "⚠️  WARNING: Token contains spaces"
-          fi
-          
-          if [ ${#TOKEN_PARTS[@]} -eq 3 ]; then
-            echo "✅ Token format looks correct (JWT with 3 parts)"
-          else
-            echo "❌ Token format looks incorrect (not JWT format)"
-          fi
-        else
-          echo "❌ SQUID_WORKSPACE_TOKEN is NOT available in environment"
-        fi
-      env:
-        AGENT_LENS_WORKSPACE_TOKEN: ${{ secrets.AGENT_LENS_WORKSPACE_TOKEN }}
-        SQUID_WORKSPACE_TOKEN: ${{ secrets.SQUID_WORKSPACE_TOKEN }}
 
-    - name: Run tests with coverage
+
+    - name: Run unit tests with coverage (CI - No Integration Tests)
       shell: bash
-      env:
-        AGENT_LENS_WORKSPACE_TOKEN: ${{ secrets.AGENT_LENS_WORKSPACE_TOKEN }}
-        SQUID_WORKSPACE_TOKEN: ${{ secrets.SQUID_WORKSPACE_TOKEN }}
       run: |
-        if [ -n "$SQUID_WORKSPACE_TOKEN" ] || [ -n "$AGENT_LENS_WORKSPACE_TOKEN" ]; then
-          echo "✅ Running all tests with integration tests enabled..."
-          PYTHONPATH=. pytest \
-            --cov=squid_control \
-            --cov-report=xml:coverage.xml \
-            --cov-report=html:htmlcov \
-            --cov-report=term-missing \
-            --junitxml=pytest-results.xml
-        else
-          echo "⚠️  Tokens not available, running unit tests only..."
-          PYTHONPATH=. pytest \
-            --cov=squid_control \
-            --cov-report=xml:coverage.xml \
-            --cov-report=html:htmlcov \
-            --cov-report=term-missing \
-            --junitxml=pytest-results.xml \
-            tests/test_squid_controller.py tests/test_connection.py
-        fi
+        echo "🧪 Running UNIT TESTS ONLY in CI environment"
+        echo "📵 Integration tests are skipped in CI for reliability and speed"
+        echo "🔗 Integration tests can be run locally with: python scripts/run_tests.py --integration-only"
+        echo ""
+        PYTHONPATH=. pytest \
+          --cov=squid_control \
+          --cov-report=xml:coverage.xml \
+          --cov-report=html:htmlcov \
+          --cov-report=term-missing \
+          --junitxml=pytest-results.xml \
+          -m "not integration" \
+          -v
 
     - name: Upload coverage reports to Codecov
       if: matrix.python-version == '3.10'

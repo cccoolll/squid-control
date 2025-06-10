@@ -37,7 +37,12 @@ def main():
     parser.add_argument(
         "--integration-only",
         action="store_true",
-        help="Run only integration tests (hypha service tests)"
+        help="Run only integration tests (requires network access and tokens)"
+    )
+    parser.add_argument(
+        "--skip-integration",
+        action="store_true",
+        help="Skip integration tests (recommended for CI/CD)"
     )
     parser.add_argument(
         "--html",
@@ -69,13 +74,25 @@ def main():
     if args.verbose:
         cmd.append("-v")
     
-    # Select test files
+    # Select test files and markers
     if args.unit_only:
         cmd.append("tests/test_squid_controller.py")
+        print("🧪 Running UNIT TESTS only")
     elif args.integration_only:
-        cmd.append("tests/test_hypha_service.py")
+        cmd.extend(["-m", "integration"])
+        cmd.append("tests/")
+        print("🌐 Running INTEGRATION TESTS only (requires network and tokens)")
+        # Check for required tokens
+        if not os.environ.get("SQUID_WORKSPACE_TOKEN"):
+            print("⚠️  WARNING: SQUID_WORKSPACE_TOKEN not set - integration tests may fail")
+            print("   Set the token with: export SQUID_WORKSPACE_TOKEN=your_token")
+    elif args.skip_integration:
+        cmd.extend(["-m", "not integration"]) 
+        cmd.append("tests/")
+        print("🧪 Running ALL TESTS except integration tests")
     else:
         cmd.append("tests/")
+        print("🔄 Running ALL TESTS (including integration tests)")
     
     # Add simulation marker if requested
     if args.simulation:

@@ -6,6 +6,7 @@ import pytest
 from hypha_rpc import connect_to_server
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_connection():
     token = os.environ.get('SQUID_WORKSPACE_TOKEN')
     if not token:

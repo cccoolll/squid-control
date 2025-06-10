@@ -240,8 +240,14 @@ python scripts/run_tests.py --coverage
 # Generate HTML report and open in browser
 python scripts/run_tests.py --coverage --html --open-html
 
-# Coverage for unit tests only
+# Coverage for unit tests only (recommended for development)
 python scripts/run_tests.py --unit-only --coverage --html
+
+# Skip integration tests (CI/CD mode)
+python scripts/run_tests.py --skip-integration --coverage
+
+# Run integration tests only (requires network and tokens)
+python scripts/run_tests.py --integration-only --coverage
 ```
 
 **Using pytest directly:**
