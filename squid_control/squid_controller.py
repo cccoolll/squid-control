@@ -631,13 +631,13 @@ class SquidController:
         self.liveController.set_illumination(channel, intensity)
         self.liveController.turn_on_illumination()
         while self.microcontroller.is_busy():
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.005)
 
         if self.is_simulation:
             await self.send_trigger_simulation(channel, intensity, exposure_time)
         else:
             self.camera.send_trigger()
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.005)
 
         while self.microcontroller.is_busy():
             await asyncio.sleep(0.005)
