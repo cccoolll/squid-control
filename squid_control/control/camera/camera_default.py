@@ -5,8 +5,11 @@ import numpy as np
 from PIL import Image
 try:
     import squid_control.control.gxipy as gx
-except:
-    print("gxipy import error")
+    GX_AVAILABLE = True
+except ImportError:
+    print("gxipy import error - hardware camera functionality not available")
+    GX_AVAILABLE = False
+    gx = None
 
 from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting
@@ -17,6 +20,8 @@ import asyncio
 script_dir = os.path.dirname(__file__)
 
 def get_sn_by_model(model_name):
+    if not GX_AVAILABLE:
+        return None
     try:
         device_manager = gx.DeviceManager()
         device_num, device_info_list = device_manager.update_device_list()
@@ -34,6 +39,8 @@ class Camera(object):
     def __init__(
         self, sn=None, is_global_shutter=False, rotate_image_angle=None, flip_image=None
     ):
+        if not GX_AVAILABLE:
+            raise RuntimeError("Hardware camera not available - gxipy not installed or not in simulation mode")
 
         # many to be purged
         self.sn = sn

@@ -110,7 +110,33 @@ python_classes = "Test*"
 python_functions = "test_*"
 
 [tool.coverage.run]
+branch = true
 source = ["squid_control"]
+omit = [
+    # Hardware-specific modules not used in simulation mode
+    "squid_control/control/gxipy/*",
+    "squid_control/control/camera/camera_flir.py",
+    "squid_control/control/camera/camera_toupcam.py", 
+    "squid_control/control/camera/camera_TIS.py",
+    "squid_control/control/processing_handler.py",
+    "squid_control/control/serial_peripherals.py",
+    # AI/service modules not used in core simulation
+    "squid_control/hypha_tools/chatbot/*",
+    "squid_control/hypha_tools/hypha_storage.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError", 
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    # Hardware-only code paths
+    "if.*GX_AVAILABLE",
+    "except ImportError:",
+]
 
 [tool.ruff]
 line-length = 88

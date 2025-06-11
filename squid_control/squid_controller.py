@@ -7,8 +7,15 @@ from squid_control.control.camera import get_camera
 from squid_control.control.utils import rotate_and_flip_image
 import cv2
 import logging
-import squid_control.control.serial_peripherals as serial_peripherals
 import matplotlib.path as mpath
+# Import serial_peripherals conditionally 
+try:
+    import squid_control.control.serial_peripherals as serial_peripherals
+    SERIAL_PERIPHERALS_AVAILABLE = True
+except ImportError:
+    print("serial_peripherals import error - hardware peripheral functionality not available")
+    SERIAL_PERIPHERALS_AVAILABLE = False
+    serial_peripherals = None
 if CONFIG.SUPPORT_LASER_AUTOFOCUS:
     import squid_control.control.core_displacement_measurement as core_displacement_measurement
 
@@ -51,7 +58,7 @@ class SquidController:
         load_config(config_path, False)
         # load objects
         if self.is_simulation:
-            if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL:
+            if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL and SERIAL_PERIPHERALS_AVAILABLE:
                 self.xlight = serial_peripherals.XLight_Simulation()
             if CONFIG.SUPPORT_LASER_AUTOFOCUS:
                 self.camera = camera.Camera_Simulation(
@@ -66,7 +73,7 @@ class SquidController:
                 )
             self.microcontroller = microcontroller.Microcontroller_Simulation()
         else:
-            if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL:
+            if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL and SERIAL_PERIPHERALS_AVAILABLE:
                 self.xlight = serial_peripherals.XLight()
             try:
                 if CONFIG.SUPPORT_LASER_AUTOFOCUS:
