@@ -485,12 +485,17 @@ class SquidController:
     def move_to_well(self,row,column, wellplate_type='96'):
         if wellplate_type == '6':
             wellplate_format = WELLPLATE_FORMAT_6
+        elif wellplate_type == '12':
+            wellplate_format = WELLPLATE_FORMAT_12
         elif wellplate_type == '24':
             wellplate_format = WELLPLATE_FORMAT_24
         elif wellplate_type == '96':
             wellplate_format = WELLPLATE_FORMAT_96
         elif wellplate_type == '384':
-            wellplate_format = WELLPLATE_FORMAT_384 
+            wellplate_format = WELLPLATE_FORMAT_384
+        else:
+            # Default to 96-well plate if unsupported type is provided
+            wellplate_format = WELLPLATE_FORMAT_96
         
         if column != 0 and column != None:
             mm_per_ustep_X = CONFIG.SCREW_PITCH_X_MM/(self.navigationController.x_microstepping*CONFIG.FULLSTEPS_PER_REV_X)

@@ -260,13 +260,6 @@ class Microscope:
         else:
             return False
 
-    async def ping(self, context=None):
-        if self.login_required and context and context.get("user"):
-            assert self.check_permission(
-                context.get("user")
-            ), "You don't have permission to use the chatbot, please sign up and wait for approval"
-        return "pong"
-
     def get_task_status(self, task_name):
         """Get the status of a specific task"""
         return self.task_status.get(task_name, "unknown")
