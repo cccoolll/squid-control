@@ -45,6 +45,7 @@ jobs:
         echo ""
         pytest \
           --cov=squid_control \
+          --cov=start_hypha_service.py \
           --cov-config=pyproject.toml \
           --cov-report=xml:coverage.xml \
           --cov-report=html:htmlcov \

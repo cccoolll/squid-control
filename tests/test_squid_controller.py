@@ -2,6 +2,8 @@ import pytest
 import asyncio
 import numpy as np
 import os
+import tempfile
+from unittest.mock import patch
 from squid_control.squid_controller import SquidController
 from squid_control.control.config import CONFIG, SIMULATED_CAMERA, WELLPLATE_FORMAT_96, WELLPLATE_FORMAT_384 # Import necessary config
 
