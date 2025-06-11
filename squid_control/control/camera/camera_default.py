@@ -3,13 +3,28 @@ import glob
 import time
 import numpy as np
 from PIL import Image
-try:
-    import squid_control.control.gxipy as gx
-    GX_AVAILABLE = True
-except ImportError:
-    print("gxipy import error - hardware camera functionality not available")
+import os
+import sys
+
+# Check if we're in simulation mode by looking for --simulation in sys.argv or environment
+_is_simulation_mode = (
+    "--simulation" in sys.argv or 
+    os.environ.get("SQUID_SIMULATION_MODE", "").lower() in ["true", "1", "yes"] or
+    os.environ.get("PYTEST_CURRENT_TEST") is not None  # Running in pytest
+)
+
+if _is_simulation_mode:
+    print("Simulation mode detected - skipping hardware camera imports")
     GX_AVAILABLE = False
     gx = None
+else:
+    try:
+        import squid_control.control.gxipy as gx
+        GX_AVAILABLE = True
+    except ImportError as e:
+        print(f"gxipy import error - hardware camera functionality not available: {e}")
+        GX_AVAILABLE = False
+        gx = None
 
 from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting

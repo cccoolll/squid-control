@@ -8,14 +8,27 @@ from squid_control.control.utils import rotate_and_flip_image
 import cv2
 import logging
 import matplotlib.path as mpath
-# Import serial_peripherals conditionally 
-try:
-    import squid_control.control.serial_peripherals as serial_peripherals
-    SERIAL_PERIPHERALS_AVAILABLE = True
-except ImportError:
-    print("serial_peripherals import error - hardware peripheral functionality not available")
+# Import serial_peripherals conditionally based on simulation mode
+import sys
+
+_is_simulation_mode = (
+    "--simulation" in sys.argv or 
+    os.environ.get("SQUID_SIMULATION_MODE", "").lower() in ["true", "1", "yes"] or
+    os.environ.get("PYTEST_CURRENT_TEST") is not None  # Running in pytest
+)
+
+if _is_simulation_mode:
+    print("Simulation mode detected - skipping hardware peripheral imports")
     SERIAL_PERIPHERALS_AVAILABLE = False
     serial_peripherals = None
+else:
+    try:
+        import squid_control.control.serial_peripherals as serial_peripherals
+        SERIAL_PERIPHERALS_AVAILABLE = True
+    except ImportError as e:
+        print(f"serial_peripherals import error - hardware peripheral functionality not available: {e}")
+        SERIAL_PERIPHERALS_AVAILABLE = False
+        serial_peripherals = None
 if CONFIG.SUPPORT_LASER_AUTOFOCUS:
     import squid_control.control.core_displacement_measurement as core_displacement_measurement
 

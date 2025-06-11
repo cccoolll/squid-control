@@ -32,12 +32,16 @@ jobs:
 
     - name: Run unit tests with coverage (CI - No Integration Tests)
       shell: bash
+      env:
+        SQUID_SIMULATION_MODE: "true"
+        PYTHONPATH: "."
       run: |
         echo "🧪 Running UNIT TESTS ONLY in CI environment"
-        echo "📵 Integration tests are skipped in CI for reliability and speed"
+        echo "📵 Integration tests are skipped in CI for reliability and speed" 
+        echo "🔧 Hardware modules excluded in simulation mode"
         echo "🔗 Integration tests can be run locally with: python scripts/run_tests.py --integration-only"
         echo ""
-        PYTHONPATH=. pytest \
+        pytest \
           --cov=squid_control \
           --cov-config=pyproject.toml \
           --cov-report=xml:coverage.xml \
