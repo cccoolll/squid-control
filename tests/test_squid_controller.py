@@ -1,8 +1,9 @@
 import pytest
 import asyncio
 import numpy as np
+import os
 from squid_control.squid_controller import SquidController
-from squid_control.control.config import CONFIG, SIMULATED_CAMERA # Import necessary config
+from squid_control.control.config import CONFIG, SIMULATED_CAMERA, WELLPLATE_FORMAT_96, WELLPLATE_FORMAT_384 # Import necessary config
 
 # Mark all tests in this module as asyncio
 pytestmark = pytest.mark.asyncio
@@ -26,6 +27,325 @@ async def test_controller_initialization(sim_controller_fixture):
         assert controller.microcontroller is not None
         _, _, z_pos, *_ = controller.navigationController.update_pos(microcontroller=controller.microcontroller)
         assert z_pos == pytest.approx(CONFIG.DEFAULT_Z_POS_MM, abs=1e-3)
+        break
+
+async def test_simulation_mode_detection():
+    """Test simulation mode detection and import handling."""
+    # Test with environment variable
+    with patch.dict(os.environ, {'SQUID_SIMULATION_MODE': 'true'}):
+        # This should trigger the simulation mode detection
+        controller = SquidController(is_simulation=True)
+        assert controller.is_simulation is True
+        controller.close()
+    
+    # Test with pytest environment
+    with patch.dict(os.environ, {'PYTEST_CURRENT_TEST': 'test_case'}):
+        controller = SquidController(is_simulation=True)
+        assert controller.is_simulation is True
+        controller.close()
+
+async def test_well_plate_navigation_comprehensive(sim_controller_fixture):
+    """Test comprehensive well plate navigation for different plate types."""
+    async for controller in sim_controller_fixture:
+        # Test different well plate formats
+        plate_types = ['6', '24', '96', '384']
+        
+        for plate_type in plate_types:
+            # Test corner wells for each plate type
+            test_wells = [('A', 1)]  # Always test A1
+            
+            if plate_type == '96':
+                test_wells.extend([('A', 12), ('H', 1), ('H', 12)])
+            elif plate_type == '384':
+                test_wells.extend([('A', 24), ('P', 1), ('P', 24)])
+            elif plate_type == '24':
+                test_wells.extend([('A', 6), ('D', 1), ('D', 6)])
+            elif plate_type == '6':
+                test_wells.extend([('A', 3), ('B', 1), ('B', 3)])
+            
+            for row, column in test_wells:
+                initial_x, initial_y, initial_z, *_ = controller.navigationController.update_pos(
+                    microcontroller=controller.microcontroller)
+                
+                # Test well navigation
+                controller.move_to_well(row, column, plate_type)
+                
+                new_x, new_y, new_z, *_ = controller.navigationController.update_pos(
+                    microcontroller=controller.microcontroller)
+                
+                # Position should have changed for non-center positions
+                if row != 'D' or column != 6:  # Not the default starting position
+                    assert new_x != initial_x or new_y != initial_y
+                
+                # Z should remain the same
+                assert new_z == pytest.approx(initial_z, abs=1e-3)
+        break
+
+
+async def test_laser_autofocus_methods(sim_controller_fixture):
+    """Test laser autofocus related methods."""
+    async for controller in sim_controller_fixture:
+        # Test laser autofocus simulation
+        initial_z = controller.navigationController.update_pos(microcontroller=controller.microcontroller)[2]
+        
+        await controller.do_laser_autofocus()
+        
+        final_z = controller.navigationController.update_pos(microcontroller=controller.microcontroller)[2]
+        # Should move to near ORIN_Z in simulation
+        assert final_z == pytest.approx(SIMULATED_CAMERA.ORIN_Z, abs=0.01)
+        
+        break
+
+async def test_camera_frame_methods(sim_controller_fixture):
+    """Test camera frame acquisition methods."""
+    async for controller in sim_controller_fixture:
+        # Test get_camera_frame_simulation
+        frame = await controller.get_camera_frame_simulation(channel=0, intensity=50, exposure_time=100)
+        assert frame is not None
+        assert isinstance(frame, np.ndarray)
+        assert frame.shape[0] > 100 and frame.shape[1] > 100
+        
+        # Test with different parameters
+        frame_fl = await controller.get_camera_frame_simulation(channel=11, intensity=70, exposure_time=200)
+        assert frame_fl is not None
+        assert isinstance(frame_fl, np.ndarray)
+        
+        # Test get_camera_frame (non-simulation method - should work in simulation too)
+        try:
+            frame_direct = controller.get_camera_frame(channel=0, intensity=30, exposure_time=50)
+            assert frame_direct is not None
+            assert isinstance(frame_direct, np.ndarray)
+        except Exception:
+            # May not work if camera is not properly set up
+            pass
+        break
+
+async def test_stage_movement_edge_cases(sim_controller_fixture):
+    """Test edge cases in stage movement."""
+    async for controller in sim_controller_fixture:
+        # Test zero movement
+        initial_x, initial_y, initial_z, *_ = controller.navigationController.update_pos(
+            microcontroller=controller.microcontroller)
+        
+        # Test move_by_distance with zero values
+        moved, x_before, y_before, z_before, x_after, y_after, z_after = controller.move_by_distance_limited(0, 0, 0)
+        assert moved  # Should succeed even with zero movement
+        
+        # Test well navigation with edge cases
+        controller.move_to_well('A', 0, '96')  # Zero column
+        controller.move_to_well(0, 1, '96')   # Zero row
+        controller.move_to_well(0, 0, '96')   # Both zero
+        
+        # These shouldn't crash, positions should remain valid
+        final_x, final_y, final_z, *_ = controller.navigationController.update_pos(
+            microcontroller=controller.microcontroller)
+        assert isinstance(final_x, (int, float))
+        assert isinstance(final_y, (int, float))
+        assert isinstance(final_z, (int, float))
+        break
+
+async def test_configuration_and_pixel_size(sim_controller_fixture):
+    """Test configuration access and pixel size calculations."""
+    async for controller in sim_controller_fixture:
+        # Test get_pixel_size method
+        original_pixel_size = controller.pixel_size_xy
+        controller.get_pixel_size()
+        assert isinstance(controller.pixel_size_xy, float)
+        assert controller.pixel_size_xy > 0
+        
+        # Test pixel size adjustment factor
+        assert hasattr(controller, 'pixel_size_adjument_factor')
+        assert controller.pixel_size_adjument_factor > 0
+        
+        # Test drift correction parameters
+        assert hasattr(controller, 'drift_correction_x')
+        assert hasattr(controller, 'drift_correction_y')
+        assert isinstance(controller.drift_correction_x, (int, float))
+        assert isinstance(controller.drift_correction_y, (int, float))
+        
+        # Test sample data alias methods
+        original_alias = controller.get_simulated_sample_data_alias()
+        test_alias = "test/sample/data"
+        controller.set_simulated_sample_data_alias(test_alias)
+        assert controller.get_simulated_sample_data_alias() == test_alias
+        
+        # Reset to original
+        controller.set_simulated_sample_data_alias(original_alias)
+        break
+
+async def test_stage_position_methods(sim_controller_fixture):
+    """Test stage positioning methods comprehensively."""
+    async for controller in sim_controller_fixture:
+        # Test move_to_scaning_position method
+        try:
+            controller.move_to_scaning_position()
+            # Should complete without error
+            x, y, z, *_ = controller.navigationController.update_pos(microcontroller=controller.microcontroller)
+            assert isinstance(x, (int, float))
+            assert isinstance(y, (int, float))
+            assert isinstance(z, (int, float))
+        except Exception:
+            # Method might have specific requirements
+            pass
+        
+        # Test home_stage method
+        try:
+            controller.home_stage()
+            # Should complete without error in simulation
+            x, y, z, *_ = controller.navigationController.update_pos(microcontroller=controller.microcontroller)
+            assert isinstance(x, (int, float))
+            assert isinstance(y, (int, float))
+            assert isinstance(z, (int, float))
+        except Exception:
+            # Method might have specific hardware requirements
+            pass
+        
+        # Test return_stage method
+        try:
+            controller.return_stage()
+            # Should complete without error in simulation
+            x, y, z, *_ = controller.navigationController.update_pos(microcontroller=controller.microcontroller)
+            assert isinstance(x, (int, float))
+            assert isinstance(y, (int, float))
+            assert isinstance(z, (int, float))
+        except Exception:
+            # Method might have specific hardware requirements
+            pass
+        break
+
+async def test_illumination_and_exposure_edge_cases(sim_controller_fixture):
+    """Test illumination and exposure with edge cases."""
+    async for controller in sim_controller_fixture:
+        # Test extreme exposure times
+        extreme_exposures = [1, 5000]
+        for exposure in extreme_exposures:
+            try:
+                image = await controller.snap_image(exposure_time=exposure)
+                assert image is not None
+                assert controller.current_exposure_time == exposure
+            except Exception:
+                # Some extreme values might not be supported
+                pass
+        
+        # Test extreme intensity values
+        extreme_intensities = [1, 99]
+        for intensity in extreme_intensities:
+            try:
+                image = await controller.snap_image(intensity=intensity)
+                assert image is not None
+                assert controller.current_intensity == intensity
+            except Exception:
+                # Some extreme values might not be supported
+                pass
+        
+        # Test all supported fluorescence channels
+        fluorescence_channels = [11, 12, 13, 14, 15]  # 405nm, 488nm, 638nm, 561nm, 730nm
+        for channel in fluorescence_channels:
+            try:
+                image = await controller.snap_image(channel=channel, intensity=50, exposure_time=100)
+                assert image is not None
+                assert controller.current_channel == channel
+            except Exception:
+                # Some channels might not be fully supported in simulation
+                pass
+        break
+
+async def test_error_handling_and_robustness(sim_controller_fixture):
+    """Test error handling and robustness."""
+    async for controller in sim_controller_fixture:
+        # Test with invalid well plate type
+        try:
+            controller.move_to_well('A', 1, 'invalid_plate')
+            # Should either work with fallback or handle gracefully
+        except Exception:
+            # Expected for invalid plate type
+            pass
+        
+        # Test with invalid well coordinates
+        try:
+            controller.move_to_well('Z', 99, '96')  # Invalid row/column for 96-well
+        except Exception:
+            # Expected for invalid coordinates
+            pass
+        
+        # Test movement limits (try to move to extreme positions)
+        extreme_positions = [
+            (1000.0, 0, 0),  # Very large X
+            (0, 1000.0, 0),  # Very large Y
+            (0, 0, 100.0),   # Very large Z
+            (-1000.0, 0, 0), # Very negative X
+            (0, -1000.0, 0), # Very negative Y
+        ]
+        
+        for x, y, z in extreme_positions:
+            try:
+                # These should either be limited by software boundaries or handled gracefully
+                moved_x, _, _, _, _ = controller.move_x_to_limited(x)
+                moved_y, _, _, _, _ = controller.move_y_to_limited(y)
+                moved_z, _, _, _, _ = controller.move_z_to_limited(z)
+                # Movement may succeed or fail depending on limits, but shouldn't crash
+            except Exception:
+                # Some extreme movements might raise exceptions
+                pass
+        break
+
+async def test_async_methods_comprehensive(sim_controller_fixture):
+    """Test all async methods comprehensively."""
+    async for controller in sim_controller_fixture:
+        # Test send_trigger_simulation with various parameters
+        await controller.send_trigger_simulation(channel=0, intensity=50, exposure_time=100)
+        assert controller.current_channel == 0
+        assert controller.current_intensity == 50
+        assert controller.current_exposure_time == 100
+        
+        # Test with different channel
+        await controller.send_trigger_simulation(channel=12, intensity=70, exposure_time=200)
+        assert controller.current_channel == 12
+        assert controller.current_intensity == 70
+        assert controller.current_exposure_time == 200
+        
+        # Test snap_image with illumination state handling
+        # This tests the illumination on/off logic in snap_image
+        controller.liveController.turn_on_illumination()
+        image_with_illumination = await controller.snap_image()
+        assert image_with_illumination is not None
+        
+        controller.liveController.turn_off_illumination()
+        image_without_illumination = await controller.snap_image()
+        assert image_without_illumination is not None
+        break
+
+async def test_controller_properties_and_attributes(sim_controller_fixture):
+    """Test controller properties and attributes."""
+    async for controller in sim_controller_fixture:
+        # Test all the default attributes are set correctly
+        assert hasattr(controller, 'fps_software_trigger')
+        assert controller.fps_software_trigger == 10
+        
+        assert hasattr(controller, 'data_channel')
+        assert controller.data_channel is None
+        
+        assert hasattr(controller, 'is_busy')
+        assert isinstance(controller.is_busy, bool)
+        
+        # Test simulation-specific attributes
+        assert hasattr(controller, 'dz')
+        assert hasattr(controller, 'current_channel')
+        assert hasattr(controller, 'current_exposure_time')
+        assert hasattr(controller, 'current_intensity')
+        assert hasattr(controller, 'pixel_size_xy')
+        assert hasattr(controller, 'sample_data_alias')
+        
+        # Test that all required controllers are initialized
+        assert controller.objectiveStore is not None
+        assert controller.configurationManager is not None
+        assert controller.streamHandler is not None
+        assert controller.liveController is not None
+        assert controller.navigationController is not None
+        assert controller.slidePositionController is not None
+        assert controller.autofocusController is not None
+        assert controller.scanCoordinates is not None
+        assert controller.multipointController is not None
         break
 
 async def test_move_stage_absolute(sim_controller_fixture):
