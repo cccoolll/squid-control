@@ -9,7 +9,7 @@ jobs:
       image: python:3.10.13-slim
     strategy:
       matrix:
-        python-version: ["3.10", "3.11"]
+        python-version: ["3.10"]
 
     steps:
     - uses: actions/checkout@v4
@@ -30,16 +30,18 @@ jobs:
 
 
 
-    - name: Run unit tests with coverage (CI - No Integration Tests)
+    - name: Run all tests with coverage (CI - Including Integration Tests)
       shell: bash
       env:
         SQUID_SIMULATION_MODE: "true"
         PYTHONPATH: "."
+        SQUID_WORKSPACE_TOKEN: ${{ secrets.SQUID_WORKSPACE_TOKEN }}
       run: |
-        echo "🧪 Running UNIT TESTS ONLY in CI environment"
-        echo "📵 Integration tests are skipped in CI for reliability and speed" 
+        echo "🧪 Running ALL TESTS in CI environment (unit + Hypha RPC integration)"
+        echo "🌐 Integration tests are INCLUDED in CI" 
         echo "🔧 Hardware modules excluded in simulation mode"
-        echo "🔗 Integration tests can be run locally with: python scripts/run_tests.py --integration-only"
+        echo "💡 To run only unit tests locally: python scripts/run_tests.py --skip-integration"
+        echo "💡 To run only integration with Hypha RPC tests locally: python scripts/run_tests.py --integration-only"
         echo ""
         pytest \
           --cov=squid_control \
@@ -48,7 +50,6 @@ jobs:
           --cov-report=html:htmlcov \
           --cov-report=term-missing \
           --junitxml=pytest-results.xml \
-          -m "not integration" \
           -v
 
     - name: Upload coverage reports to Codecov
