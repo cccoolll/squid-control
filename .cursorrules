@@ -168,7 +168,7 @@ SERVER_URL = "https://hypha.aicell.io"
    - Verify memory usage patterns with Zarr data
    - Test concurrent access to simulation resources
 
-4. **Hardware Testing - Future Feature**:
+4. **Hardware Testing - Don't Work on it now. Future Feature**:
    - Hardware testing is a future enhancement
    - Physical hardware integration should only be attempted after complete simulation validation
    - Real hardware testing requires additional safety protocols and hardware setup
