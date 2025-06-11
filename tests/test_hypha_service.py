@@ -5,7 +5,6 @@ import os
 import time
 import uuid
 import numpy as np
-import cv2
 import json
 from hypha_rpc import connect_to_server, login
 from start_hypha_service import Microscope, MicroscopeVideoTrack
