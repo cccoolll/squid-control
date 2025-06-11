@@ -49,8 +49,12 @@ async def test_microscope_service():
     
     print(f"🔗 Connecting to {TEST_SERVER_URL} workspace {TEST_WORKSPACE}...")
     
-    # Use simple connection approach like test_connection.py
+    server = None
+    microscope = None
+    service = None
+    
     try:
+        # Use simple connection approach like test_connection.py
         server = await connect_to_server({
             "server_url": TEST_SERVER_URL,
             "token": token,
@@ -58,29 +62,25 @@ async def test_microscope_service():
             "ping_interval": None
         })
         print("✅ Connected to server")
-    except Exception as e:
-        pytest.fail(f"Failed to connect to server: {e}")
-    
-    # Create unique service ID for this test
-    test_id = f"test-microscope-{uuid.uuid4().hex[:8]}"
-    print(f"Creating test service with ID: {test_id}")
-    
-    # Create real microscope instance in simulation mode
-    print("🔬 Creating Microscope instance...")
-    start_time = time.time()
-    microscope = Microscope(is_simulation=True, is_local=False)
-    init_time = time.time() - start_time
-    print(f"✅ Microscope initialization took {init_time:.1f} seconds")
-    
-    microscope.service_id = test_id
-    microscope.login_required = False  # Disable auth for tests
-    microscope.authorized_emails = None
-    
-    # Create a simple datastore for testing
-    microscope.datastore = SimpleTestDataStore()
-    
-    service = None
-    try:
+        
+        # Create unique service ID for this test
+        test_id = f"test-microscope-{uuid.uuid4().hex[:8]}"
+        print(f"Creating test service with ID: {test_id}")
+        
+        # Create real microscope instance in simulation mode
+        print("🔬 Creating Microscope instance...")
+        start_time = time.time()
+        microscope = Microscope(is_simulation=True, is_local=False)
+        init_time = time.time() - start_time
+        print(f"✅ Microscope initialization took {init_time:.1f} seconds")
+        
+        microscope.service_id = test_id
+        microscope.login_required = False  # Disable auth for tests
+        microscope.authorized_emails = None
+        
+        # Create a simple datastore for testing
+        microscope.datastore = SimpleTestDataStore()
+        
         # Register the service
         print("📝 Registering microscope service...")
         service_start_time = time.time()
@@ -98,16 +98,38 @@ async def test_microscope_service():
     except Exception as e:
         pytest.fail(f"Failed to create test service: {e}")
     finally:
-        # Cleanup: close the microscope properly
-        print(f"Cleaning up test service {test_id}")
-        try:
-            if microscope and hasattr(microscope, 'squidController'):
-                microscope.squidController.close()
-        except Exception as cleanup_error:
-            print(f"Error during cleanup: {cleanup_error}")
+        # Comprehensive cleanup
+        print(f"🧹 Starting cleanup...")
         
-        # Give a moment for cleanup to complete
-        await asyncio.sleep(0.1)
+        # Close the SquidController and camera resources properly
+        if microscope and hasattr(microscope, 'squidController'):
+            try:
+                print("Closing SquidController...")
+                if hasattr(microscope.squidController, 'camera'):
+                    camera = microscope.squidController.camera
+                    if hasattr(camera, 'cleanup_zarr_resources_async'):
+                        try:
+                            await camera.cleanup_zarr_resources_async()
+                        except Exception as camera_error:
+                            print(f"Camera cleanup error: {camera_error}")
+                
+                microscope.squidController.close()
+                print("✅ SquidController closed")
+            except Exception as controller_error:
+                print(f"Error closing SquidController: {controller_error}")
+        
+        # Close server connection if it exists
+        if server and hasattr(server, 'disconnect'):
+            try:
+                print("Disconnecting from server...")
+                await server.disconnect()
+                print("✅ Server disconnected")
+            except Exception as server_error:
+                print(f"Error disconnecting server: {server_error}")
+        
+        # Give time for all cleanup operations to complete
+        await asyncio.sleep(0.5)
+        print("✅ Cleanup completed")
 
 # Basic connectivity tests
 async def test_service_registration_and_connectivity(test_microscope_service):

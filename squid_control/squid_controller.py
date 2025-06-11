@@ -454,28 +454,28 @@ class SquidController:
     def get_simulated_sample_data_alias(self):
         return self.sample_data_alias
 
-    def do_autofocus(self):
+    async def do_autofocus(self):
         
         if self.is_simulation:
-            self.do_autofocus_simulation()
+            await self.do_autofocus_simulation()
         else:
             self.autofocusController.set_deltaZ(1.524)
             self.autofocusController.set_N(15)
             self.autofocusController.autofocus()
             self.autofocusController.wait_till_autofocus_has_completed()
 
-    def do_autofocus_simulation(self):
+    async def do_autofocus_simulation(self):
         
         random_z = SIMULATED_CAMERA.ORIN_Z + np.random.normal(0,0.001)
         self.navigationController.move_z_to(random_z)
-        self.send_trigger_simulation(self.current_channel, self.current_intensity, self.current_exposure_time)
+        await self.send_trigger_simulation(self.current_channel, self.current_intensity, self.current_exposure_time)
         
     def init_laser_autofocus(self):
         self.laserAutofocusController.initialize_auto()
 
-    def do_laser_autofocus(self):
+    async def do_laser_autofocus(self):
         if self.is_simulation:
-            self.do_autofocus_simulation()
+            await self.do_autofocus_simulation()
         else:
             self.laserAutofocusController.move_to_target(0)
     

@@ -847,7 +847,7 @@ class Microscope:
             raise e
 
     @schema_function(skip_self=True)
-    def auto_focus(self, context=None):
+    async def auto_focus(self, context=None):
         """
         Do contrast-based autofocus
         Returns: A string message
@@ -855,7 +855,7 @@ class Microscope:
         task_name = "auto_focus"
         self.task_status[task_name] = "started"
         try:
-            self.squidController.do_autofocus()
+            await self.squidController.do_autofocus()
             logger.info('The camera is auto-focused')
             self.task_status[task_name] = "finished"
             return 'The camera is auto-focused'
@@ -865,7 +865,7 @@ class Microscope:
             raise e
     
     @schema_function(skip_self=True)
-    def do_laser_autofocus(self, context=None):
+    async def do_laser_autofocus(self, context=None):
         """
         Do reflection-based autofocus
         Returns: A string message
@@ -873,7 +873,7 @@ class Microscope:
         task_name = "do_laser_autofocus"
         self.task_status[task_name] = "started"
         try:
-            self.squidController.do_laser_autofocus()
+            await self.squidController.do_laser_autofocus()
             logger.info('The camera is auto-focused')
             self.task_status[task_name] = "finished"
             return 'The camera is auto-focused'
@@ -1128,8 +1128,8 @@ class Microscope:
         result = self.move_to_position(x, y, z, context)
         return result['message']
     
-    def auto_focus_schema(self, config: AutoFocusInput, context=None):
-        self.auto_focus(context)
+    async def auto_focus_schema(self, config: AutoFocusInput, context=None):
+        await self.auto_focus(context)
         return "Auto-focus completed."
 
     async def snap_image_schema(self, config: SnapImageInput, context=None):
@@ -1168,8 +1168,8 @@ class Microscope:
         response = self.set_camera_exposure(config.channel, config.exposure_time, context)
         return {"result": response}
 
-    def do_laser_autofocus_schema(self, context=None):
-        response = self.do_laser_autofocus(context)
+    async def do_laser_autofocus_schema(self, context=None):
+        response = await self.do_laser_autofocus(context)
         return {"result": response}
 
     def set_laser_reference_schema(self, context=None):

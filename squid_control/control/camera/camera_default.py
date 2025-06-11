@@ -626,18 +626,29 @@ class Camera_Simulation(object):
         
     def cleanup_zarr_resources(self):
         """
-        Synchronous wrapper for async cleanup method
+        Synchronous cleanup method for Zarr resources
         """
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Create a new event loop if the current one is already running
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
-                new_loop.run_until_complete(self._cleanup_zarr_resources_async())
-                new_loop.close()
-            else:
-                loop.run_until_complete(self._cleanup_zarr_resources_async())
+            if self.zarr_image_manager:
+                print("Closing ZarrImageManager resources...")
+                # Clear the cache to free memory
+                if hasattr(self.zarr_image_manager, 'zarr_groups_cache'):
+                    self.zarr_image_manager.zarr_groups_cache.clear()
+                    self.zarr_image_manager.zarr_groups_timestamps.clear()
+                
+                # Don't call async methods from sync context
+                self.zarr_image_manager = None
+                print("ZarrImageManager resources cleared")
+                
+            if self.artifact_manager:
+                print("Closing ArtifactManager resources...")
+                # Clear the cache to free memory
+                if hasattr(self.artifact_manager, 'zarr_groups_cache'):
+                    self.artifact_manager.zarr_groups_cache.clear()
+                    self.artifact_manager.zarr_groups_timestamps.clear()
+                
+                self.artifact_manager = None
+                print("ArtifactManager resources cleared")
         except Exception as e:
             print(f"Error in cleanup_zarr_resources: {e}")
         
