@@ -54,144 +54,84 @@ async def test_microscope_service():
     server = None
     microscope = None
     service = None
-    connection_successful = False
     
     try:
-        # Test connection with timeout and better error handling
-        try:
-            server = await asyncio.wait_for(
-                connect_to_server({
-                    "server_url": TEST_SERVER_URL,
-                    "token": token,
-                    "workspace": TEST_WORKSPACE,
-                    "ping_interval": None,
-                    "timeout": 30  # Add timeout
-                }), 
-                timeout=60
-            )
-            connection_successful = True
+        # Use context manager for proper connection handling
+        async with connect_to_server({
+            "server_url": TEST_SERVER_URL,
+            "token": token,
+            "workspace": TEST_WORKSPACE,
+            "ping_interval": None
+        }) as server:
             print("✅ Connected to server")
-        except (asyncio.TimeoutError, ConnectionError, OSError) as conn_err:
-            pytest.skip(f"Cannot connect to Hypha server: {conn_err}")
-        except Exception as conn_err:
-            pytest.skip(f"Hypha connection failed: {conn_err}")
-        
-        # Create unique service ID for this test
-        test_id = f"test-microscope-{uuid.uuid4().hex[:8]}"
-        print(f"Creating test service with ID: {test_id}")
-        
-        # Create real microscope instance in simulation mode
-        print("🔬 Creating Microscope instance...")
-        start_time = time.time()
-        microscope = Microscope(is_simulation=True, is_local=False)
-        init_time = time.time() - start_time
-        print(f"✅ Microscope initialization took {init_time:.1f} seconds")
-        
-        microscope.service_id = test_id
-        microscope.login_required = False  # Disable auth for tests
-        microscope.authorized_emails = None
-        
-        # Create a simple datastore for testing
-        microscope.datastore = SimpleTestDataStore()
-        
-        # Disable similarity search service to avoid OpenAI costs
-        microscope.similarity_search_svc = None
-        
-        # Override setup method to avoid connecting to external services during tests
-        async def mock_setup():
-            pass
-        microscope.setup = mock_setup
-        
-        # Register the service
-        print("📝 Registering microscope service...")
-        service_start_time = time.time()
-        await asyncio.wait_for(
-            microscope.start_hypha_service(server, test_id, run_in_executor=False),
-            timeout=30
-        )
-        service_time = time.time() - service_start_time
-        print(f"✅ Service registration took {service_time:.1f} seconds")
-        
-        # Get the registered service to test against
-        print("🔍 Getting service reference...")
-        service = await asyncio.wait_for(server.get_service(test_id), timeout=10)
-        print("✅ Service ready for testing")
-        
-        try:
-            yield microscope, service
-        finally:
-            # Comprehensive cleanup in proper order
-            print(f"🧹 Starting cleanup...")
+            
+            # Create unique service ID for this test
+            test_id = f"test-microscope-{uuid.uuid4().hex[:8]}"
+            print(f"Creating test service with ID: {test_id}")
+            
+            # Create real microscope instance in simulation mode
+            print("🔬 Creating Microscope instance...")
+            start_time = time.time()
+            microscope = Microscope(is_simulation=True, is_local=False)
+            init_time = time.time() - start_time
+            print(f"✅ Microscope initialization took {init_time:.1f} seconds")
+            
+            microscope.service_id = test_id
+            microscope.login_required = False  # Disable auth for tests
+            microscope.authorized_emails = None
+            
+            # Create a simple datastore for testing
+            microscope.datastore = SimpleTestDataStore()
+            
+            # Disable similarity search service to avoid OpenAI costs
+            microscope.similarity_search_svc = None
+            
+            # Override setup method to avoid connecting to external services during tests
+            async def mock_setup():
+                pass
+            microscope.setup = mock_setup
+            
+            # Register the service
+            print("📝 Registering microscope service...")
+            service_start_time = time.time()
+            await microscope.start_hypha_service(server, test_id)
+            service_time = time.time() - service_start_time
+            print(f"✅ Service registration took {service_time:.1f} seconds")
+            
+            # Get the registered service to test against
+            print("🔍 Getting service reference...")
+            service = await server.get_service(test_id)
+            print("✅ Service ready for testing")
             
             try:
-                # 1. First, stop any running tasks/services
+                yield microscope, service
+            finally:
+                # Comprehensive cleanup
+                print(f"🧹 Starting cleanup...")
+                
+                # Close the SquidController and camera resources properly
                 if microscope and hasattr(microscope, 'squidController'):
-                    print("Cleaning up SquidController...")
-                    
-                    # Stop camera streaming first
                     try:
+                        print("Closing SquidController...")
                         if hasattr(microscope.squidController, 'camera'):
                             camera = microscope.squidController.camera
-                            if hasattr(camera, 'is_streaming') and camera.is_streaming:
-                                camera.stop_streaming()
-                                print("Camera streaming stopped")
-                            
-                            # Clean up zarr resources synchronously to avoid event loop issues
-                            if hasattr(camera, 'cleanup_zarr_resources'):
+                            if hasattr(camera, 'cleanup_zarr_resources_async'):
                                 try:
-                                    camera.cleanup_zarr_resources()
-                                    print("Zarr resources cleaned up")
-                                except Exception as zarr_error:
-                                    print(f"Zarr cleanup warning: {zarr_error}")
-                    except Exception as camera_error:
-                        print(f"Camera cleanup warning: {camera_error}")
-                    
-                    # Close controller synchronously
-                    try:
+                                    await camera.cleanup_zarr_resources_async()
+                                except Exception as camera_error:
+                                    print(f"Camera cleanup error: {camera_error}")
+                        
                         microscope.squidController.close()
                         print("✅ SquidController closed")
                     except Exception as controller_error:
-                        print(f"Controller cleanup warning: {controller_error}")
+                        print(f"Error closing SquidController: {controller_error}")
                 
-                # 2. Cancel any pending tasks
-                current_task = asyncio.current_task()
-                all_tasks = [t for t in asyncio.all_tasks() if t != current_task and not t.done()]
-                if all_tasks:
-                    print(f"Cancelling {len(all_tasks)} pending tasks...")
-                    for task in all_tasks:
-                        task.cancel()
-                    
-                    # Wait for tasks to cancel with timeout
-                    try:
-                        await asyncio.wait_for(
-                            asyncio.gather(*all_tasks, return_exceptions=True),
-                            timeout=2.0
-                        )
-                    except asyncio.TimeoutError:
-                        print("Some tasks did not cancel in time")
-                
+                # Give time for all cleanup operations to complete
+                await asyncio.sleep(0.1)
                 print("✅ Cleanup completed")
-                
-            except Exception as cleanup_error:
-                print(f"Cleanup error (non-fatal): {cleanup_error}")
-            
-            # 3. Close server connection if it exists
-            if server and connection_successful:
-                try:
-                    if hasattr(server, 'disconnect'):
-                        await asyncio.wait_for(server.disconnect(), timeout=5.0)
-                    elif hasattr(server, 'close'):
-                        await asyncio.wait_for(server.close(), timeout=5.0)
-                    print("✅ Server connection closed")
-                except Exception as server_error:
-                    print(f"Server disconnect warning: {server_error}")
         
     except Exception as e:
-        # Don't fail the test setup, just skip if we can't connect
-        if "connect" in str(e).lower() or "websocket" in str(e).lower():
-            pytest.skip(f"Hypha service unavailable: {e}")
-        else:
-            pytest.fail(f"Failed to create test service: {e}")
+        pytest.fail(f"Failed to create test service: {e}")
 
 # Basic connectivity tests
 async def test_service_registration_and_connectivity(test_microscope_service):
@@ -586,14 +526,11 @@ async def test_schema_methods(test_microscope_service):
 async def test_microscope_video_track():
     """Test MicroscopeVideoTrack functionality."""
     # Create a minimal microscope instance for testing
-    microscope = None
-    video_track = None
+    microscope = Microscope(is_simulation=True, is_local=False)
+    microscope.login_required = False
+    microscope.datastore = SimpleTestDataStore()
     
     try:
-        microscope = Microscope(is_simulation=True, is_local=False)
-        microscope.login_required = False
-        microscope.datastore = SimpleTestDataStore()
-        
         # Create video track
         video_track = MicroscopeVideoTrack(microscope)
         
@@ -612,29 +549,14 @@ async def test_microscope_video_track():
         assert np.any(test_img[50, 40:61] > 0)  # Horizontal line
         assert np.any(test_img[40:61, 50] > 0)  # Vertical line
         
+        # Test stop functionality
+        video_track.stop()
+        assert video_track.running == False
+        
     finally:
-        # Cleanup in proper order
-        try:
-            # Stop video track first
-            if video_track and hasattr(video_track, 'stop'):
-                video_track.stop()
-                if hasattr(video_track, 'running'):
-                    assert video_track.running == False
-            
-            # Then cleanup microscope
-            if microscope and hasattr(microscope, 'squidController'):
-                try:
-                    # Stop camera streaming first
-                    if hasattr(microscope.squidController, 'camera'):
-                        camera = microscope.squidController.camera
-                        if hasattr(camera, 'is_streaming') and camera.is_streaming:
-                            camera.stop_streaming()
-                    
-                    microscope.squidController.close()
-                except Exception as cleanup_error:
-                    print(f"Cleanup warning: {cleanup_error}")
-        except Exception as final_cleanup_error:
-            print(f"Final cleanup warning: {final_cleanup_error}")
+        # Cleanup
+        if hasattr(microscope, 'squidController'):
+            microscope.squidController.close()
 
 # Permission and authentication tests
 async def test_permission_system(test_microscope_service):
