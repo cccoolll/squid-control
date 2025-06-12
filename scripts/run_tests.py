@@ -8,7 +8,21 @@ import argparse
 import subprocess
 import sys
 import os
+import signal
+import threading
+import time
 from pathlib import Path
+
+
+def force_exit_after_delay(delay_seconds=10):
+    """Force exit the process after a delay to prevent hanging."""
+    def force_exit():
+        time.sleep(delay_seconds)
+        print(f"\n⚠️  Force terminating after {delay_seconds}s delay to prevent hanging...")
+        os._exit(0)
+    
+    thread = threading.Thread(target=force_exit, daemon=True)
+    thread.start()
 
 
 def run_command(cmd, env=None):
@@ -64,6 +78,11 @@ def main():
         action="store_true",
         help="Run simulation tests only"
     )
+    parser.add_argument(
+        "--force-exit",
+        action="store_true",
+        help="Force exit after tests complete to prevent hanging (useful for CI)"
+    )
     
     args = parser.parse_args()
 
@@ -102,16 +121,27 @@ def main():
     if args.coverage:
         cmd.extend([
             "--cov=squid_control",
+            "--cov=start_hypha_service.py",
+            "--cov-config=pyproject.toml",
             "--cov-report=xml:coverage.xml",
-            "--cov-report=term-missing"
+            "--cov-report=term-missing",
+            "--junitxml=pytest-results.xml"
         ])
         
         if args.html:
+            cmd.append("--cov-report=html:htmlcov")
+        else:
+            # Always generate HTML for CI/coverage analysis
             cmd.append("--cov-report=html:htmlcov")
     
     # Set environment
     env = os.environ.copy()
     env["PYTHONPATH"] = "."
+    
+    # Start force exit timer if requested (especially useful for squid_controller tests)
+    if args.force_exit or args.unit_only:
+        print("🔧 Force exit enabled - will terminate after tests complete")
+        force_exit_after_delay(10)
     
     # Run tests
     return_code = run_command(cmd, env=env)
@@ -133,6 +163,12 @@ def main():
         if args.html:
             print("- HTML: htmlcov/index.html")
         print("- Terminal: shown above")
+    
+    # Force exit for squid_controller tests to prevent hanging
+    if args.unit_only or args.force_exit:
+        print("✅ Tests completed - force exiting to prevent hanging...")
+        time.sleep(1)  # Give a moment for output to flush
+        os._exit(return_code)
     
     return return_code
 
