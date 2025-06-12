@@ -30,31 +30,36 @@ jobs:
 
 
 
-    - name: Run all tests with coverage (CI - Including Integration Tests)
+    - name: Run unit tests first (without integration)
+      shell: bash
+      env:
+        SQUID_SIMULATION_MODE: "true"
+        PYTHONPATH: "."
+      run: |
+        echo "🧪 Step 1/2: Running UNIT TESTS (without integration tests)"
+        echo "🔧 Hardware modules excluded in simulation mode"
+        echo "⚡ Fast feedback - unit tests run first"
+        echo ""
+        python scripts/run_tests.py --skip-integration --coverage --verbose
+
+    - name: Run integration tests (Hypha RPC)
       shell: bash
       env:
         SQUID_SIMULATION_MODE: "true"
         PYTHONPATH: "."
         SQUID_WORKSPACE_TOKEN: ${{ secrets.SQUID_WORKSPACE_TOKEN }}
+      # Continue with integration tests even if unit tests had warnings/minor issues
+      # but the workflow will still fail if unit tests actually failed
+      if: always()
       run: |
-        echo "🧪 Running ALL TESTS in CI environment (unit + Hypha RPC integration)"
-        echo "🌐 Integration tests are INCLUDED in CI" 
-        echo "🔧 Hardware modules excluded in simulation mode"
-        echo "💡 To run only unit tests locally: python scripts/run_tests.py --skip-integration"
-        echo "💡 To run only integration with Hypha RPC tests locally: python scripts/run_tests.py --integration-only"
+        echo "🌐 Step 2/2: Running INTEGRATION TESTS (Hypha RPC services)"
+        echo "🔗 Requires network access and workspace token"
+        echo "💡 To run locally: python scripts/run_tests.py --integration-only"
         echo ""
-        pytest \
-          --cov=squid_control \
-          --cov=start_hypha_service.py \
-          --cov-config=pyproject.toml \
-          --cov-report=xml:coverage.xml \
-          --cov-report=html:htmlcov \
-          --cov-report=term-missing \
-          --junitxml=pytest-results.xml \
-          -v
+        python scripts/run_tests.py --integration-only --verbose
 
     - name: Upload coverage reports to Codecov
-      if: matrix.python-version == '3.11'
+      if: always() && matrix.python-version == '3.11'
       uses: codecov/codecov-action@v3
       with:
         file: ./coverage.xml
@@ -66,7 +71,7 @@ jobs:
         CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
     - name: Upload coverage HTML report as artifact
-      if: matrix.python-version == '3.11'
+      if: always() && matrix.python-version == '3.11'
       uses: actions/upload-artifact@v4
       with:
         name: coverage-html-report
@@ -77,7 +82,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: pytest-results-${{ matrix.python-version }}
+        name: test-results-${{ matrix.python-version }}
         path: pytest-results.xml
         retention-days: 30
 
