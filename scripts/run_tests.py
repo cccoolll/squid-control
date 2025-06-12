@@ -102,12 +102,15 @@ def main():
     if args.coverage:
         cmd.extend([
             "--cov=squid_control",
+            "--cov=start_hypha_service.py",
+            "--cov-config=pyproject.toml",
             "--cov-report=xml:coverage.xml",
+            "--cov-report=html:htmlcov",
             "--cov-report=term-missing"
         ])
-        
-        if args.html:
-            cmd.append("--cov-report=html:htmlcov")
+    
+    # Always add junit XML output for CI/CD
+    cmd.extend(["--junitxml=pytest-results.xml"])
     
     # Set environment
     env = os.environ.copy()
@@ -130,9 +133,10 @@ def main():
     if args.coverage and return_code == 0:
         print("\nCoverage report generated:")
         print("- XML: coverage.xml")
-        if args.html:
-            print("- HTML: htmlcov/index.html")
+        print("- HTML: htmlcov/index.html")
         print("- Terminal: shown above")
+    
+    print("\nTest results saved to: pytest-results.xml")
     
     return return_code
 
