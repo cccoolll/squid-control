@@ -693,23 +693,24 @@ class SquidController:
     
 
     def close(self):
-
-        # move the objective to a defined position upon exit
-        self.navigationController.move_x(0.1) # temporary bug fix - move_x needs to be called before move_x_to if the stage has been moved by the joystick
-        while self.microcontroller.is_busy():
-            time.sleep(0.005)
-        self.navigationController.move_x_to(28)
-        while self.microcontroller.is_busy():
-            time.sleep(0.005)
-        self.navigationController.move_y(0.1) # temporary bug fix - move_y needs to be called before move_y_to if the stage has been moved by the joystick
-        while self.microcontroller.is_busy():
-            time.sleep(0.005)
-        self.navigationController.move_y_to(19)
-        while self.microcontroller.is_busy():
-            time.sleep(0.005)
+        # In simulation mode, skip stage movements to avoid delays
+        if not self.is_simulation:
+            # move the objective to a defined position upon exit
+            self.navigationController.move_x(0.1) # temporary bug fix - move_x needs to be called before move_x_to if the stage has been moved by the joystick
+            while self.microcontroller.is_busy():
+                time.sleep(0.005)
+            self.navigationController.move_x_to(28)
+            while self.microcontroller.is_busy():
+                time.sleep(0.005)
+            self.navigationController.move_y(0.1) # temporary bug fix - move_y needs to be called before move_y_to if the stage has been moved by the joystick
+            while self.microcontroller.is_busy():
+                time.sleep(0.005)
+            self.navigationController.move_y_to(19)
+            while self.microcontroller.is_busy():
+                time.sleep(0.005)
 
         self.liveController.stop_live()
-        self.camera.close()
+        self.camera.close()  # This now includes proper Hypha cleanup
         #self.imageSaver.close()
         if CONFIG.SUPPORT_LASER_AUTOFOCUS:
             self.camera_focus.close()
@@ -718,15 +719,7 @@ class SquidController:
         
 async def try_microscope():
     squid_controller = SquidController(is_simulation=False)
-    #squid_controller.platereader_move_to_well('A',1)
-    #image = await squid_controller.snap_image()
-    # save image
-    #cv2.imwrite('test_image.jpg', image)
-    
-    # Example using the original plate_scan function
-    # squid_controller.plate_scan()
-    
-    # Example using the new scan_well_plate_new function with custom settings
+
     custom_illumination_settings = [
         {'channel': 'BF LED matrix full', 'intensity': 35.0, 'exposure_time': 15.0},
         {'channel': 'Fluorescence 488 nm Ex', 'intensity': 50.0, 'exposure_time': 80.0},

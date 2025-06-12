@@ -11,17 +11,47 @@ from squid_control.control.config import CONFIG, SIMULATED_CAMERA, WELLPLATE_FOR
 # Mark all tests in this module as asyncio
 pytestmark = pytest.mark.asyncio
 
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def session_cleanup():
+    """Session-level fixture to ensure all async resources are cleaned up."""
+    yield
+    # Final cleanup at end of session to cancel any remaining tasks
+    try:
+        # Give time for any pending cleanup operations
+        await asyncio.sleep(0.5)
+        
+        # Cancel any remaining tasks
+        tasks = [task for task in asyncio.all_tasks() if not task.done()]
+        if tasks:
+            print(f"Cancelling {len(tasks)} remaining tasks...")
+            for task in tasks:
+                task.cancel()
+            
+            # Wait for all tasks to be cancelled
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception as e:
+                print(f"Task cancellation completed with some exceptions: {e}")
+        
+        print("Session cleanup completed")
+    except Exception as e:
+        print(f"Session cleanup error (ignored): {e}")
+        pass
+
 @pytest_asyncio.fixture
 async def sim_controller_fixture():
     """Fixture to provide a SquidController instance in simulation mode."""
     controller = SquidController(is_simulation=True)
     yield controller
-    # Teardown: close controller resources safely
-    # Handle case where close() might have already been called by a test
+    # Teardown: close controller resources safely with proper async cleanup
     try:
         if hasattr(controller, 'camera') and controller.camera is not None:
-            if hasattr(controller.camera, 'is_streaming') and controller.camera.is_streaming:
-                controller.close()
+            # First close ZarrImageManager connections properly
+            if hasattr(controller.camera, 'zarr_image_manager') and controller.camera.zarr_image_manager is not None:
+                await controller.camera._cleanup_zarr_resources_async()
+            # Then close the controller
+            controller.close()
+            print("Controller cleanup completed successfully")
     except Exception as e:
         # Ignore cleanup errors to prevent test hangs
         print(f"Warning: Controller cleanup error (ignored): {e}")
