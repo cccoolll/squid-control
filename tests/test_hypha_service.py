@@ -106,7 +106,7 @@ async def test_microscope_service():
         print("📝 Registering microscope service...")
         service_start_time = time.time()
         await asyncio.wait_for(
-            microscope.start_hypha_service(server, test_id),
+            microscope.start_hypha_service(server, test_id, run_in_executor=False),
             timeout=30
         )
         service_time = time.time() - service_start_time

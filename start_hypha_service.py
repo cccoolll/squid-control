@@ -1193,16 +1193,21 @@ class Microscope:
             "find_similar_image_image": self.FindSimilarImageImageInput.model_json_schema()
         }
 
-    async def start_hypha_service(self, server, service_id):
+    async def start_hypha_service(self, server, service_id, run_in_executor=None):
         self.server = server
         self.service_id = service_id
+        
+        # Default to True for production, False for tests (identified by "test" in service_id)
+        if run_in_executor is None:
+            run_in_executor = "test" not in service_id.lower()
+        
         svc = await server.register_service(
             {
                 "name": "Microscope Control Service",
                 "id": service_id,
                 "config": {
                     "visibility": "public",
-                    "run_in_executor": True
+                    "run_in_executor": run_in_executor
                 },
                 "type": "echo",
                 "hello_world": self.hello_world,
