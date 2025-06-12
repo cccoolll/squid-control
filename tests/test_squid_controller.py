@@ -16,11 +16,21 @@ async def sim_controller_fixture():
     """Fixture to provide a SquidController instance in simulation mode."""
     controller = SquidController(is_simulation=True)
     yield controller
-    # Teardown: close controller resources
-    # Assuming controller.close() is synchronous as per typical Python object cleanup
-    # If it were async, it should be `await controller.aclose()` or similar.
-    controller.close()
+    # Teardown: close controller resources safely with proper async cleanup
+    try:
+        if hasattr(controller, 'camera') and controller.camera is not None:
+            # First close ZarrImageManager connections properly
+            if hasattr(controller.camera, 'zarr_image_manager') and controller.camera.zarr_image_manager is not None:
+                await controller.camera._cleanup_zarr_resources_async()
+            # Then close the controller
+            controller.close()
+            print("Controller cleanup completed successfully")
+    except Exception as e:
+        # Ignore cleanup errors to prevent test hangs
+        print(f"Warning: Controller cleanup error (ignored): {e}")
+        pass
 
+@pytest.mark.timeout(60)
 async def test_controller_initialization(sim_controller_fixture):
     """Test if the SquidController initializes correctly in simulation mode."""
     async for controller in sim_controller_fixture:
@@ -32,6 +42,7 @@ async def test_controller_initialization(sim_controller_fixture):
         assert z_pos == pytest.approx(CONFIG.DEFAULT_Z_POS_MM, abs=1e-3)
         break
 
+@pytest.mark.timeout(60)
 async def test_simulation_mode_detection():
     """Test simulation mode detection and import handling."""
     # Test with environment variable
@@ -47,6 +58,7 @@ async def test_simulation_mode_detection():
         assert controller.is_simulation is True
         controller.close()
 
+@pytest.mark.timeout(60)  # Longer timeout for comprehensive test
 async def test_well_plate_navigation_comprehensive(sim_controller_fixture):
     """Test comprehensive well plate navigation for different plate types."""
     async for controller in sim_controller_fixture:
@@ -490,6 +502,7 @@ async def test_well_plate_navigation(sim_controller_fixture):
                 pass
         break
 
+
 async def test_autofocus_simulation(sim_controller_fixture):
     """Test autofocus in simulation mode."""
     async for controller in sim_controller_fixture:
@@ -760,4 +773,3 @@ async def test_close_controller(sim_controller_fixture):
         # Check camera state after close
         assert controller.camera.is_streaming == False
         break
-

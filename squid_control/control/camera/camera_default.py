@@ -623,6 +623,16 @@ class Camera_Simulation(object):
     def close(self):
         self.stop_streaming()
         self.cleanup_zarr_resources()
+        # Also ensure async cleanup runs to close Hypha connections
+        try:
+            loop = asyncio.get_running_loop()
+            # Schedule the async cleanup to run
+            if self.zarr_image_manager:
+                task = loop.create_task(self._cleanup_zarr_resources_async())
+                # Don't wait for it to complete to avoid blocking
+        except RuntimeError:
+            # No event loop running, skip async cleanup
+            pass
         
     def cleanup_zarr_resources(self):
         """

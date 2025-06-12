@@ -57,6 +57,7 @@ dev = [
     "pytest>=7.0",
     "pytest-cov",
     "pytest-asyncio",
+    "pytest-timeout",
     "qtpy>=2.4.0",
     "PyQt5>=5.15.10",
     "pyqtgraph>=0.13.3",
@@ -101,7 +102,7 @@ exclude = ["tests*", "scripts*"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "-ra -q --cov=squid_control --cov-report=term-missing"
+addopts = "-ra -q --cov=squid_control --cov-report=term-missing --timeout=1000 --timeout-method=thread"
 testpaths = [
     "tests",
 ]
@@ -109,6 +110,8 @@ python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
 asyncio_mode = "auto"
+timeout = 1000
+timeout_method = "thread"
 
 [tool.coverage.run]
 branch = true
