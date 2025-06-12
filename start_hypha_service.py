@@ -74,8 +74,8 @@ class MicroscopeVideoTrack(MediaStreamTrack):
         self.running = True
         self.start_time = None
         self.fps = 3 # Target FPS for WebRTC stream
-        self.frame_width = 2048
-        self.frame_height = 2048
+        self.frame_width = 720
+        self.frame_height = 720
         logger.info("MicroscopeVideoTrack initialized")
 
     def draw_crosshair(self, img, center_x, center_y, size=20, color=[255, 255, 255]):
@@ -114,12 +114,23 @@ class MicroscopeVideoTrack(MediaStreamTrack):
                 frame_height=self.frame_height
             )
             
+            current_time = time.time()
+            # Use a 90kHz timebase, common for video, to provide accurate frame timing.
+            # This prevents video from speeding up if frame acquisition is slow.
+            time_base = fractions.Fraction(1, 90000)
+            pts = int((current_time - self.start_time) * time_base.denominator)
+
             new_video_frame = VideoFrame.from_ndarray(processed_frame, format="rgb24")
-            new_video_frame.pts = self.count
-            new_video_frame.time_base = fractions.Fraction(1, self.fps)
+            new_video_frame.pts = pts
+            new_video_frame.time_base = time_base
             
             if self.count % (self.fps * 5) == 0:  # Log every 5 seconds
-                logger.info(f"MicroscopeVideoTrack: Sent frame {self.count}")
+                duration = current_time - self.start_time
+                if duration > 0:
+                    actual_fps = (self.count + 1) / duration
+                    logger.info(f"MicroscopeVideoTrack: Sent frame {self.count}, actual FPS: {actual_fps:.2f}")
+                else:
+                    logger.info(f"MicroscopeVideoTrack: Sent frame {self.count}")
             
             self.count += 1
             return new_video_frame
@@ -248,13 +259,6 @@ class Microscope:
             return True
         else:
             return False
-
-    async def ping(self, context=None):
-        if self.login_required and context and context.get("user"):
-            assert self.check_permission(
-                context.get("user")
-            ), "You don't have permission to use the chatbot, please sign up and wait for approval"
-        return "pong"
 
     def get_task_status(self, task_name):
         """Get the status of a specific task"""
@@ -487,8 +491,8 @@ class Microscope:
             # Get the raw image from the camera with original bit depth preserved
             raw_img = await self.squidController.snap_image(channel, intensity, exposure_time)
             
-            # Resize to 2048x2048 while preserving bit depth
-            resized_img = cv2.resize(raw_img, (2048, 2048))
+            # Resize to 3000x3000 while preserving bit depth
+            resized_img = cv2.resize(raw_img, (3000, 3000))
             
             self.get_status()
             self.task_status[task_name] = "finished"
@@ -836,7 +840,7 @@ class Microscope:
             raise e
 
     @schema_function(skip_self=True)
-    def auto_focus(self, context=None):
+    async def auto_focus(self, context=None):
         """
         Do contrast-based autofocus
         Returns: A string message
@@ -844,7 +848,7 @@ class Microscope:
         task_name = "auto_focus"
         self.task_status[task_name] = "started"
         try:
-            self.squidController.do_autofocus()
+            await self.squidController.do_autofocus()
             logger.info('The camera is auto-focused')
             self.task_status[task_name] = "finished"
             return 'The camera is auto-focused'
@@ -854,7 +858,7 @@ class Microscope:
             raise e
     
     @schema_function(skip_self=True)
-    def do_laser_autofocus(self, context=None):
+    async def do_laser_autofocus(self, context=None):
         """
         Do reflection-based autofocus
         Returns: A string message
@@ -862,7 +866,7 @@ class Microscope:
         task_name = "do_laser_autofocus"
         self.task_status[task_name] = "started"
         try:
-            self.squidController.do_laser_autofocus()
+            await self.squidController.do_laser_autofocus()
             logger.info('The camera is auto-focused')
             self.task_status[task_name] = "finished"
             return 'The camera is auto-focused'
@@ -1117,8 +1121,8 @@ class Microscope:
         result = self.move_to_position(x, y, z, context)
         return result['message']
     
-    def auto_focus_schema(self, config: AutoFocusInput, context=None):
-        self.auto_focus(context)
+    async def auto_focus_schema(self, config: AutoFocusInput, context=None):
+        await self.auto_focus(context)
         return "Auto-focus completed."
 
     async def snap_image_schema(self, config: SnapImageInput, context=None):
@@ -1157,8 +1161,8 @@ class Microscope:
         response = self.set_camera_exposure(config.channel, config.exposure_time, context)
         return {"result": response}
 
-    def do_laser_autofocus_schema(self, context=None):
-        response = self.do_laser_autofocus(context)
+    async def do_laser_autofocus_schema(self, context=None):
+        response = await self.do_laser_autofocus(context)
         return {"result": response}
 
     def set_laser_reference_schema(self, context=None):
@@ -1189,16 +1193,21 @@ class Microscope:
             "find_similar_image_image": self.FindSimilarImageImageInput.model_json_schema()
         }
 
-    async def start_hypha_service(self, server, service_id):
+    async def start_hypha_service(self, server, service_id, run_in_executor=None):
         self.server = server
         self.service_id = service_id
+        
+        # Default to True for production, False for tests (identified by "test" in service_id)
+        if run_in_executor is None:
+            run_in_executor = "test" not in service_id.lower()
+        
         svc = await server.register_service(
             {
                 "name": "Microscope Control Service",
                 "id": service_id,
                 "config": {
                     "visibility": "public",
-                    "run_in_executor": True
+                    "run_in_executor": run_in_executor
                 },
                 "type": "echo",
                 "hello_world": self.hello_world,
@@ -1238,7 +1247,7 @@ class Microscope:
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
 
-        if "local" not in service_id:
+        if "local" not in service_id and "test" not in service_id:
             await self.register_service_probes(server)
         
         logger.info(f'You can use this service using the service id: {svc.id}')
@@ -1343,10 +1352,16 @@ class Microscope:
                 raise
     
     async def connect_to_similarity_search_service(self):
-        similarity_search_server = await connect_to_server(
-            {"server_url": "http://192.168.2.1:9527", "token": os.environ.get("REEF_LOCAL_TOKEN"), "workspace": os.environ.get("REEF_LOCAL_WORKSPACE"), "ping_interval": None}
-        )
-        similarity_search_svc = await similarity_search_server.get_service("image-text-similarity-search")
+        if self.is_local:
+            similarity_search_server = await connect_to_server(
+                {"server_url": "http://192.168.2.1:9527", "token": os.environ.get("REEF_LOCAL_TOKEN"), "workspace": os.environ.get("REEF_LOCAL_WORKSPACE"), "ping_interval": None}
+            )
+            similarity_search_svc = await similarity_search_server.get_service("image-text-similarity-search")
+        else:
+            similarity_search_server = await connect_to_server(
+                {"server_url": "https://hypha.aicell.io", "token": os.environ.get("AGENT_LENS_WORKSPACE_TOKEN"), "workspace": "agent-lens", "ping_interval": None}
+            )
+            similarity_search_svc = await similarity_search_server.get_service("image-text-similarity-search")
         return similarity_search_svc
 
     async def setup(self):
@@ -1488,6 +1503,18 @@ class Microscope:
                 except Exception as chatbot_error:
                     raise RuntimeError(f"Chatbot service health check failed: {str(chatbot_error)}")
                 
+                try:
+                    if self.similarity_search_svc is None:
+                        raise RuntimeError("Similarity search service not found")
+                    
+                    result = await self.similarity_search_svc.hello_world()
+                    if result != "Hello world":
+                        raise RuntimeError(f"Similarity search service returned unexpected response: {result}")
+                    logger.info("Similarity search service is healthy")
+                except Exception as similarity_error:
+                    logger.error(f"Similarity search service health check failed: {str(similarity_error)}")
+                    raise RuntimeError(f"Similarity search service health check failed: {str(similarity_error)}")
+
                 logger.info("All services are healthy")
                 return {"status": "ok", "message": "All services are healthy"}
             except Exception as e:

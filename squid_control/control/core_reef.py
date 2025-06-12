@@ -1,38 +1,59 @@
-from qtpy.QtCore import QObject, Signal, QTimer, QThread, Qt, QCoreApplication, Slot
-
+# Remove Qt imports and replace with standard Python
 import os
-
-from squid_control.control.processing_handler import ProcessingHandler
-
-import squid_control.control.utils as utils
-from squid_control.control.config import CONFIG
-from squid_control.control.camera import TriggerModeSetting
-
-
-from queue import Queue
 import threading
 import time
 import numpy as np
-import pyqtgraph as pg
 import scipy
 import scipy.signal
 import cv2
 from datetime import datetime
-
+from queue import Queue
 from lxml import etree as ET
 from pathlib import Path
-import squid_control.control.utils_config as utils_config
-from squid_control.control.microcontroller import LIMIT_CODE
 import math
 import json
 import pandas as pd
-
 import imageio as iio
-
 import importlib.util
-import os
 from importlib import import_module
 import asyncio
+from typing import Callable, Optional, Any
+
+from squid_control.control.processing_handler import ProcessingHandler
+import squid_control.control.utils as utils
+from squid_control.control.config import CONFIG
+from squid_control.control.camera import TriggerModeSetting
+import squid_control.control.utils_config as utils_config
+from squid_control.control.microcontroller import LIMIT_CODE
+
+
+# Simple event system to replace Qt signals
+class EventEmitter:
+    def __init__(self):
+        self._callbacks = {}
+    
+    def connect(self, event_name: str, callback: Callable):
+        if event_name not in self._callbacks:
+            self._callbacks[event_name] = []
+        self._callbacks[event_name].append(callback)
+    
+    def emit(self, event_name: str, *args, **kwargs):
+        if event_name in self._callbacks:
+            for callback in self._callbacks[event_name]:
+                try:
+                    callback(*args, **kwargs)
+                except Exception as e:
+                    print(f"Error in callback for {event_name}: {e}")
+    
+    def disconnect(self, event_name: str, callback: Callable = None):
+        if event_name in self._callbacks:
+            if callback:
+                try:
+                    self._callbacks[event_name].remove(callback)
+                except ValueError:
+                    pass
+            else:
+                self._callbacks[event_name].clear()
 
 
 def _load_multipoint_function(module_path, entrypoint):
@@ -73,13 +94,8 @@ class ObjectiveStore:
         self.current_objective = default_objective
 
 
-class StreamHandler(QObject):
-
-    image_to_display = Signal(np.ndarray)
-    packet_image_to_write = Signal(np.ndarray, int, float)
-    packet_image_for_tracking = Signal(np.ndarray, int, float)
-    # Remove the Qt signal and replace with direct callback
-    # signal_raw_frame_for_webrtc = Signal(np.ndarray) # New signal for WebRTC
+class StreamHandler:
+    """Handle image streams with callback-based events instead of Qt signals"""
 
     def __init__(
         self,
@@ -87,7 +103,7 @@ class StreamHandler(QObject):
         crop_height=CONFIG.Acquisition.CROP_HEIGHT,
         display_resolution_scaling=1,
     ):
-        QObject.__init__(self)
+        self.events = EventEmitter()
         self.fps_display = 1
         self.fps_save = 1
         self.fps_track = 1
@@ -111,6 +127,20 @@ class StreamHandler(QObject):
         # Direct callback for WebRTC instead of signal
         self.webrtc_frame_callback = None
         self.general_frame_callback = None # New callback for general frame updates
+
+        # Callback functions to replace Qt signals
+        self.image_to_display_callback = None
+        self.packet_image_to_write_callback = None
+        self.packet_image_for_tracking_callback = None
+
+    def connect_image_to_display(self, callback):
+        self.image_to_display_callback = callback
+
+    def connect_packet_image_to_write(self, callback):
+        self.packet_image_to_write_callback = callback
+
+    def connect_packet_image_for_tracking(self, callback):
+        self.packet_image_for_tracking_callback = callback
 
     def start_recording(self):
         self.save_image_flag = True
@@ -160,7 +190,6 @@ class StreamHandler(QObject):
 
             camera.image_locked = True
             self.handler_busy = True
-            # self.signal_new_frame_received.emit()  # self.liveController.turn_off_illumination()
 
             # measure real fps
             timestamp_now = round(time.time())
@@ -172,20 +201,13 @@ class StreamHandler(QObject):
                 self.counter = 0
                 print("real camera fps is " + str(self.fps_real))
 
-            # moved down (so that it does not modify the camera.current_frame, which causes minor problems for simulation) - 1/30/2022
-            # # rotate and flip - eventually these should be done in the camera
-            # camera.current_frame = utils.rotate_and_flip_image(camera.current_frame,rotate_image_angle=camera.rotate_image_angle,flip_image=camera.flip_image)
-
             # crop image
             image_cropped = utils.crop_image(
                 camera.current_frame, self.crop_width, self.crop_height
             )
             image_cropped = np.squeeze(image_cropped)
 
-            # # rotate and flip - moved up (1/10/2022)
-            # image_cropped = utils.rotate_and_flip_image(image_cropped,rotate_image_angle=CONFIG.ROTATE_IMAGE_ANGLE,flip_image=CONFIG.FLIP_IMAGE)
-            # added on 1/30/2022
-            # @@@ to move to camera
+            # rotate and flip
             image_cropped = utils.rotate_and_flip_image(
                 image_cropped,
                 rotate_image_angle=camera.rotate_image_angle,
@@ -202,14 +224,13 @@ class StreamHandler(QObject):
             # send image to display
             time_now = time.time()
             if time_now - self.timestamp_last_display >= 1 / self.fps_display:
-                # self.image_to_display.emit(cv2.resize(image_cropped,(round(self.crop_width*self.display_resolution_scaling), round(self.crop_height*self.display_resolution_scaling)),cv2.INTER_LINEAR))
-                self.image_to_display.emit(
-                    utils.crop_image(
-                        image_cropped,
-                        round(self.crop_width * self.display_resolution_scaling),
-                        round(self.crop_height * self.display_resolution_scaling),
-                    )
+                display_image = utils.crop_image(
+                    image_cropped,
+                    round(self.crop_width * self.display_resolution_scaling),
+                    round(self.crop_height * self.display_resolution_scaling),
                 )
+                if self.image_to_display_callback:
+                    self.image_to_display_callback(display_image)
                 self.timestamp_last_display = time_now
 
             # send image to write
@@ -219,9 +240,10 @@ class StreamHandler(QObject):
             ):
                 if camera.is_color:
                     image_cropped = cv2.cvtColor(image_cropped, cv2.COLOR_RGB2BGR)
-                self.packet_image_to_write.emit(
-                    image_cropped, camera.frame_ID, camera.timestamp
-                )
+                if self.packet_image_to_write_callback:
+                    self.packet_image_to_write_callback(
+                        image_cropped, camera.frame_ID, camera.timestamp
+                    )
                 self.timestamp_last_save = time_now
 
             # Call the general frame callback if it's set
@@ -236,49 +258,18 @@ class StreamHandler(QObject):
                 self.track_flag
                 and time_now - self.timestamp_last_track >= 1 / self.fps_track
             ):
-                # track is a blocking operation - it needs to be
-                # @@@ will cropping before emitting the signal lead to speedup?
-                self.packet_image_for_tracking.emit(
-                    image_cropped, camera.frame_ID, camera.timestamp
-                )
+                if self.packet_image_for_tracking_callback:
+                    self.packet_image_for_tracking_callback(
+                        image_cropped, camera.frame_ID, camera.timestamp
+                    )
                 self.timestamp_last_track = time_now
 
             self.handler_busy = False
             camera.image_locked = False
 
-    """
-    def on_new_frame_from_simulation(self,image,frame_ID,timestamp):
-        # check whether image is a local copy or pointer, if a pointer, needs to prevent the image being modified while this function is being executed
-        
-        self.handler_busy = True
-
-        # crop image
-        image_cropped = utils.crop_image(image,self.crop_width,self.crop_height)
-
-        # send image to display
-        time_now = time.time()
-        if time_now-self.timestamp_last_display >= 1/self.fps_display:
-            self.image_to_display.emit(cv2.resize(image_cropped,(round(self.crop_width*self.display_resolution_scaling), round(self.crop_height*self.display_resolution_scaling)),cv2.INTER_LINEAR))
-            self.timestamp_last_display = time_now
-
-        # send image to write
-        if self.save_image_flag and time_now-self.timestamp_last_save >= 1/self.fps_save:
-            self.packet_image_to_write.emit(image_cropped,frame_ID,timestamp)
-            self.timestamp_last_save = time_now
-
-        # send image to track
-        if time_now-self.timestamp_last_display >= 1/self.fps_track:
-            # track emit
-            self.timestamp_last_track = time_now
-
-        self.handler_busy = False
-    """
-class ImageSaver(QObject):
-
-    stop_recording = Signal()
+class ImageSaver:
 
     def __init__(self, image_format=CONFIG.Acquisition.IMAGE_FORMAT):
-        QObject.__init__(self)
         self.base_path = "./"
         self.experiment_ID = ""
         self.image_format = image_format
@@ -339,7 +330,8 @@ class ImageSaver(QObject):
             if (self.recording_time_limit > 0) and (
                 time.time() - self.recording_start_time >= self.recording_time_limit
             ):
-                self.stop_recording.emit()
+                #self.stop_recording.emit()
+                pass
             # when using self.queue.put(str_), program can be slowed down despite multithreading because of the block and the GIL
         except:
             print("imageSaver queue is full, image discarded")
@@ -374,9 +366,8 @@ class ImageSaver(QObject):
         self.thread.join()
 
 
-class ImageSaver_Tracking(QObject):
+class ImageSaver_Tracking:
     def __init__(self, base_path, image_format="bmp"):
-        QObject.__init__(self)
         self.base_path = base_path
         self.image_format = image_format
         self.max_num_image_per_folder = 1000
@@ -447,12 +438,9 @@ class ImageSaver_MultiPointAcquisition(QObject):
 """
 
 
-class ImageDisplay(QObject):
-
-    image_to_display = Signal(np.ndarray)
+class ImageDisplay:
 
     def __init__(self):
-        QObject.__init__(self)
         self.queue = Queue(10)  # max 10 items in the queue
         self.image_lock = threading.Lock()
         self.stop_signal_received = False
@@ -468,7 +456,6 @@ class ImageDisplay(QObject):
             try:
                 [image, frame_ID, timestamp] = self.queue.get(timeout=0.1)
                 self.image_lock.acquire(True)
-                self.image_to_display.emit(image)
                 self.image_lock.release()
                 self.queue.task_done()
             except:
@@ -482,9 +469,6 @@ class ImageDisplay(QObject):
             pass
         except:
             print("imageDisplay queue is full, image discarded")
-
-    def emit_directly(self, image):
-        self.image_to_display.emit(image)
 
     def close(self):
         self.queue.join()
@@ -522,7 +506,7 @@ class Configuration:
             self._pixel_format_options = self.pixel_format
 
 
-class LiveController(QObject):
+class LiveController:
 
     def __init__(
         self,
@@ -533,7 +517,6 @@ class LiveController(QObject):
         use_internal_timer_for_hardware_trigger=True,
         for_displacement_measurement=False,
     ):
-        QObject.__init__(self)
         self.camera = camera
         self.microcontroller = microcontroller
         self.configurationManager = configurationManager
@@ -753,14 +736,14 @@ class LiveController(QObject):
         self.display_resolution_scaling = display_resolution_scaling / 100
 
 
-class NavigationController(QObject):
+class NavigationController:
 
-    xPos = Signal(float)
-    yPos = Signal(float)
-    zPos = Signal(float)
-    thetaPos = Signal(float)
-    xyPos = Signal(float, float)
-    signal_joystick_button_pressed = Signal()
+    xPos = None
+    yPos = None
+    zPos = None
+    thetaPos = None
+    xyPos = None
+    signal_joystick_button_pressed = None
 
     # x y z axis pid enable flag
     pid_enable_flag = [False, False, False]
@@ -768,7 +751,6 @@ class NavigationController(QObject):
     def __init__(self, microcontroller, parent=None):
         # parent should be set to OctopiGUI instance to enable updates
         # to camera settings, e.g. binning, that would affect click-to-move
-        QObject.__init__(self)
         self.microcontroller = microcontroller
         self.parent = parent
         self.x_pos_mm = 0
@@ -1087,15 +1069,15 @@ class NavigationController(QObject):
                 )
             )
         # emit the updated position
-        self.xPos.emit(self.x_pos_mm)
-        self.yPos.emit(self.y_pos_mm)
-        self.zPos.emit(self.z_pos_mm * 1000)
-        self.thetaPos.emit(self.theta_pos_rad * 360 / (2 * math.pi))
-        self.xyPos.emit(self.x_pos_mm, self.y_pos_mm)
+        self.xPos = self.x_pos_mm
+        self.yPos = self.y_pos_mm
+        self.zPos = self.z_pos_mm * 1000
+        self.thetaPos = self.theta_pos_rad * 360 / (2 * math.pi)
+        self.xyPos = (self.x_pos_mm, self.y_pos_mm)
 
         if microcontroller.signal_joystick_button_pressed_event:
-            if self.enable_joystick_button_action:
-                self.signal_joystick_button_pressed.emit()
+            if self.enable_joystick_button_action and self.signal_joystick_button_pressed:
+                self.signal_joystick_button_pressed()
             print("joystick button pressed")
             microcontroller.signal_joystick_button_pressed_event = False
     
@@ -1308,14 +1290,9 @@ class NavigationController(QObject):
         return self.pid_enable_flag[axis]
 
 
-class SlidePositionControlWorker(QObject):
-
-    finished = Signal()
-    signal_stop_live = Signal()
-    signal_resume_live = Signal()
+class SlidePositionControlWorker:
 
     def __init__(self, slidePositionController, home_x_and_y_separately=False):
-        QObject.__init__(self)
         self.slidePositionController = slidePositionController
         self.navigationController = slidePositionController.navigationController
         self.microcontroller = self.navigationController.microcontroller
@@ -1336,7 +1313,7 @@ class SlidePositionControlWorker(QObject):
     def move_to_slide_loading_position(self):
         was_live = self.liveController.is_live
         if was_live:
-            self.signal_stop_live.emit()
+            self.signal_stop_live()
 
         # retract z
         timestamp_start = time.time()
@@ -1470,15 +1447,14 @@ class SlidePositionControlWorker(QObject):
                 )
 
         if was_live:
-            self.signal_resume_live.emit()
+            self.signal_resume_live()
 
         self.slidePositionController.slide_loading_position_reached = True
-        self.finished.emit()
 
     def move_to_slide_scanning_position(self):
         was_live = self.liveController.is_live
         if was_live:
-            self.signal_stop_live.emit()
+            self.signal_stop_live()
 
         # move to position
         # for well plate
@@ -1621,20 +1597,18 @@ class SlidePositionControlWorker(QObject):
             print("z position restored")
 
         if was_live:
-            self.signal_resume_live.emit()
+            self.signal_resume_live()
 
         self.slidePositionController.slide_scanning_position_reached = True
-        self.finished.emit()
 
 
-class SlidePositionController(QObject):
+class SlidePositionController:
 
-    signal_slide_loading_position_reached = Signal()
-    signal_slide_scanning_position_reached = Signal()
-    signal_clear_slide = Signal()
+    signal_slide_loading_position_reached = None
+    signal_slide_scanning_position_reached = None
+    signal_clear_slide = None
 
     def __init__(self, navigationController, liveController, is_for_wellplate=False):
-        QObject.__init__(self)
         self.navigationController = navigationController
         self.liveController = liveController
         self.slide_loading_position_reached = False
@@ -1648,64 +1622,31 @@ class SlidePositionController(QObject):
         self.thread = None
 
     def move_to_slide_loading_position(self):
-        # create a QThread object
-        self.thread = QThread()
         # create a worker object
         self.slidePositionControlWorker = SlidePositionControlWorker(self)
-        # move the worker to the thread
-        self.slidePositionControlWorker.moveToThread(self.thread)
-        # connect signals and slots
-        self.thread.started.connect(
-            self.slidePositionControlWorker.move_to_slide_loading_position
+        # Set up callbacks
+        self.slidePositionControlWorker.signal_stop_live = self.slot_stop_live
+        self.slidePositionControlWorker.signal_resume_live = self.slot_resume_live
+        # create and start the thread
+        self.thread = threading.Thread(
+            target=self.slidePositionControlWorker.move_to_slide_loading_position
         )
-        self.slidePositionControlWorker.signal_stop_live.connect(
-            self.slot_stop_live, type=Qt.BlockingQueuedConnection
-        )
-        self.slidePositionControlWorker.signal_resume_live.connect(
-            self.slot_resume_live, type=Qt.BlockingQueuedConnection
-        )
-        self.slidePositionControlWorker.finished.connect(
-            self.signal_slide_loading_position_reached.emit
-        )
-        self.slidePositionControlWorker.finished.connect(
-            self.slidePositionControlWorker.deleteLater
-        )
-        self.slidePositionControlWorker.finished.connect(self.thread.quit)
-        self.thread.finished.connect(self.thread.quit)
-        # self.slidePositionControlWorker.finished.connect(self.threadFinished,type=Qt.BlockingQueuedConnection)
-        # start the thread
         self.thread.start()
 
     def move_to_slide_scanning_position(self):
-        # create a QThread object
-        self.thread = QThread()
         # create a worker object
         self.slidePositionControlWorker = SlidePositionControlWorker(self)
-        # move the worker to the thread
-        self.slidePositionControlWorker.moveToThread(self.thread)
-        # connect signals and slots
-        self.thread.started.connect(
-            self.slidePositionControlWorker.move_to_slide_scanning_position
+        # Set up callbacks
+        self.slidePositionControlWorker.signal_stop_live = self.slot_stop_live
+        self.slidePositionControlWorker.signal_resume_live = self.slot_resume_live
+        # create and start the thread
+        self.thread = threading.Thread(
+            target=self.slidePositionControlWorker.move_to_slide_scanning_position
         )
-        self.slidePositionControlWorker.signal_stop_live.connect(
-            self.slot_stop_live, type=Qt.BlockingQueuedConnection
-        )
-        self.slidePositionControlWorker.signal_resume_live.connect(
-            self.slot_resume_live, type=Qt.BlockingQueuedConnection
-        )
-        self.slidePositionControlWorker.finished.connect(
-            self.signal_slide_scanning_position_reached.emit
-        )
-        self.slidePositionControlWorker.finished.connect(
-            self.slidePositionControlWorker.deleteLater
-        )
-        self.slidePositionControlWorker.finished.connect(self.thread.quit)
-        self.thread.finished.connect(self.thread.quit)
-        # self.slidePositionControlWorker.finished.connect(self.threadFinished,type=Qt.BlockingQueuedConnection)
-        # start the thread
         print("before thread.start()")
         self.thread.start()
-        self.signal_clear_slide.emit()
+        if self.signal_clear_slide:
+            self.signal_clear_slide()
 
     def slot_stop_live(self):
         self.liveController.stop_live()
@@ -1717,14 +1658,9 @@ class SlidePositionController(QObject):
     # 	print('========= threadFinished ========= ')
 
 
-class AutofocusWorker(QObject):
-
-    finished = Signal()
-    image_to_display = Signal(np.ndarray)
-    signal_current_configuration = Signal(Configuration)
+class AutofocusWorker:
 
     def __init__(self, autofocusController):
-        QObject.__init__(self)
         self.autofocusController = autofocusController
 
         self.camera = self.autofocusController.camera
@@ -1743,7 +1679,6 @@ class AutofocusWorker(QObject):
 
     def run(self):
         self.run_autofocus()
-        self.finished.emit()
 
     def wait_till_operation_is_completed(self):
         while self.microcontroller.is_busy():
@@ -1803,7 +1738,6 @@ class AutofocusWorker(QObject):
                 rotate_image_angle=self.camera.rotate_image_angle,
                 flip_image=self.camera.flip_image,
             )
-            self.image_to_display.emit(image)
             timestamp_0 = time.time()
             focus_measure = utils.calculate_focus_measure(
                 image, CONFIG.FOCUS_MEASURE_OPERATOR
@@ -1857,14 +1791,13 @@ class AutofocusWorker(QObject):
             print("moved to the top end of the CONFIG.AF range")
 
 
-class AutoFocusController(QObject):
+class AutoFocusController:
 
-    z_pos = Signal(float)
-    autofocusFinished = Signal()
-    image_to_display = Signal(np.ndarray)
+    z_pos = None
+    autofocusFinished = None
+    image_to_display = None
 
     def __init__(self, camera, navigationController, liveController):
-        QObject.__init__(self)
         self.camera = camera
         self.navigationController = navigationController
         self.liveController = liveController
@@ -1906,7 +1839,6 @@ class AutoFocusController(QObject):
             self.navigationController.move_z_to(target_z)
             self.navigationController.microcontroller.wait_till_operation_is_completed()
             self.autofocus_in_progress = False
-            self.autofocusFinished.emit()
             return
         # stop live
         if self.liveController.is_live:
@@ -1925,10 +1857,10 @@ class AutoFocusController(QObject):
         self.autofocus_in_progress = True
         
         try:
-            if self.thread.isRunning():
+            if hasattr(self, 'thread') and self.thread and self.thread.is_alive():
                 print('*** autofocus thread is still running ***')
-                self.thread.terminate()
-                self.thread.wait()
+                # For standard threading, we can't forcefully terminate, just wait
+                self.thread.join(timeout=1.0)
                 print('*** autofocus threaded manually stopped ***')
         except:
             pass
@@ -1953,14 +1885,12 @@ class AutoFocusController(QObject):
             self.liveController.start_live()
 
         # emit the autofocus finished signal to enable the UI
-        self.autofocusFinished.emit()
+        if self.autofocusFinished:
+            self.autofocusFinished()
         print("autofocus finished")
 
         # update the state
         self.autofocus_in_progress = False
-
-    def slot_image_to_display(self, image):
-        self.image_to_display.emit(image)
 
     def wait_till_autofocus_has_completed(self):
         while self.autofocus_in_progress == True:
@@ -2060,23 +1990,19 @@ class AutoFocusController(QObject):
         print(f"Added triple ({x},{y},{z}) to focus map")
 
 
-class MultiPointWorker(QObject):
-
-    finished = Signal()
-    image_to_display = Signal(np.ndarray)
-    spectrum_to_display = Signal(np.ndarray)
-    image_to_display_multi = Signal(np.ndarray, int)
-    signal_current_configuration = Signal(Configuration)
-    signal_register_current_fov = Signal(float, float)
-    signal_detection_stats = Signal(object)
-
-    signal_update_stats = Signal(object)
+class MultiPointWorker:
 
     def __init__(self, multiPointController):
-        QObject.__init__(self)
         self.multiPointController = multiPointController
 
-        self.signal_update_stats.connect(self.update_stats)
+        # Callback functions to replace Qt signals
+        self.update_stats_callback = None
+        self.image_to_display_callback = None
+        self.spectrum_to_display_callback = None
+        self.image_to_display_multi_callback = None
+        self.signal_current_configuration_callback = None
+        self.signal_register_current_fov_callback = None
+        self.signal_detection_stats_callback = None
         self.start_time = 0
         self.processingHandler = multiPointController.processingHandler
         self.camera = self.multiPointController.camera
@@ -2137,7 +2063,8 @@ class MultiPointWorker(QObject):
                 self.detection_stats["Total Positives"]
                 / self.detection_stats["Total RBC"]
             )
-        self.signal_detection_stats.emit(self.detection_stats)
+        if self.signal_detection_stats_callback:
+            self.signal_detection_stats_callback(self.detection_stats)
 
     def run(self):
         self.time_point = 0 #NOTE: reset time point to 0
@@ -2211,7 +2138,6 @@ class MultiPointWorker(QObject):
         #self.processingHandler.upload_queue.join()
         elapsed_time = time.perf_counter_ns() - self.start_time
         print("Time taken for acquisition/processing: " + str(elapsed_time / 10**9))
-        #self.finished.emit()
         
     def wait_till_operation_is_completed(self):
         while self.microcontroller.is_busy():
@@ -2353,7 +2279,6 @@ class MultiPointWorker(QObject):
                                         if config.name == configuration_name_AF
                                     )
                                 )
-                                self.signal_current_configuration.emit(config_AF)
                                 self.autofocusController.set_microscope_mode(config_AF)
                                 print(f"autofocus at {coordiante_name}{i}_{j}, configuration: {configuration_name_AF},{config_AF}")
                                 if (
@@ -2399,7 +2324,6 @@ class MultiPointWorker(QObject):
                                             if config.name == configuration_name_AF
                                         )
                                     )
-                                    self.signal_current_configuration.emit(config_AF)
                                     self.autofocusController.set_microscope_mode(config_AF)
                                     self.autofocusController.autofocus()
                                     self.autofocusController.wait_till_autofocus_has_completed()
@@ -2516,7 +2440,6 @@ class MultiPointWorker(QObject):
                                 if "USB Spectrometer" not in config.name:
                                     # update the current configuration
                                     print("current configuration: " + config.name)
-                                    self.signal_current_configuration.emit(config)
                                     self.wait_till_operation_is_completed()
                                     self.liveController.set_microscope_mode(config)
                                     self.wait_till_operation_is_completed()
@@ -2576,7 +2499,6 @@ class MultiPointWorker(QObject):
                                         rotate_image_angle=self.camera.rotate_image_angle,
                                         flip_image=self.camera.flip_image,
                                     )
-                                    # self.image_to_display.emit(cv2.resize(image,(round(self.crop_width*self.display_resolution_scaling), round(self.crop_height*self.display_resolution_scaling)),cv2.INTER_LINEAR))
                                     image_to_display = utils.crop_image(
                                         image,
                                         round(
@@ -2587,10 +2509,6 @@ class MultiPointWorker(QObject):
                                             self.crop_height
                                             * self.display_resolution_scaling
                                         ),
-                                    )
-                                    self.image_to_display.emit(image_to_display)
-                                    self.image_to_display_multi.emit(
-                                        image_to_display, config.illumination_source
                                     )
                                     if image.dtype == np.uint16:
                                         saving_path = os.path.join(
@@ -2657,7 +2575,6 @@ class MultiPointWorker(QObject):
                                     if self.usb_spectrometer != None:
                                         for l in range(CONFIG.N_SPECTRUM_PER_POINT):
                                             data = self.usb_spectrometer.read_spectrum()
-                                            self.spectrum_to_display.emit(data)
                                             saving_path = os.path.join(
                                                 current_path,
                                                 file_ID
@@ -2705,11 +2622,6 @@ class MultiPointWorker(QObject):
                                 [self.coordinates_pd, new_row], ignore_index=True
                             )
 
-                            # register the current fov in the navigationViewer
-                            self.signal_register_current_fov.emit(
-                                self.navigationController.x_pos_mm,
-                                self.navigationController.y_pos_mm,
-                            )
 
                             # check if the acquisition should be aborted
                             if self.multiPointController.abort_acqusition_requested:
@@ -2906,15 +2818,15 @@ class MultiPointWorker(QObject):
         print(time.time() - start)
         return
         
-class MultiPointController(QObject):
+class MultiPointController:
 
-    acquisitionFinished = Signal()
-    image_to_display = Signal(np.ndarray)
-    image_to_display_multi = Signal(np.ndarray, int)
-    spectrum_to_display = Signal(np.ndarray)
-    signal_current_configuration = Signal(Configuration)
-    signal_register_current_fov = Signal(float, float)
-    detection_stats = Signal(object)
+    acquisitionFinished = None
+    image_to_display = None
+    image_to_display_multi = None
+    spectrum_to_display = None
+    signal_current_configuration = None
+    signal_register_current_fov = None
+    detection_stats = None
 
     def __init__(
         self,
@@ -2927,8 +2839,6 @@ class MultiPointController(QObject):
         scanCoordinates=None,
         parent=None,
     ):
-        QObject.__init__(self)
-
         self.camera = camera
         self.processingHandler = ProcessingHandler()
         self.microcontroller = (
@@ -3267,35 +3177,14 @@ class MultiPointController(QObject):
                     self.old_images_per_page
                 )
                 self.parent.dataHandler.sort("Sort by prediction score")
-                self.parent.dataHandler.signal_populate_page0.emit()
             except:
                 pass
-        self.acquisitionFinished.emit()
 
     def request_abort_aquisition(self):
         self.abort_acqusition_requested = True
 
-    def slot_detection_stats(self, stats):
-        self.detection_stats.emit(stats)
-
-    def slot_image_to_display(self, image):
-        self.image_to_display.emit(image)
-
-    def slot_spectrum_to_display(self, data):
-        self.spectrum_to_display.emit(data)
-
-    def slot_image_to_display_multi(self, image, illumination_source):
-        self.image_to_display_multi.emit(image, illumination_source)
-
-    def slot_current_configuration(self, configuration):
-        self.signal_current_configuration.emit(configuration)
-
-    def slot_register_current_fov(self, x_mm, y_mm):
-        self.signal_register_current_fov.emit(x_mm, y_mm)
-
-class ConfigurationManager(QObject):
+class ConfigurationManager:
     def __init__(self, filename=CONFIG.CHANNEL_CONFIGURATIONS_PATH):
-        QObject.__init__(self)
         self.config_filename = filename
         print(f"Illumination configurations file: {self.config_filename}")
         self.configurations = []
@@ -3362,13 +3251,12 @@ class ConfigurationManager(QObject):
             self.update_configuration_without_writing(conf.id, "Selected", 0)
 
 
-class PlateReaderNavigationController(QObject):
+class PlateReaderNavigationController:
 
-    signal_homing_complete = Signal()
-    signal_current_well = Signal(str)
+    signal_homing_complete = None
+    signal_current_well = None
 
     def __init__(self, microcontroller):
-        QObject.__init__(self)
         self.microcontroller = microcontroller
         self.x_pos_mm = 0
         self.y_pos_mm = 0
@@ -3498,8 +3386,9 @@ class PlateReaderNavigationController(QObject):
         if (
             self.is_homing
             and self.microcontroller.mcu_cmd_execution_in_progress == False
+            and self.signal_homing_complete
         ):
-            self.signal_homing_complete.emit()
+            self.signal_homing_complete()
         # for debugging
         # print('X: ' + str(self.x_pos_mm) + ' Y: ' + str(self.y_pos_mm))
         # check and emit current position
@@ -3520,8 +3409,6 @@ class PlateReaderNavigationController(QObject):
         else:
             row = " "
 
-        if self.is_scanning:
-            self.signal_current_well.emit(row + column)
 
     def home(self):
         self.is_homing = True
@@ -3572,7 +3459,7 @@ class WellSelector:
             for col in range(start_col, stop_col + 1):
                 self.selected_wells.append((row, col))
 
-class ScanCoordinates(object):
+class ScanCoordinates:
     def __init__(self):
         self.coordinates_mm = []
         self.name = []
@@ -3627,10 +3514,10 @@ class ScanCoordinates(object):
             _increasing = not _increasing
 
 
-class LaserAutofocusController(QObject):
+class LaserAutofocusController:
 
-    image_to_display = Signal(np.ndarray)
-    signal_displacement_um = Signal(float)
+    image_to_display = None
+    signal_displacement_um = None
 
     def __init__(
         self,
@@ -3642,7 +3529,6 @@ class LaserAutofocusController(QObject):
         use_glass_top=True,
         look_for_cache=True,
     ):
-        QObject.__init__(self)
         self.microcontroller = microcontroller
         self.camera = camera
         self.liveController = liveController
@@ -3853,7 +3739,6 @@ class LaserAutofocusController(QObject):
         self.wait_till_operation_is_completed()
         # calculate displacement
         displacement_um = (x - self.x_reference) * self.pixel_to_um
-        self.signal_displacement_um.emit(displacement_um)
         return displacement_um
 
     def move_to_target(self, target_um):
@@ -3877,7 +3762,6 @@ class LaserAutofocusController(QObject):
         self.microcontroller.turn_off_AF_laser()
         self.wait_till_operation_is_completed()
         self.x_reference = x
-        self.signal_displacement_um.emit(0)
 
     def _caculate_centroid(self, image):
         if self.has_two_interfaces == False:
@@ -3953,7 +3837,7 @@ class LaserAutofocusController(QObject):
             self.image = image
             # optionally display the image
             if CONFIG.LASER_AF_DISPLAY_SPOT_IMAGE:
-                self.image_to_display.emit(image)
+                pass  # TODO: add image display logic if needed
             # calculate centroid
             x, y = self._caculate_centroid(image)
             tmp_x = tmp_x + x
@@ -3973,7 +3857,6 @@ class LaserAutofocusController(QObject):
         # send trigger, grab image and display image
         self.camera.send_trigger()
         image = self.camera.read_frame()
-        self.image_to_display.emit(image)
         # turn off the laser
         self.microcontroller.turn_off_AF_laser()
         self.wait_till_operation_is_completed()

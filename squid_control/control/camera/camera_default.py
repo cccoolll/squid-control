@@ -3,10 +3,28 @@ import glob
 import time
 import numpy as np
 from PIL import Image
-try:
-    import squid_control.control.gxipy as gx
-except:
-    print("gxipy import error")
+import os
+import sys
+
+# Check if we're in simulation mode by looking for --simulation in sys.argv or environment
+_is_simulation_mode = (
+    "--simulation" in sys.argv or 
+    os.environ.get("SQUID_SIMULATION_MODE", "").lower() in ["true", "1", "yes"] or
+    os.environ.get("PYTEST_CURRENT_TEST") is not None  # Running in pytest
+)
+
+if _is_simulation_mode:
+    print("Simulation mode detected - skipping hardware camera imports")
+    GX_AVAILABLE = False
+    gx = None
+else:
+    try:
+        import squid_control.control.gxipy as gx
+        GX_AVAILABLE = True
+    except ImportError as e:
+        print(f"gxipy import error - hardware camera functionality not available: {e}")
+        GX_AVAILABLE = False
+        gx = None
 
 from squid_control.control.config import CONFIG
 from squid_control.control.camera import TriggerModeSetting
@@ -17,6 +35,8 @@ import asyncio
 script_dir = os.path.dirname(__file__)
 
 def get_sn_by_model(model_name):
+    if not GX_AVAILABLE:
+        return None
     try:
         device_manager = gx.DeviceManager()
         device_num, device_info_list = device_manager.update_device_list()
@@ -34,6 +54,8 @@ class Camera(object):
     def __init__(
         self, sn=None, is_global_shutter=False, rotate_image_angle=None, flip_image=None
     ):
+        if not GX_AVAILABLE:
+            raise RuntimeError("Hardware camera not available - gxipy not installed or not in simulation mode")
 
         # many to be purged
         self.sn = sn
@@ -599,23 +621,44 @@ class Camera_Simulation(object):
         pass
 
     def close(self):
+        self.stop_streaming()
         self.cleanup_zarr_resources()
-        pass
+        # Also ensure async cleanup runs to close Hypha connections
+        try:
+            loop = asyncio.get_running_loop()
+            # Schedule the async cleanup to run
+            if self.zarr_image_manager:
+                task = loop.create_task(self._cleanup_zarr_resources_async())
+                # Don't wait for it to complete to avoid blocking
+        except RuntimeError:
+            # No event loop running, skip async cleanup
+            pass
         
     def cleanup_zarr_resources(self):
         """
-        Synchronous wrapper for async cleanup method
+        Synchronous cleanup method for Zarr resources
         """
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Create a new event loop if the current one is already running
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
-                new_loop.run_until_complete(self._cleanup_zarr_resources_async())
-                new_loop.close()
-            else:
-                loop.run_until_complete(self._cleanup_zarr_resources_async())
+            if self.zarr_image_manager:
+                print("Closing ZarrImageManager resources...")
+                # Clear the cache to free memory
+                if hasattr(self.zarr_image_manager, 'zarr_groups_cache'):
+                    self.zarr_image_manager.zarr_groups_cache.clear()
+                    self.zarr_image_manager.zarr_groups_timestamps.clear()
+                
+                # Don't call async methods from sync context
+                self.zarr_image_manager = None
+                print("ZarrImageManager resources cleared")
+                
+            if self.artifact_manager:
+                print("Closing ArtifactManager resources...")
+                # Clear the cache to free memory
+                if hasattr(self.artifact_manager, 'zarr_groups_cache'):
+                    self.artifact_manager.zarr_groups_cache.clear()
+                    self.artifact_manager.zarr_groups_timestamps.clear()
+                
+                self.artifact_manager = None
+                print("ArtifactManager resources cleared")
         except Exception as e:
             print(f"Error in cleanup_zarr_resources: {e}")
         
@@ -675,9 +718,10 @@ class Camera_Simulation(object):
 
     def start_streaming(self):
         self.frame_ID_software = 0
+        self.is_streaming = True
 
     def stop_streaming(self):
-        pass
+        self.is_streaming = False
 
     def set_pixel_format(self, pixel_format):
         self.pixel_format = pixel_format

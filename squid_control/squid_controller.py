@@ -7,8 +7,28 @@ from squid_control.control.camera import get_camera
 from squid_control.control.utils import rotate_and_flip_image
 import cv2
 import logging
-import squid_control.control.serial_peripherals as serial_peripherals
 import matplotlib.path as mpath
+# Import serial_peripherals conditionally based on simulation mode
+import sys
+
+_is_simulation_mode = (
+    "--simulation" in sys.argv or 
+    os.environ.get("SQUID_SIMULATION_MODE", "").lower() in ["true", "1", "yes"] or
+    os.environ.get("PYTEST_CURRENT_TEST") is not None  # Running in pytest
+)
+
+if _is_simulation_mode:
+    print("Simulation mode detected - skipping hardware peripheral imports")
+    SERIAL_PERIPHERALS_AVAILABLE = False
+    serial_peripherals = None
+else:
+    try:
+        import squid_control.control.serial_peripherals as serial_peripherals
+        SERIAL_PERIPHERALS_AVAILABLE = True
+    except ImportError as e:
+        print(f"serial_peripherals import error - hardware peripheral functionality not available: {e}")
+        SERIAL_PERIPHERALS_AVAILABLE = False
+        serial_peripherals = None
 if CONFIG.SUPPORT_LASER_AUTOFOCUS:
     import squid_control.control.core_displacement_measurement as core_displacement_measurement
 
@@ -51,7 +71,7 @@ class SquidController:
         load_config(config_path, False)
         # load objects
         if self.is_simulation:
-            if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL:
+            if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL and SERIAL_PERIPHERALS_AVAILABLE:
                 self.xlight = serial_peripherals.XLight_Simulation()
             if CONFIG.SUPPORT_LASER_AUTOFOCUS:
                 self.camera = camera.Camera_Simulation(
@@ -66,7 +86,7 @@ class SquidController:
                 )
             self.microcontroller = microcontroller.Microcontroller_Simulation()
         else:
-            if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL:
+            if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL and SERIAL_PERIPHERALS_AVAILABLE:
                 self.xlight = serial_peripherals.XLight()
             try:
                 if CONFIG.SUPPORT_LASER_AUTOFOCUS:
@@ -434,28 +454,28 @@ class SquidController:
     def get_simulated_sample_data_alias(self):
         return self.sample_data_alias
 
-    def do_autofocus(self):
+    async def do_autofocus(self):
         
         if self.is_simulation:
-            self.do_autofocus_simulation()
+            await self.do_autofocus_simulation()
         else:
             self.autofocusController.set_deltaZ(1.524)
             self.autofocusController.set_N(15)
             self.autofocusController.autofocus()
             self.autofocusController.wait_till_autofocus_has_completed()
 
-    def do_autofocus_simulation(self):
+    async def do_autofocus_simulation(self):
         
         random_z = SIMULATED_CAMERA.ORIN_Z + np.random.normal(0,0.001)
         self.navigationController.move_z_to(random_z)
-        self.send_trigger_simulation(self.current_channel, self.current_intensity, self.current_exposure_time)
+        await self.send_trigger_simulation(self.current_channel, self.current_intensity, self.current_exposure_time)
         
     def init_laser_autofocus(self):
         self.laserAutofocusController.initialize_auto()
 
-    def do_laser_autofocus(self):
+    async def do_laser_autofocus(self):
         if self.is_simulation:
-            self.do_autofocus_simulation()
+            await self.do_autofocus_simulation()
         else:
             self.laserAutofocusController.move_to_target(0)
     
@@ -465,12 +485,17 @@ class SquidController:
     def move_to_well(self,row,column, wellplate_type='96'):
         if wellplate_type == '6':
             wellplate_format = WELLPLATE_FORMAT_6
+        elif wellplate_type == '12':
+            wellplate_format = WELLPLATE_FORMAT_12
         elif wellplate_type == '24':
             wellplate_format = WELLPLATE_FORMAT_24
         elif wellplate_type == '96':
             wellplate_format = WELLPLATE_FORMAT_96
         elif wellplate_type == '384':
-            wellplate_format = WELLPLATE_FORMAT_384 
+            wellplate_format = WELLPLATE_FORMAT_384
+        else:
+            # Default to 96-well plate if unsupported type is provided
+            wellplate_format = WELLPLATE_FORMAT_96
         
         if column != 0 and column != None:
             mm_per_ustep_X = CONFIG.SCREW_PITCH_X_MM/(self.navigationController.x_microstepping*CONFIG.FULLSTEPS_PER_REV_X)
@@ -631,13 +656,13 @@ class SquidController:
         self.liveController.set_illumination(channel, intensity)
         self.liveController.turn_on_illumination()
         while self.microcontroller.is_busy():
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.005)
 
         if self.is_simulation:
             await self.send_trigger_simulation(channel, intensity, exposure_time)
         else:
             self.camera.send_trigger()
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.005)
 
         while self.microcontroller.is_busy():
             await asyncio.sleep(0.005)
@@ -668,23 +693,24 @@ class SquidController:
     
 
     def close(self):
-
-        # move the objective to a defined position upon exit
-        self.navigationController.move_x(0.1) # temporary bug fix - move_x needs to be called before move_x_to if the stage has been moved by the joystick
-        while self.microcontroller.is_busy():
-            time.sleep(0.005)
-        self.navigationController.move_x_to(28)
-        while self.microcontroller.is_busy():
-            time.sleep(0.005)
-        self.navigationController.move_y(0.1) # temporary bug fix - move_y needs to be called before move_y_to if the stage has been moved by the joystick
-        while self.microcontroller.is_busy():
-            time.sleep(0.005)
-        self.navigationController.move_y_to(19)
-        while self.microcontroller.is_busy():
-            time.sleep(0.005)
+        # In simulation mode, skip stage movements to avoid delays
+        if not self.is_simulation:
+            # move the objective to a defined position upon exit
+            self.navigationController.move_x(0.1) # temporary bug fix - move_x needs to be called before move_x_to if the stage has been moved by the joystick
+            while self.microcontroller.is_busy():
+                time.sleep(0.005)
+            self.navigationController.move_x_to(28)
+            while self.microcontroller.is_busy():
+                time.sleep(0.005)
+            self.navigationController.move_y(0.1) # temporary bug fix - move_y needs to be called before move_y_to if the stage has been moved by the joystick
+            while self.microcontroller.is_busy():
+                time.sleep(0.005)
+            self.navigationController.move_y_to(19)
+            while self.microcontroller.is_busy():
+                time.sleep(0.005)
 
         self.liveController.stop_live()
-        self.camera.close()
+        self.camera.close()  # This now includes proper Hypha cleanup
         #self.imageSaver.close()
         if CONFIG.SUPPORT_LASER_AUTOFOCUS:
             self.camera_focus.close()
@@ -693,15 +719,7 @@ class SquidController:
         
 async def try_microscope():
     squid_controller = SquidController(is_simulation=False)
-    #squid_controller.platereader_move_to_well('A',1)
-    #image = await squid_controller.snap_image()
-    # save image
-    #cv2.imwrite('test_image.jpg', image)
-    
-    # Example using the original plate_scan function
-    # squid_controller.plate_scan()
-    
-    # Example using the new scan_well_plate_new function with custom settings
+
     custom_illumination_settings = [
         {'channel': 'BF LED matrix full', 'intensity': 35.0, 'exposure_time': 15.0},
         {'channel': 'Fluorescence 488 nm Ex', 'intensity': 50.0, 'exposure_time': 80.0},

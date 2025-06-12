@@ -1,0 +1,456 @@
+# Squid Microscope Control System - AI Assistant Rules
+
+## Project Overview
+This is a Python-based control system for the Squid microscope (by Cephla Inc.), featuring:
+- Real-time microscope hardware control and automation
+- Web-based API service using Hypha RPC
+- PyQt5-based GUI for local control
+- Camera integration with multiple vendors (ToupCam, FLIR, TIS)
+- Well plate scanning and image acquisition
+- WebRTC video streaming for remote microscope viewing
+- AI-powered chatbot integration for natural language microscope control
+- Simulation mode with Zarr-based virtual samples
+- Multi-channel fluorescence imaging capabilities
+
+## Technology Stack
+- **Core**: Python 3.8+, asyncio, PyQt5, OpenCV
+- **Hardware Control**: PySerial, microcontroller communication
+- **Image Processing**: NumPy, SciPy, scikit-image, OpenCV, PIL
+- **Data Storage**: Zarr, TiffFile, HDF5
+- **Web Services**: Hypha RPC, Flask, aiohttp, WebRTC (aiortc)
+- **AI Integration**: OpenAI API, similarity search services
+- **Testing**: pytest, pytest-asyncio, pytest-cov
+
+## Key Architecture Components
+
+### Core Control System (`squid_control/control/`)
+- `core.py` & `core_reef.py`: Main microscope control logic (4000+ lines each)
+- `microcontroller.py`: Hardware communication layer
+- `gui_hcs.py`: PyQt5-based GUI interface
+- `widgets.py`: Custom GUI widgets and dialogs
+- `config.py`: Configuration management system
+
+### Camera System (`squid_control/control/camera/`)
+- `camera_default.py`: Main camera interface with simulation support
+- `camera_flir.py`, `camera_toupcam.py`, `camera_TIS.py`: Vendor-specific drivers
+- Supports simulation mode with ZarrImageManager for virtual samples
+
+### Service Layer (`start_hypha_service.py`)
+- Hypha RPC service with 30+ API endpoints
+- WebRTC video streaming capabilities
+- Task status tracking and error handling
+- AI chatbot integration for natural language control
+
+### Hardware Control
+- **Serial Communication with Teensy 4.1 Microcontroller**: Comprehensive control protocol
+- **Stage Positioning**: X, Y, Z axes with precise microstep control
+- **Multi-channel LED Illumination**: Full spectrum LED control and DAC management
+- **Autofocus Systems**: Reflection-based and contrast-based autofocus
+
+## Simulation Mode - Comprehensive Overview
+
+### Introduction to Simulation Mode
+The Squid microscope control system features a comprehensive **simulation mode** that enables complete testing and development without physical hardware. This mode is essential for development, testing, and demonstration purposes, providing a realistic virtual microscope experience.
+
+### How to Use Simulation Mode
+Start the microscope in simulation mode using:
+```bash
+python -m squid_control --config HCS_v2 --simulation
+```
+
+Or through the Hypha service:
+```bash
+python start_hypha_service.py --simulation
+```
+
+### Simulated Components
+
+#### 1. **Virtual Hardware Control**
+- **Stage Movement**: All X, Y, Z movements are simulated with realistic coordinate tracking
+- **Illumination Control**: Full LED control simulation for all channels (BF, 405nm, 488nm, 561nm, 638nm, 730nm)
+- **Autofocus Systems**: Both reflection-based and contrast-based autofocus simulation
+- **Well Plate Navigation**: Complete well plate positioning simulation for all supported formats
+
+#### 2. **Simulated Camera System (`Camera_Simulation` class)**
+The heart of the simulation is the `Camera_Simulation` class in `camera_default.py`, which provides:
+
+- **Realistic Image Acquisition**: Position-based image retrieval from virtual samples
+- **Channel-Specific Imaging**: Support for brightfield and fluorescence channels
+- **Exposure & Intensity Simulation**: Realistic exposure time and illumination intensity effects
+- **Z-Axis Blurring**: Gaussian blur simulation for out-of-focus effects
+- **Pixel Format Support**: MONO8, MONO12, MONO16 formats
+
+#### 3. **Zarr-Based Virtual Sample System**
+The simulation uses **Zarr data archives** stored in ZIP files containing high-resolution microscopy images:
+
+- **Data Source**: Virtual samples from `agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38`
+- **Multi-Scale Support**: Uses scale1 (1/4 resolution) for performance optimization
+- **Channel Mapping**:
+  ```python
+  channel_map = {
+      0: 'BF_LED_matrix_full',          # Brightfield
+      11: 'Fluorescence_405_nm_Ex',     # 405nm fluorescence
+      12: 'Fluorescence_488_nm_Ex',     # 488nm fluorescence
+      14: 'Fluorescence_561_nm_Ex',     # 561nm fluorescence
+      13: 'Fluorescence_638_nm_Ex'      # 638nm fluorescence
+  }
+  ```
+
+### Virtual Sample Image Acquisition Workflow
+
+1. **Position Request**: User requests image at specific (x, y, z) coordinates
+2. **Coordinate Conversion**: Microscope coordinates (mm) → pixel coordinates
+3. **Zarr Data Retrieval**: `ZarrImageManager` fetches image region from Zarr archives
+4. **Image Processing**: Apply exposure, intensity, and z-blur effects
+5. **Format Conversion**: Convert to requested pixel format (MONO8/12/16)
+6. **Callback Execution**: Deliver processed image via callback system
+
+### Key Simulation Features
+
+#### **Realistic Image Effects**
+- **Exposure Simulation**: `exposure_factor = max(0.1, exposure_time / 100)`
+- **Intensity Scaling**: `intensity_factor = max(0.1, intensity / 60)`
+- **Z-Axis Blurring**: `gaussian_filter(image, sigma=abs(dz) * 6)`
+- **Fallback Images**: Example images when Zarr data unavailable
+
+#### **Performance Modes**
+- **Full Simulation**: Complete Zarr-based image retrieval
+- **Performance Mode**: Uses cached example images for faster response
+- **Fallback Mode**: Automatic fallback to example images if Zarr access fails
+
+#### **Coordinate System**
+- **Stage Coordinates**: Real-world millimeter coordinates
+- **Pixel Conversion**: `pixel_x = int((x / pixel_size_um) * 1000 / scale_factor)`
+- **Drift Correction**: Built-in correction factors for alignment
+- **Software Barriers**: Prevents movement outside safe zones
+
+### ZarrImageManager Integration
+
+The `ZarrImageManager` provides:
+- **Lazy Loading**: Resources initialized only when needed
+- **Direct Region Access**: Efficient image region retrieval
+- **Chunk Assembly**: Falls back to chunk-based assembly if needed
+- **Error Handling**: Graceful degradation with fallback images
+- **Connection Management**: Automatic connection to Hypha data services
+
+### Simulation Configuration
+
+Key configuration parameters:
+```python
+# Default simulation settings
+SIMULATED_CAMERA.ORIN_Z = reference_z_position
+MAGNIFICATION_FACTOR = 20
+pixel_size_xy = 0.333  # micrometers
+scale_factor = 4       # Using scale1 (1/4 resolution)
+SERVER_URL = "https://hypha.aicell.io"
+```
+
+### Testing Guidelines - SIMULATION FIRST
+
+⚠️ **CRITICAL TESTING PROTOCOL** ⚠️
+
+**ALWAYS test with simulated microscope first before any hardware testing**
+
+1. **Development Testing**:
+   - All new features MUST be tested in simulation mode first
+   - Verify API endpoints work correctly with simulated hardware
+   - Test GUI functionality with simulated responses
+   - Validate image acquisition and processing pipelines
+
+2. **Integration Testing**:
+   - Test complete workflows in simulation mode
+   - Verify well plate scanning simulations
+   - Test autofocus algorithms with simulated responses
+   - Validate WebRTC video streaming with simulated frames
+
+3. **Performance Testing**:
+   - Test API response times with simulated hardware
+   - Verify memory usage patterns with Zarr data
+   - Test concurrent access to simulation resources
+
+4. **Hardware Testing - Don't Work on it now. Future Feature**:
+   - Hardware testing is a future enhancement
+   - Physical hardware integration should only be attempted after complete simulation validation
+   - Real hardware testing requires additional safety protocols and hardware setup
+
+### Simulation Limitations & Fallbacks
+
+- **Limited Sample Areas**: Not all stage positions have sample data
+- **Example Image Fallbacks**: Default images used when Zarr data unavailable
+- **Network Dependencies**: Zarr data requires connection to Hypha services
+- **Performance Considerations**: Full Zarr access may be slower than example images
+
+## Serial Communication with Teensy 4.1 Microcontroller
+
+### Overview
+The PC collaborates with a **Teensy 4.1 microcontroller** through a sophisticated serial communication protocol to control all microscope hardware components. This real-time communication enables precise control of stage positioning, illumination, and various peripherals.
+
+### Hardware Connection & Discovery
+- **Auto-Detection**: System automatically detects Teensy by manufacturer ID "Teensyduino"
+- **Baud Rate**: High-speed 2,000,000 bps for minimal latency
+- **Connection**: USB serial communication with robust error handling
+- **Platform Support**: Cross-platform (Windows, Linux, macOS) with automatic port detection
+
+### Serial Protocol Architecture
+
+#### **Command Structure (PC → Teensy)**
+```python
+# Command Buffer: 8 bytes total
+cmd = bytearray(8)
+cmd[0] = command_id        # 1 byte: Unique command identifier (0-255, circular)
+cmd[1] = command_type      # 1 byte: Operation type (see CMD_SET)
+cmd[2:7] = parameters      # 5 bytes: Command-specific parameters
+cmd[7] = crc_checksum      # 1 byte: CRC8-CCITT error detection
+```
+
+#### **Response Structure (Teensy → PC)**
+```python
+# Response Buffer: 24 bytes total
+msg[0] = command_id        # 1 byte: Echo of received command ID
+msg[1] = execution_status  # 1 byte: Success/error status
+msg[2:6] = x_position      # 4 bytes: Current X position (microsteps)
+msg[6:10] = y_position     # 4 bytes: Current Y position (microsteps)
+msg[10:14] = z_position    # 4 bytes: Current Z position (microsteps)
+msg[14:18] = reserved_axis # 4 bytes: Reserved axis (legacy theta support)
+msg[18] = button_switches  # 1 byte: Hardware button/switch states
+msg[19:23] = reserved      # 4 bytes: Reserved for future use
+msg[23] = crc_checksum     # 1 byte: Response integrity check
+```
+
+### Command Categories & Functions
+
+#### **1. Stage Movement Commands**
+- **MOVE_X/Y/Z**: Relative movement in microsteps
+- **MOVETO_X/Y/Z**: Absolute positioning to specific coordinates
+- **HOME_OR_ZERO**: Homing sequences and zero position setting
+- **SET_OFFSET_VELOCITY**: Continuous motion velocity control
+
+#### **2. Illumination Control Commands**
+- **TURN_ON/OFF_ILLUMINATION**: Binary illumination control
+- **SET_ILLUMINATION**: Intensity control for specific channels
+- **SET_ILLUMINATION_LED_MATRIX**: Full RGB LED matrix control
+- **ANALOG_WRITE_ONBOARD_DAC**: Precise analog output control
+
+#### **3. Hardware Configuration Commands**
+- **CONFIGURE_STEPPER_DRIVER**: Motor driver parameters (microstepping, current)
+- **SET_MAX_VELOCITY_ACCELERATION**: Motion profile optimization
+- **SET_LEAD_SCREW_PITCH**: Mechanical calibration parameters
+- **SET_LIM_SWITCH_POLARITY**: Safety system configuration
+
+#### **4. Advanced Control Commands**
+- **SEND_HARDWARE_TRIGGER**: Camera synchronization triggers
+- **SET_STROBE_DELAY**: Precise timing control for illumination
+- **SET_PIN_LEVEL**: Direct GPIO control for peripherals
+- **CONFIGURE_STAGE_PID**: Closed-loop position control
+
+### Communication Features
+
+#### **Reliability & Error Handling**
+- **CRC8-CCITT Checksums**: Both command and response integrity verification
+- **Command ID Tracking**: Ensures commands are executed in correct sequence
+- **Automatic Retry**: Failed commands are automatically retransmitted
+- **Timeout Detection**: Prevents system hanging on communication failures
+- **Buffer Management**: Automatic clearing of stale data in receive buffer
+
+#### **Real-Time Operation**
+- **Threaded Communication**: Dedicated thread for continuous packet reading
+- **Non-Blocking Commands**: All functions return immediately, status checked separately
+- **Status Monitoring**: Real-time position feedback and execution status
+- **Hardware Interrupts**: Immediate response to limit switches and emergency stops
+
+#### **Position Tracking System**
+- **Microstep Resolution**: Precise positioning with microstep accuracy
+- **Multi-Axis Coordination**: Simultaneous control of X, Y, Z axes
+- **Position Feedback**: Continuous real-time position reporting
+- **Software Limits**: Configurable safety boundaries to prevent hardware damage
+
+### Coordinate System & Units
+
+#### **Position Units**
+- **Microsteps**: Native microcontroller unit for motor control
+- **Millimeters**: User-friendly units converted via screw pitch calculations
+- **Conversion Formula**: `usteps = mm / (screw_pitch_mm / (microstepping × steps_per_rev))`
+
+#### **Coordinate Conventions**
+- **X/Y Axes**: Stage movement (typically horizontal plane)
+- **Z Axis**: Focus/vertical movement (positive = toward sample)
+- **Software Barriers**: JSON-defined safe movement boundaries
+
+### Software Integration
+
+#### **Python Interface Classes**
+- **`Microcontroller`**: Main hardware interface for real operations
+- **`Microcontroller_Simulation`**: Complete simulation for testing
+- **`Microcontroller2`**: Secondary controller for specialized functions
+
+#### **Configuration Management**
+- **CONFIG System**: Centralized hardware parameter management
+- **INI Files**: User-configurable microscope settings
+- **Calibration Data**: Stored screw pitches, motor parameters, safety limits
+
+#### **Threading Architecture**
+- **Command Thread**: Sends commands to microcontroller
+- **Reception Thread**: Continuously reads responses and updates status
+- **GUI Thread**: Non-blocking user interface operation
+- **Simulation Timer**: Realistic timing simulation for development
+
+### Development Guidelines
+
+#### **Command Implementation Pattern**
+```python
+def move_x_usteps(self, usteps):
+    cmd = bytearray(self.tx_buffer_length)
+    cmd[1] = CMD_SET.MOVE_X
+    payload = self._int_to_payload(usteps, 4)
+    cmd[2] = (payload >> 24) & 0xFF
+    cmd[3] = (payload >> 16) & 0xFF  
+    cmd[4] = (payload >> 8) & 0xFF
+    cmd[5] = payload & 0xFF
+    self.send_command(cmd)
+```
+
+#### **Error Handling Best Practices**
+- Always check `is_busy()` before sending new commands
+- Use `wait_till_operation_is_completed()` for synchronous operation
+- Implement proper timeout handling for critical operations
+- Log communication errors for debugging
+
+#### **Testing Protocol**
+- **Simulation First**: Always test with `Microcontroller_Simulation`
+- **Hardware Validation**: Verify commands work correctly with real Teensy
+- **Safety Checks**: Test software limits and emergency stops
+- **Performance Testing**: Validate high-speed communication reliability
+
+### Safety Systems Integration
+
+#### **Software Barriers**
+- **Edge Position Mapping**: JSON-stored boundary definitions in microsteps
+- **Concave Hull Detection**: Geometric algorithms prevent dangerous movements
+- **Real-Time Checking**: Every movement command validated against safety boundaries
+
+#### **Hardware Safety**
+- **Limit Switch Integration**: Immediate stop on hardware limit detection
+- **Emergency Stop**: Hardware-level emergency stop capability
+- **Thermal Protection**: Motor driver thermal monitoring and protection
+
+This serial communication system provides the foundation for precise, reliable, and safe microscope operation, with comprehensive simulation support for development and testing.
+
+## Coding Standards & Best Practices
+
+### Python Style
+- Follow PEP 8 with line length up to 88 characters (configured in pyproject.toml)
+- Use type hints for all new functions and methods
+- Prefer descriptive variable names (`exposure_time` over `exp`)
+- Use async/await for I/O operations and hardware communication
+
+### Error Handling
+- Always use try-except blocks around hardware operations
+- Log errors with appropriate levels (INFO, WARNING, ERROR)
+- Implement graceful degradation for hardware failures
+- Use task status tracking for long-running operations
+
+### Hardware Integration
+- Always check hardware connection before operations
+- Implement proper cleanup in finally blocks
+- Use context managers for resource management
+- Add simulation fallbacks for all hardware operations
+
+### API Design
+- Use Pydantic models for input validation (see BaseModel classes)
+- Include detailed Field descriptions for all parameters
+- Implement permission checks using `check_permission()`
+- Add schema validation with `@schema_function` decorator
+
+### Configuration Management
+- Use INI files for hardware configuration
+- Support both absolute and relative config paths
+- Implement backward compatibility for config changes
+- Validate configuration parameters on load
+
+## File Structure Guidelines
+
+### Main Package (`squid_control/`)
+- Keep hardware abstraction in separate modules
+- Use `__init__.py` for public API definitions
+- Store configuration files alongside code
+
+### Service Integration (`hypha_tools/`)
+- Implement service clients as separate classes
+- Use dependency injection for service connections
+- Handle service failures gracefully
+
+### Testing (`tests/`)
+- Write unit tests for all core functionality
+- Use pytest fixtures for hardware mocking
+- Test both simulation and real hardware modes
+- Include integration tests for API endpoints
+
+## Development Guidelines
+
+### New Feature Development
+1. Add simulation support first
+2. Implement hardware integration
+3. Add API endpoints if needed
+4. Update configuration files
+5. Write comprehensive tests
+6. Update documentation
+
+### Hardware Integration
+- Always implement simulation mode
+- Use factory patterns for hardware drivers
+- Implement proper resource cleanup
+- Add connection status monitoring
+
+### API Development
+- Follow existing schema patterns
+- Add input validation with Pydantic
+- Implement proper error responses
+- Include detailed API documentation
+
+### GUI Development
+- Use PyQt5 signal/slot mechanism
+- Implement proper threading for long operations
+- Add progress indicators for user feedback
+- Support both local and remote operation modes
+
+## Important Conventions
+
+### Coordinate System
+- Stage coordinates in millimeters
+- Camera coordinates in pixels
+- Z-axis positive direction is toward sample
+
+### Channel Mapping
+- Channel 0: Bright Field LED matrix
+- Channels 11-15: Fluorescence (405nm, 488nm, 638nm, 561nm, 730nm)
+- Use channel_param_map for parameter mapping
+
+### Well Plate Support
+- Support 6, 12, 24, 96, 384 well plates
+- Row naming: A-H (96-well), Column numbering: 1-12
+- Use move_to_well() for navigation
+
+### Image Acquisition
+- Default exposure times per channel stored in intensity_exposure arrays
+- Support both single frame and time-lapse acquisition
+- Implement proper camera triggering modes
+
+## Debugging & Logging
+- Use the configured logger (`setup_logging()`) 
+- Log hardware operations at INFO level
+- Log errors with full stack traces
+- Include timing information for performance monitoring
+
+## Security Considerations
+- Implement user authentication for API access
+- Use authorized_emails list for permission control
+- Validate all user inputs through Pydantic models
+- Implement rate limiting for resource-intensive operations
+
+When working on this codebase:
+1. Always consider both simulation and hardware modes
+2. Maintain backward compatibility with existing configurations
+3. Add comprehensive error handling and logging
+4. Test thoroughly with both mock and real hardware
+5. Follow the established patterns for new features
+6. Update relevant documentation and tests 
