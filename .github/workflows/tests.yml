@@ -3,7 +3,7 @@ name: Tests
 on: push
 
 jobs:
-  test:
+  unit-tests:
     runs-on: ubuntu-latest
     container:
       image: python:3.11-slim
@@ -28,35 +28,17 @@ jobs:
         python -m pip install --upgrade pip
         pip install .[dev]
 
-
-
-    - name: Run unit tests first (without integration)
+    - name: Run unit tests
       shell: bash
       env:
         SQUID_SIMULATION_MODE: "true"
         PYTHONPATH: "."
       run: |
-        echo "🧪 Step 1/2: Running UNIT TESTS (without integration tests)"
+        echo "🧪 Running UNIT TESTS (without integration tests)"
         echo "🔧 Hardware modules excluded in simulation mode"
         echo "⚡ Fast feedback - unit tests run first"
         echo ""
         python scripts/run_tests.py --skip-integration --coverage --verbose
-
-    - name: Run integration tests (Hypha RPC)
-      shell: bash
-      env:
-        SQUID_SIMULATION_MODE: "true"
-        PYTHONPATH: "."
-        SQUID_WORKSPACE_TOKEN: ${{ secrets.SQUID_WORKSPACE_TOKEN }}
-      # Continue with integration tests even if unit tests had warnings/minor issues
-      # but the workflow will still fail if unit tests actually failed
-      if: always()
-      run: |
-        echo "🌐 Step 2/2: Running INTEGRATION TESTS (Hypha RPC services)"
-        echo "🔗 Requires network access and workspace token"
-        echo "💡 To run locally: python scripts/run_tests.py --integration-only"
-        echo ""
-        python scripts/run_tests.py --integration-only --verbose
 
     - name: Upload coverage reports to Codecov
       if: always() && matrix.python-version == '3.11'
@@ -74,20 +56,74 @@ jobs:
       if: always() && matrix.python-version == '3.11'
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-html-report
+        name: coverage-html-report-unit-tests
         path: htmlcov/
         retention-days: 30
 
-    - name: Upload test results
+    - name: Upload unit test results
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: test-results-${{ matrix.python-version }}
+        name: unit-test-results-${{ matrix.python-version }}
         path: pytest-results.xml
         retention-days: 30
 
+  integration-tests:
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.11-slim
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+    # Run integration tests regardless of unit test results
+    if: always()
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install system dependencies
+      run: |
+        apt-get update
+        apt-get install -y \
+          libgl1-mesa-glx \
+          libglib2.0-0 \
+          git \
+          gpg
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install .[dev]
+
+    - name: Run integration tests
+      shell: bash
+      env:
+        SQUID_SIMULATION_MODE: "true"
+        PYTHONPATH: "."
+        SQUID_WORKSPACE_TOKEN: ${{ secrets.SQUID_WORKSPACE_TOKEN }}
+      run: |
+        echo "🌐 Running INTEGRATION TESTS (Hypha RPC services)"
+        echo "🔗 Requires network access and workspace token"
+        echo "💡 To run locally: python scripts/run_tests.py --integration-only"
+        echo ""
+        python scripts/run_tests.py --integration-only --verbose
+
+    - name: Upload integration test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-test-results-${{ matrix.python-version }}
+        path: pytest-results.xml
+        retention-days: 30
+
+  coverage-report:
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests]
+    if: always()
+    
+    steps:
     - name: Coverage comment
-      if: github.event_name == 'pull_request' && matrix.python-version == '3.11'
+      if: github.event_name == 'pull_request'
       uses: py-cov-action/python-coverage-comment-action@v3
       with:
         GITHUB_TOKEN: ${{ github.token }}
