@@ -100,7 +100,7 @@ jobs:
       env:
         SQUID_SIMULATION_MODE: "true"
         PYTHONPATH: "."
-        SQUID_WORKSPACE_TOKEN: ${{ secrets.SQUID_WORKSPACE_TOKEN }}
+        AGENT_LENS_WORKSPACE_TOKEN: ${{ secrets.AGENT_LENS_WORKSPACE_TOKEN }}
       run: |
         echo "🌐 Running INTEGRATION TESTS (Hypha RPC services)"
         echo "🔗 Requires network access and workspace token"

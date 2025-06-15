@@ -8,9 +8,9 @@ from hypha_rpc import connect_to_server
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_connection():
-    token = os.environ.get('SQUID_WORKSPACE_TOKEN')
+    token = os.environ.get('AGENT_LENS_WORKSPACE_TOKEN')
     if not token:
-        print('❌ No SQUID_WORKSPACE_TOKEN found in environment')
+        print('❌ No AGENT_LENS_WORKSPACE_TOKEN found in environment')
         return False
     
     print('🔗 Attempting to connect to Hypha server...')
@@ -18,7 +18,7 @@ async def test_connection():
         server = await connect_to_server({
             'server_url': 'https://hypha.aicell.io',
             'token': token,
-            'workspace': 'squid-control',
+            'workspace': 'agent-lens',
             'ping_interval': None
         })
         print('✅ Successfully connected to server')

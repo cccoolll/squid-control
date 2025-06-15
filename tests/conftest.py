@@ -69,5 +69,5 @@ def pytest_runtest_setup(item):
     # Skip integration tests if environment variable not set
     if "integration" in item.keywords:
         import os
-        if not os.environ.get("SQUID_WORKSPACE_TOKEN"):
-            pytest.skip("SQUID_WORKSPACE_TOKEN not set - skipping integration test") 
+        if not os.environ.get("AGENT_LENS_WORKSPACE_TOKEN"):
+            pytest.skip("AGENT_LENS_WORKSPACE_TOKEN not set - skipping integration test") 

@@ -15,7 +15,7 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 # Test configuration
 TEST_SERVER_URL = "https://hypha.aicell.io"
-TEST_WORKSPACE = "squid-control"
+TEST_WORKSPACE = "agent-lens"
 TEST_TIMEOUT = 120  # seconds
 
 class SimpleTestDataStore:
@@ -45,9 +45,9 @@ class SimpleTestDataStore:
 async def test_microscope_service():
     """Create a real microscope service for testing."""
     # Check for token first
-    token = os.environ.get("SQUID_WORKSPACE_TOKEN")
+    token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
     if not token:
-        pytest.skip("SQUID_WORKSPACE_TOKEN not set in environment")
+        pytest.skip("AGENT_LENS_WORKSPACE_TOKEN not set in environment")
     
     print(f"🔗 Connecting to {TEST_SERVER_URL} workspace {TEST_WORKSPACE}...")
     
