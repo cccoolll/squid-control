@@ -263,6 +263,107 @@ class Microscope:
     async def ping(self, context=None):
         return "pong"
     
+    async def is_service_healthy(self, context=None):
+        """Check if all services are healthy"""
+        try:
+            microscope_svc = await self.server.get_service(self.service_id)
+            if microscope_svc is None:
+                raise RuntimeError("Microscope service not found")
+            
+            result = await microscope_svc.hello_world()
+            if result != "Hello world":
+                raise RuntimeError(f"Microscope service returned unexpected response: {result}")
+            
+            datastore_id = f'data-store-{"simu" if self.is_simulation else "real"}-{self.service_id}'
+            datastore_svc = await self.server.get_service(datastore_id)
+            if datastore_svc is None:
+                raise RuntimeError("Datastore service not found")
+            
+            try:
+                if not self.is_simulation:
+                    logger.info("Skipping Zarr access check in non-simulation mode.")
+                else:
+                    if not hasattr(self.squidController.camera, 'zarr_image_manager') or self.squidController.camera.zarr_image_manager is None:
+                        logger.info("ZarrImageManager not initialized yet, initializing it for health check")
+                        
+                        try:
+                            await asyncio.wait_for(
+                                self.initialize_zarr_manager(self.squidController.camera),
+                                timeout=30
+                            )
+                        except asyncio.TimeoutError:
+                            logger.error("ZarrImageManager initialization timed out")
+                            raise RuntimeError("ZarrImageManager initialization timed out")
+                    
+                    logger.info("Testing existing ZarrImageManager instance from simulated camera.")
+                    
+                    test_result = await asyncio.wait_for(
+                        self.squidController.camera.zarr_image_manager.test_zarr_access(
+                            dataset_id="agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38",
+                            channel="BF_LED_matrix_full",
+                            bypass_cache=True
+                        ), 
+                        50
+                    ) 
+                    
+                    if not test_result.get("success", False):
+                        error_msg = test_result.get("message", "Unknown error")
+                        raise RuntimeError(f"Zarr access test failed for existing instance: {error_msg}")
+                    else:
+                        stats = test_result.get("chunk_stats", {})
+                        non_zero = stats.get("non_zero_count", 0)
+                        total = stats.get("total_size", 1)
+                        if total > 0:
+                            logger.info(f"Existing Zarr access test succeeded. Non-zero values: {non_zero}/{total} ({(non_zero/total)*100:.1f}%)")
+                        else:
+                            logger.info("Existing Zarr access test succeeded, but chunk size was zero.")
+
+            except asyncio.TimeoutError:
+                logger.error("Zarr access health check timed out.")
+                raise RuntimeError("Zarr access health check timed out after 50 seconds.")
+            except Exception as artifact_error:
+                logger.error(f"Zarr access health check failed: {str(artifact_error)}")
+                raise RuntimeError(f"Zarr access health check failed: {str(artifact_error)}")
+            
+            chatbot_id = f"squid-chatbot-{'simu' if self.is_simulation else 'real'}-{self.service_id}"
+            
+            chatbot_server_url = "https://chat.bioimage.io"
+            try:
+                chatbot_token = os.environ.get("WORKSPACE_TOKEN_CHATBOT")
+                if not chatbot_token:
+                    logger.warning("Chatbot token not found, skipping chatbot health check")
+                else:
+                    chatbot_server = await connect_to_server({
+                        "server_url": chatbot_server_url, 
+                        "token": chatbot_token,
+                        "ping_interval": None
+                    })
+                    chatbot_svc = await asyncio.wait_for(chatbot_server.get_service(chatbot_id), 10)
+                    if chatbot_svc is None:
+                        raise RuntimeError("Chatbot service not found")
+            except Exception as chatbot_error:
+                raise RuntimeError(f"Chatbot service health check failed: {str(chatbot_error)}")
+            
+            try:
+                if self.similarity_search_svc is None:
+                    raise RuntimeError("Similarity search service not found")
+                
+                result = await self.similarity_search_svc.hello_world()
+                if result != "Hello world":
+                    raise RuntimeError(f"Similarity search service returned unexpected response: {result}")
+                logger.info("Similarity search service is healthy")
+            except Exception as similarity_error:
+                logger.error(f"Similarity search service health check failed: {str(similarity_error)}")
+                raise RuntimeError(f"Similarity search service health check failed: {str(similarity_error)}")
+
+            logger.info("All services are healthy")
+            return {"status": "ok", "message": "All services are healthy"}
+        except Exception as e:
+            logger.error(f"Health check failed: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise RuntimeError(f"Service health check failed: {str(e)}")
+    
     def get_task_status(self, task_name):
         """Get the status of a specific task"""
         return self.task_status.get(task_name, "unknown")
@@ -1214,6 +1315,7 @@ class Microscope:
                 },
                 "type": "echo",
                 "hello_world": self.hello_world,
+                "is_service_healthy": self.is_service_healthy,
                 "move_by_distance": self.move_by_distance,
                 "snap": self.snap,
                 "one_new_frame": self.one_new_frame,
@@ -1250,8 +1352,6 @@ class Microscope:
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
         )
 
-        if "local" not in service_id and "test" not in service_id:
-            await self.register_service_probes(server)
         
         logger.info(f'You can use this service using the service id: {svc.id}')
         id = svc.id.split(":")[1]
@@ -1441,113 +1541,6 @@ class Microscope:
         if not self.is_local: # only start webrtc service in remote mode
             await self.start_webrtc_service(self.server, webrtc_id)
 
-    async def register_service_probes(self, server):
-        async def is_service_healthy():
-            try:
-                microscope_svc = await server.get_service(self.service_id)
-                if microscope_svc is None:
-                    raise RuntimeError("Microscope service not found")
-                
-                result = await microscope_svc.hello_world()
-                if result != "Hello world":
-                    raise RuntimeError(f"Microscope service returned unexpected response: {result}")
-                
-                datastore_id = f'data-store-{"simu" if self.is_simulation else "real"}-{self.service_id}'
-                datastore_svc = await server.get_service(datastore_id)
-                if datastore_svc is None:
-                    raise RuntimeError("Datastore service not found")
-                
-                try:
-                    if not self.is_simulation:
-                        logger.info("Skipping Zarr access check in non-simulation mode.")
-                    else:
-                        if not hasattr(self.squidController.camera, 'zarr_image_manager') or self.squidController.camera.zarr_image_manager is None:
-                            logger.info("ZarrImageManager not initialized yet, initializing it for health check")
-                            
-                            try:
-                                await asyncio.wait_for(
-                                    self.initialize_zarr_manager(self.squidController.camera),
-                                    timeout=30
-                                )
-                            except asyncio.TimeoutError:
-                                logger.error("ZarrImageManager initialization timed out")
-                                raise RuntimeError("ZarrImageManager initialization timed out")
-                        
-                        logger.info("Testing existing ZarrImageManager instance from simulated camera.")
-                        
-                        test_result = await asyncio.wait_for(
-                            self.squidController.camera.zarr_image_manager.test_zarr_access(
-                                dataset_id="agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38",
-                                channel="BF_LED_matrix_full",
-                                bypass_cache=True
-                            ), 
-                            50
-                        ) 
-                        
-                        if not test_result.get("success", False):
-                            error_msg = test_result.get("message", "Unknown error")
-                            raise RuntimeError(f"Zarr access test failed for existing instance: {error_msg}")
-                        else:
-                            stats = test_result.get("chunk_stats", {})
-                            non_zero = stats.get("non_zero_count", 0)
-                            total = stats.get("total_size", 1)
-                            if total > 0:
-                                logger.info(f"Existing Zarr access test succeeded. Non-zero values: {non_zero}/{total} ({(non_zero/total)*100:.1f}%)")
-                            else:
-                                logger.info("Existing Zarr access test succeeded, but chunk size was zero.")
-
-                except asyncio.TimeoutError:
-                    logger.error("Zarr access health check timed out.")
-                    raise RuntimeError("Zarr access health check timed out after 50 seconds.")
-                except Exception as artifact_error:
-                    logger.error(f"Zarr access health check failed: {str(artifact_error)}")
-                    raise RuntimeError(f"Zarr access health check failed: {str(artifact_error)}")
-                
-                chatbot_id = f"squid-chatbot-{'simu' if self.is_simulation else 'real'}-{self.service_id}"
-                
-                chatbot_server_url = "https://chat.bioimage.io"
-                try:
-                    chatbot_token = os.environ.get("WORKSPACE_TOKEN_CHATBOT")
-                    if not chatbot_token:
-                        logger.warning("Chatbot token not found, skipping chatbot health check")
-                    else:
-                        chatbot_server = await connect_to_server({
-                            "server_url": chatbot_server_url, 
-                            "token": chatbot_token,
-                            "ping_interval": None
-                        })
-                        chatbot_svc = await asyncio.wait_for(chatbot_server.get_service(chatbot_id), 10)
-                        if chatbot_svc is None:
-                            raise RuntimeError("Chatbot service not found")
-                except Exception as chatbot_error:
-                    raise RuntimeError(f"Chatbot service health check failed: {str(chatbot_error)}")
-                
-                try:
-                    if self.similarity_search_svc is None:
-                        raise RuntimeError("Similarity search service not found")
-                    
-                    result = await self.similarity_search_svc.hello_world()
-                    if result != "Hello world":
-                        raise RuntimeError(f"Similarity search service returned unexpected response: {result}")
-                    logger.info("Similarity search service is healthy")
-                except Exception as similarity_error:
-                    logger.error(f"Similarity search service health check failed: {str(similarity_error)}")
-                    raise RuntimeError(f"Similarity search service health check failed: {str(similarity_error)}")
-
-                logger.info("All services are healthy")
-                return {"status": "ok", "message": "All services are healthy"}
-            except Exception as e:
-                logger.error(f"Health check failed: {str(e)}")
-                import traceback
-                logger.error(traceback.format_exc())
-                raise RuntimeError(f"Service health check failed: {str(e)}")
-        
-        logger.info("Registering health probes for Kubernetes")
-        await server.register_probes({
-            f"readiness-{self.service_id}": is_service_healthy,
-            f"liveness-{self.service_id}": is_service_healthy
-        })
-        logger.info("Health probes registered successfully")
 
     async def initialize_zarr_manager(self, camera):
         from squid_control.hypha_tools.artifact_manager.artifact_manager import ZarrImageManager
