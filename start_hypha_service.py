@@ -76,8 +76,8 @@ class MicroscopeVideoTrack(MediaStreamTrack):
         self.running = True
         self.start_time = None
         self.fps = 3 # Target FPS for WebRTC stream
-        self.frame_width = 720
-        self.frame_height = 720
+        self.frame_width = 640
+        self.frame_height = 640
         # Set WebRTC connection status
         self.microscope_instance.webrtc_connected = True
         logger.info("MicroscopeVideoTrack initialized")
