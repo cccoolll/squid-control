@@ -5,6 +5,8 @@ import numpy as np
 from PIL import Image
 import os
 import sys
+import cv2
+import asyncio
 
 # Check if we're in simulation mode by looking for --simulation in sys.argv or environment
 _is_simulation_mode = (
@@ -31,7 +33,6 @@ from squid_control.control.camera import TriggerModeSetting
 from scipy.ndimage import gaussian_filter
 import zarr
 from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager, ZarrImageManager
-import asyncio
 script_dir = os.path.dirname(__file__)
 
 def get_sn_by_model(model_name):
@@ -919,3 +920,139 @@ class Camera_Simulation(object):
 
     def set_line3_to_exposure_active(self):
         pass
+
+    async def send_trigger_buffered(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.333, channel=0, intensity=100, exposure_time=100, magnification_factor=20, sample_data_alias="agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38"):
+        """
+        Optimized trigger method for video buffering with faster image acquisition.
+        Uses performance mode and optimized Zarr access patterns.
+        """
+        print(f"Sending buffered trigger with x={x}, y={y}, dz={dz}, pixel_size_um={pixel_size_um}, channel={channel}, intensity={intensity}, exposure_time={exposure_time}, magnification_factor={magnification_factor}, sample_data_alias={sample_data_alias}")
+        self.frame_ID += 1
+        self.timestamp = time.time()
+
+        channel_map = {
+            0: 'BF_LED_matrix_full',
+            11: 'Fluorescence_405_nm_Ex',
+            12: 'Fluorescence_488_nm_Ex',
+            14: 'Fluorescence_561_nm_Ex',
+            13: 'Fluorescence_638_nm_Ex'
+        }
+        channel_name = channel_map.get(channel, None)
+
+        if channel_name is None:
+            # Use example image for unknown channels
+            self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
+            print(f"Channel {channel} not found, returning example image")
+        else:
+            # For video buffering, try to get from Zarr but with faster fallback
+            try:
+                # Use a timeout for Zarr access to prevent long delays
+                self.image = await asyncio.wait_for(
+                    self.get_image_from_zarr_optimized(x, y, pixel_size_um, channel_name, sample_data_alias),
+                    timeout=0.5  # 500ms timeout for video streaming
+                )
+                if self.image is None:
+                    raise Exception("Zarr returned None")
+            except (asyncio.TimeoutError, Exception) as e:
+                # Quick fallback to example image
+                self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
+                print(f"Using example image for channel {channel} due to: {str(e)}")
+
+        # Apply exposure and intensity scaling (same as original)
+        exposure_factor = max(0.1, exposure_time / 100)
+        intensity_factor = max(0.1, intensity / 60)
+        
+        # Check if image contains any valid data before scaling
+        if np.count_nonzero(self.image) == 0:
+            print("WARNING: Image contains all zeros before scaling!")
+            self.image = np.ones((self.Height, self.Width), dtype=np.uint8) * 128
+        
+        # Convert to float32 for scaling, apply factors, then clip and convert back to uint8
+        self.image = np.clip(self.image.astype(np.float32) * exposure_factor * intensity_factor, 0, 255).astype(np.uint8)
+        
+        # Check if image contains any valid data after scaling
+        if np.count_nonzero(self.image) == 0:
+            print("WARNING: Image contains all zeros after scaling!")
+            self.image = np.ones((self.Height, self.Width), dtype=np.uint8) * 128
+
+        if self.pixel_format == "MONO8":
+            self.current_frame = self.image
+        elif self.pixel_format == "MONO12":
+            self.current_frame = (self.image.astype(np.uint16) * 16).astype(np.uint16)
+        elif self.pixel_format == "MONO16":
+            self.current_frame = (self.image.astype(np.uint16) * 256).astype(np.uint16)
+        else:
+            print(f"Unrecognized pixel format {self.pixel_format}, using MONO8")
+            self.current_frame = self.image
+
+        # Apply blur for Z offset (optimized)
+        if dz != 0:
+            sigma = abs(dz) * 6
+            self.current_frame = gaussian_filter(self.current_frame, sigma=sigma)
+            print(f"The image is blurred with dz={dz}, sigma={sigma}")
+        
+        # Final check to ensure we're not sending a completely black image
+        if np.count_nonzero(self.current_frame) == 0:
+            print("CRITICAL: Final image is completely black, setting to gray")
+            if self.pixel_format == "MONO8":
+                self.current_frame = np.ones((self.Height, self.Width), dtype=np.uint8) * 128
+            elif self.pixel_format == "MONO12":
+                self.current_frame = np.ones((self.Height, self.Width), dtype=np.uint16) * 2048
+            elif self.pixel_format == "MONO16":
+                self.current_frame = np.ones((self.Height, self.Width), dtype=np.uint16) * 32768
+
+        if self.new_image_callback_external is not None and self.callback_is_enabled:
+            self.new_image_callback_external(self)
+
+    async def get_image_from_zarr_optimized(self, x, y, pixel_size_um, channel_name, sample_data_alias="agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38"):
+        """
+        Optimized version of get_image_from_zarr for video buffering.
+        Uses smaller regions and faster access patterns.
+        """
+        # Lazily initialize ZarrImageManager if needed
+        if self.zarr_image_manager is None:
+            print("Creating new ZarrImageManager instance for buffered access...")
+            self.zarr_image_manager = ZarrImageManager()
+            print("Connecting to ZarrImageManager...")
+            await self.zarr_image_manager.connect(server_url=self.SERVER_URL)
+            print("Connected to ZarrImageManager")
+        
+        # Convert microscope coordinates (mm) to pixel coordinates
+        pixel_x = int((x / pixel_size_um) * 1000 / self.scale_factor)
+        pixel_y = int((y / pixel_size_um) * 1000 / self.scale_factor)
+        
+        # Use smaller region for faster access in video mode
+        dataset_id = sample_data_alias
+        
+        try:
+            # Use reduced dimensions for faster access (half size for buffering)
+            scaled_width = self.Width // (self.scale_factor * 2)  # Even smaller for video
+            scaled_height = self.Height // (self.scale_factor * 2)
+            
+            half_width = scaled_width // 2
+            half_height = scaled_height // 2
+            
+            y_start = max(0, pixel_y - half_height)
+            y_end = y_start + scaled_height
+            x_start = max(0, pixel_x - half_width)
+            x_end = x_start + scaled_width
+            
+            # Get smaller region for faster access
+            region_data = await self.zarr_image_manager.get_region_np_data(
+                dataset_id, 
+                channel_name, 
+                self.scale_level,
+                0, 0,
+                direct_region=(y_start, y_end, x_start, x_end),
+                width=scaled_width,
+                height=scaled_height
+            )
+            
+            # Resize back to full dimensions
+            if region_data is not None:
+                region_data = cv2.resize(region_data, (self.Width, self.Height))
+            
+            return region_data
+        except Exception as e:
+            print(f"Error getting optimized image from Zarr: {str(e)}")
+            return None

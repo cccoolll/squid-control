@@ -20,6 +20,8 @@ from squid_control.squid_controller import SquidController
 from squid_control.control.camera import TriggerModeSetting
 from pydantic import Field, BaseModel
 from typing import List, Optional
+from collections import deque
+import threading
 
 from squid_control.hypha_tools.hypha_storage import HyphaDataStore
 from squid_control.hypha_tools.chatbot.aask import aask
@@ -208,6 +210,16 @@ class Microscope:
         self.video_contrast_min = 0
         self.video_contrast_max = None
 
+        # Video buffering attributes
+        self.frame_buffer = deque(maxlen=5)  # Keep last 5 processed frames
+        self.frame_buffer_lock = threading.Lock()
+        self.buffer_acquisition_task = None
+        self.buffer_acquisition_running = False
+        self.last_buffered_frame = None
+        self.buffer_frame_width = 640
+        self.buffer_frame_height = 640
+        self.buffer_fps_target = 5  # Target FPS for buffer acquisition
+
         # Add task status tracking
         self.task_status = {
             "move_by_distance": "not_started",
@@ -232,6 +244,8 @@ class Microscope:
             "navigate_to_well": "not_started",
             "get_chatbot_url": "not_started",
             "adjust_video_frame": "not_started",
+            "configure_video_buffer": "not_started",
+            "get_video_buffer_status": "not_started",
         }
 
     def load_authorized_emails(self, login_required=True):
@@ -616,6 +630,18 @@ class Microscope:
         Returns: A processed frame ready for video streaming
         """
         try:
+            # Try to get frame from buffer first
+            with self.frame_buffer_lock:
+                if self.last_buffered_frame is not None:
+                    buffered_frame = self.last_buffered_frame.copy()
+                    # Resize if dimensions don't match
+                    if buffered_frame.shape[:2] != (frame_height, frame_width):
+                        buffered_frame = cv2.resize(buffered_frame, (frame_width, frame_height))
+                    return buffered_frame
+            
+            # Fallback to direct acquisition if no buffered frame available
+            logger.warning("No buffered frame available, falling back to direct acquisition")
+            
             # Get current channel and parameters
             channel = self.squidController.current_channel
             param_name = self.channel_param_map.get(channel)
@@ -631,6 +657,130 @@ class Microscope:
             else:
                 raw_frame = self.squidController.get_camera_frame(channel, intensity, exposure_time)
             
+            # Process frame using the same logic as buffer processing
+            processed_frame = self._process_frame_for_video(raw_frame, frame_width, frame_height)
+            return processed_frame
+            
+        except Exception as e:
+            logger.error(f"Error getting video frame: {e}", exc_info=True)
+            # Return a blank frame with error message
+            return self._create_error_frame(str(e), frame_width, frame_height)
+
+    @schema_function(skip_self=True)
+    def adjust_video_frame(self, min_val: int = Field(0, description="Minimum intensity value for contrast stretching"), max_val: Optional[int] = Field(None, description="Maximum intensity value for contrast stretching"), context=None):
+        """Adjust the contrast of the video stream by setting min and max intensity values."""
+        task_name = "adjust_video_frame"
+        self.task_status[task_name] = "started"
+        try:
+            self.video_contrast_min = min_val
+            self.video_contrast_max = max_val
+            logger.info(f"Video contrast adjusted: min={min_val}, max={max_val}")
+            self.task_status[task_name] = "finished"
+            return {"success": True, "message": f"Video contrast adjusted to min={min_val}, max={max_val}."}
+        except Exception as e:
+            self.task_status[task_name] = "failed"
+            logger.error(f"Failed to adjust video frame: {e}")
+            raise e
+
+    async def start_frame_buffer_acquisition(self):
+        """Start the background frame acquisition task for video buffering."""
+        if self.buffer_acquisition_task is not None:
+            logger.info("Frame buffer acquisition already running")
+            return
+        
+        self.buffer_acquisition_running = True
+        self.buffer_acquisition_task = asyncio.create_task(self._frame_buffer_acquisition_loop())
+        logger.info("Started frame buffer acquisition")
+
+    async def stop_frame_buffer_acquisition(self):
+        """Stop the background frame acquisition task."""
+        if self.buffer_acquisition_task is None:
+            return
+        
+        self.buffer_acquisition_running = False
+        
+        try:
+            # Cancel the task and wait for it to complete
+            self.buffer_acquisition_task.cancel()
+            await asyncio.wait_for(self.buffer_acquisition_task, timeout=2.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+        except Exception as e:
+            logger.error(f"Error stopping frame buffer acquisition: {e}")
+        
+        self.buffer_acquisition_task = None
+        logger.info("Stopped frame buffer acquisition")
+
+    async def _frame_buffer_acquisition_loop(self):
+        """Background loop that continuously acquires frames and adds them to the buffer."""
+        logger.info("Frame buffer acquisition loop started")
+        frame_interval = 1.0 / self.buffer_fps_target
+        
+        try:
+            while self.buffer_acquisition_running:
+                start_time = time.time()
+                
+                try:
+                    # Get current channel and parameters
+                    channel = self.squidController.current_channel
+                    param_name = self.channel_param_map.get(channel)
+                    intensity, exposure_time = 10, 10  # Default values
+                    if param_name:
+                        stored_params = getattr(self, param_name, None)
+                        if stored_params and isinstance(stored_params, list) and len(stored_params) == 2:
+                            intensity, exposure_time = stored_params
+
+                    # Acquire frame (this is where the slow operation happens)
+                    if self.is_simulation:
+                        raw_frame = await self.squidController.get_camera_frame_simulation_buffered(
+                            channel, intensity, exposure_time
+                        )
+                    else:
+                        raw_frame = await self._get_camera_frame_non_blocking(
+                            channel, intensity, exposure_time
+                        )
+                    
+                    # Process frame (same processing as get_video_frame)
+                    processed_frame = self._process_frame_for_video(
+                        raw_frame, self.buffer_frame_width, self.buffer_frame_height
+                    )
+                    
+                    # Add to buffer thread-safely
+                    with self.frame_buffer_lock:
+                        self.frame_buffer.append(processed_frame)
+                        self.last_buffered_frame = processed_frame
+                    
+                    # Log periodically
+                    if len(self.frame_buffer) % 25 == 0:
+                        logger.info(f"Frame buffer size: {len(self.frame_buffer)}, target FPS: {self.buffer_fps_target}")
+                        
+                except Exception as e:
+                    logger.error(f"Error in frame buffer acquisition: {e}")
+                    # Create error frame
+                    error_frame = self._create_error_frame(
+                        str(e), self.buffer_frame_width, self.buffer_frame_height
+                    )
+                    with self.frame_buffer_lock:
+                        self.frame_buffer.append(error_frame)
+                        self.last_buffered_frame = error_frame
+                
+                # Sleep to maintain target FPS
+                elapsed = time.time() - start_time
+                sleep_time = max(0, frame_interval - elapsed)
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
+                    
+        except asyncio.CancelledError:
+            logger.info("Frame buffer acquisition loop cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Frame buffer acquisition loop error: {e}")
+        finally:
+            logger.info("Frame buffer acquisition loop ended")
+
+    def _process_frame_for_video(self, raw_frame, frame_width, frame_height):
+        """Process raw frame for video streaming (same logic as get_video_frame)."""
+        try:
             # Adjust contrast
             min_val = self.video_contrast_min
             max_val = self.video_contrast_max
@@ -660,28 +810,75 @@ class Microscope:
             return processed_frame
             
         except Exception as e:
-            logger.error(f"Error getting video frame: {e}", exc_info=True)
-            # Return a blank frame with error message
-            placeholder_img = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
-            cv2.putText(placeholder_img, f"Error: {str(e)}", (10, frame_height//2), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
-            return placeholder_img
+            logger.error(f"Error processing frame for video: {e}")
+            return self._create_error_frame(str(e), frame_width, frame_height)
+
+    def _create_error_frame(self, error_msg, frame_width, frame_height):
+        """Create an error frame with the error message."""
+        placeholder_img = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+        cv2.putText(placeholder_img, f"Error: {error_msg}", (10, frame_height//2), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
+        return placeholder_img
+
+    async def _get_camera_frame_non_blocking(self, channel, intensity, exposure_time):
+        """Get camera frame for non-simulation mode (wrapper for future real hardware buffering)."""
+        # For now, this is the same as the original method
+        # In the future, this could be optimized for real hardware
+        return self.squidController.get_camera_frame(channel, intensity, exposure_time)
 
     @schema_function(skip_self=True)
-    def adjust_video_frame(self, min_val: int = Field(0, description="Minimum intensity value for contrast stretching"), max_val: Optional[int] = Field(None, description="Maximum intensity value for contrast stretching"), context=None):
-        """Adjust the contrast of the video stream by setting min and max intensity values."""
-        task_name = "adjust_video_frame"
-        self.task_status[task_name] = "started"
+    def configure_video_buffer(self, buffer_fps: int = Field(5, description="Target FPS for buffer acquisition"), buffer_size: int = Field(5, description="Maximum number of frames to keep in buffer"), context=None):
+        """Configure video buffering parameters for optimal streaming performance."""
         try:
-            self.video_contrast_min = min_val
-            self.video_contrast_max = max_val
-            logger.info(f"Video contrast adjusted: min={min_val}, max={max_val}")
-            self.task_status[task_name] = "finished"
-            return {"success": True, "message": f"Video contrast adjusted to min={min_val}, max={max_val}."}
+            self.buffer_fps_target = max(1, min(30, buffer_fps))  # Clamp between 1-30 FPS
+            
+            # Update buffer size
+            old_size = self.frame_buffer.maxlen
+            self.frame_buffer = deque(maxlen=max(1, min(20, buffer_size)))  # Clamp between 1-20 frames
+            
+            logger.info(f"Video buffer configured: FPS={self.buffer_fps_target}, buffer_size={self.frame_buffer.maxlen} (was {old_size})")
+            
+            return {
+                "success": True,
+                "message": f"Video buffer configured with {self.buffer_fps_target} FPS target and {self.frame_buffer.maxlen} frame buffer size",
+                "buffer_fps": self.buffer_fps_target,
+                "buffer_size": self.frame_buffer.maxlen
+            }
         except Exception as e:
-            self.task_status[task_name] = "failed"
-            logger.error(f"Failed to adjust video frame: {e}")
-            raise e
+            logger.error(f"Failed to configure video buffer: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to configure video buffer: {str(e)}"
+            }
+
+    @schema_function(skip_self=True)
+    def get_video_buffer_status(self, context=None):
+        """Get the current status of the video buffer."""
+        try:
+            with self.frame_buffer_lock:
+                buffer_fill = len(self.frame_buffer)
+                buffer_capacity = self.frame_buffer.maxlen
+                has_buffered_frame = self.last_buffered_frame is not None
+                
+            return {
+                "success": True,
+                "buffer_running": self.buffer_acquisition_running,
+                "buffer_fill": buffer_fill,
+                "buffer_capacity": buffer_capacity,
+                "buffer_fill_percent": (buffer_fill / buffer_capacity * 100) if buffer_capacity > 0 else 0,
+                "has_buffered_frame": has_buffered_frame,
+                "target_fps": self.buffer_fps_target,
+                "frame_dimensions": {
+                    "width": self.buffer_frame_width,
+                    "height": self.buffer_frame_height
+                }
+            }
+        except Exception as e:
+            logger.error(f"Failed to get video buffer status: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to get video buffer status: {str(e)}"
+            }
 
     @schema_function(skip_self=True)
     async def snap(self, exposure_time: int=Field(100, description="Exposure time, in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
@@ -1345,6 +1542,8 @@ class Microscope:
                 "reset_task_status": self.reset_task_status,
                 "reset_all_task_status": self.reset_all_task_status,
                 "adjust_video_frame": self.adjust_video_frame,
+                "configure_video_buffer": self.configure_video_buffer,
+                "get_video_buffer_status": self.get_video_buffer_status,
             },
         )
 
@@ -1540,6 +1739,9 @@ class Microscope:
         webrtc_id = f"video-track-{self.service_id}"
         if not self.is_local: # only start webrtc service in remote mode
             await self.start_webrtc_service(self.server, webrtc_id)
+            
+        # Start frame buffer acquisition for smooth video streaming
+        await self.start_frame_buffer_acquisition()
 
 
     async def initialize_zarr_manager(self, camera):
@@ -1563,6 +1765,15 @@ class Microscope:
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):
     logger.info('Signal received, shutting down gracefully...')
+    # Stop video buffering task
+    if hasattr(microscope, 'buffer_acquisition_task') and microscope.buffer_acquisition_task is not None:
+        logger.info('Stopping frame buffer acquisition...')
+        try:
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(microscope.stop_frame_buffer_acquisition())
+        except Exception as e:
+            logger.error(f'Error stopping frame buffer: {e}')
+    
     microscope.squidController.close()
     sys.exit(0)
 
