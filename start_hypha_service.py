@@ -1368,9 +1368,16 @@ class Microscope:
 
         self.similarity_search_svc = await self.connect_to_similarity_search_service()
 
-        remote_token = os.environ.get("SQUID_WORKSPACE_TOKEN")
+        # Determine workspace and token based on simulation mode
+        if self.is_simulation and not self.is_local:
+            remote_token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+            remote_workspace = "agent-lens"
+        else:
+            remote_token = os.environ.get("SQUID_WORKSPACE_TOKEN")
+            remote_workspace = "squid-control"
+            
         remote_server = await connect_to_server(
-                {"server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": "squid-control", "ping_interval": None}
+                {"server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": remote_workspace, "ping_interval": None}
             )
         if not self.service_id:
             raise ValueError("MICROSCOPE_SERVICE_ID is not set in the environment variables.")
@@ -1381,13 +1388,22 @@ class Microscope:
                 {"server_url": self.server_url, "token": token, "workspace": workspace, "ping_interval": None}
             )
         else:
-            try:  
-                token = os.environ.get("SQUID_WORKSPACE_TOKEN")  
-            except:  
-                token = await login({"server_url": self.server_url})
+            # Determine workspace and token based on simulation mode
+            if self.is_simulation:
+                try:  
+                    token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")  
+                except:  
+                    token = await login({"server_url": self.server_url})
+                workspace = "agent-lens"
+            else:
+                try:  
+                    token = os.environ.get("SQUID_WORKSPACE_TOKEN")  
+                except:  
+                    token = await login({"server_url": self.server_url})
+                workspace = "squid-control"
             
             server = await connect_to_server(
-                {"server_url": self.server_url, "token": token, "workspace": "squid-control",  "ping_interval": None}
+                {"server_url": self.server_url, "token": token, "workspace": workspace,  "ping_interval": None}
             )
         
         self.server = server

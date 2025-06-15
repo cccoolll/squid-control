@@ -83,9 +83,9 @@ def main():
         cmd.append("tests/")
         print("🌐 Running INTEGRATION TESTS only (requires network and tokens)")
         # Check for required tokens
-        if not os.environ.get("SQUID_WORKSPACE_TOKEN"):
-            print("⚠️  WARNING: SQUID_WORKSPACE_TOKEN not set - integration tests may fail")
-            print("   Set the token with: export SQUID_WORKSPACE_TOKEN=your_token")
+        if not os.environ.get("AGENT_LENS_WORKSPACE_TOKEN"):
+            print("⚠️  WARNING: AGENT_LENS_WORKSPACE_TOKEN not set - integration tests may fail")
+            print("   Set the token with: export AGENT_LENS_WORKSPACE_TOKEN=your_token")
     elif args.skip_integration:
         cmd.extend(["-m", "not integration"]) 
         cmd.append("tests/")
