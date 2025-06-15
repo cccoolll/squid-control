@@ -259,7 +259,10 @@ class Microscope:
             return True
         else:
             return False
-
+        
+    async def ping(self, context=None):
+        return "pong"
+    
     def get_task_status(self, task_name):
         """Get the status of a specific task"""
         return self.task_status.get(task_name, "unknown")
