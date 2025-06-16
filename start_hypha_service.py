@@ -121,9 +121,11 @@ class MicroscopeVideoTrack(MediaStreamTrack):
         self.count = 0
         self.running = True
         self.start_time = None
-        self.fps = 3 # Target FPS for WebRTC stream
-        self.frame_width = 720
-        self.frame_height = 720
+        self.fps = 5 # Target FPS for WebRTC stream
+        self.frame_width = 640
+        self.frame_height = 640
+        # Set WebRTC connection status
+        self.microscope_instance.webrtc_connected = True
         logger.info("MicroscopeVideoTrack initialized")
 
     def draw_crosshair(self, img, center_x, center_y, size=20, color=[255, 255, 255]):
@@ -191,6 +193,8 @@ class MicroscopeVideoTrack(MediaStreamTrack):
     def stop(self):
         logger.info("MicroscopeVideoTrack stop() called.")
         self.running = False
+        # Mark WebRTC as disconnected
+        self.microscope_instance.webrtc_connected = False
 
 class Microscope:
     def __init__(self, is_simulation, is_local):
@@ -730,20 +734,193 @@ class Microscope:
             return self._create_placeholder_frame(frame_width, frame_height, f"Fresh Frame Error: {str(e)}")
 
     @schema_function(skip_self=True)
-    def adjust_video_frame(self, min_val: int = Field(0, description="Minimum intensity value for contrast stretching"), max_val: Optional[int] = Field(None, description="Maximum intensity value for contrast stretching"), context=None):
-        """Adjust the contrast of the video stream by setting min and max intensity values."""
-        task_name = "adjust_video_frame"
-        self.task_status[task_name] = "started"
+    def configure_video_buffer(self, buffer_fps: int = Field(5, description="Target FPS for buffer acquisition"), buffer_size: int = Field(5, description="Maximum number of frames to keep in buffer"), context=None):
+        """Configure video buffering parameters for optimal streaming performance."""
         try:
-            self.video_contrast_min = min_val
-            self.video_contrast_max = max_val
-            logger.info(f"Video contrast adjusted: min={min_val}, max={max_val}")
-            self.task_status[task_name] = "finished"
-            return {"success": True, "message": f"Video contrast adjusted to min={min_val}, max={max_val}."}
+            self.buffer_fps_target = max(1, min(30, buffer_fps))  # Clamp between 1-30 FPS
+            
+            # Update buffer size
+            old_size = self.frame_buffer.maxlen
+            self.frame_buffer = deque(maxlen=max(1, min(20, buffer_size)))  # Clamp between 1-20 frames
+            
+            logger.info(f"Video buffer configured: FPS={self.buffer_fps_target}, buffer_size={self.frame_buffer.maxlen} (was {old_size})")
+            
+            return {
+                "success": True,
+                "message": f"Video buffer configured with {self.buffer_fps_target} FPS target and {self.frame_buffer.maxlen} frame buffer size",
+                "buffer_fps": self.buffer_fps_target,
+                "buffer_size": self.frame_buffer.maxlen
+            }
         except Exception as e:
-            self.task_status[task_name] = "failed"
-            logger.error(f"Failed to adjust video frame: {e}")
-            raise e
+            logger.error(f"Failed to configure video buffer: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to configure video buffer: {str(e)}"
+            }
+
+    @schema_function(skip_self=True)
+    def get_video_buffer_status(self, context=None):
+        """Get the current status of the video buffer."""
+        try:
+            with self.frame_buffer_lock:
+                buffer_fill = len(self.frame_buffer)
+                buffer_capacity = self.frame_buffer.maxlen
+                has_buffered_frame = self.last_buffered_frame is not None
+                
+            return {
+                "success": True,
+                "buffer_running": self.buffer_acquisition_running,
+                "buffer_fill": buffer_fill,
+                "buffer_capacity": buffer_capacity,
+                "buffer_fill_percent": (buffer_fill / buffer_capacity * 100) if buffer_capacity > 0 else 0,
+                "has_buffered_frame": has_buffered_frame,
+                "target_fps": self.buffer_fps_target,
+                "frame_dimensions": {
+                    "width": self.buffer_frame_width,
+                    "height": self.buffer_frame_height
+                }
+            }
+        except Exception as e:
+            logger.error(f"Failed to get video buffer status: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to get video buffer status: {str(e)}"
+            }
+
+    @schema_function(skip_self=True)
+    async def start_video_buffering(self, context=None):
+        """Manually start video buffering for smooth streaming."""
+        try:
+            if self.buffer_acquisition_running:
+                return {
+                    "success": True,
+                    "message": "Video buffering is already running",
+                    "was_already_running": True
+                }
+            
+            await self.start_frame_buffer_acquisition()
+            logger.info("Video buffering started manually")
+            
+            return {
+                "success": True,
+                "message": "Video buffering started successfully",
+                "buffer_fps": self.buffer_fps_target,
+                "buffer_size": self.frame_buffer.maxlen
+            }
+        except Exception as e:
+            logger.error(f"Failed to start video buffering: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to start video buffering: {str(e)}"
+            }
+
+    @schema_function(skip_self=True)
+    async def stop_video_buffering(self, context=None):
+        """Manually stop video buffering to save resources."""
+        try:
+            if not self.buffer_acquisition_running:
+                return {
+                    "success": True,
+                    "message": "Video buffering is already stopped",
+                    "was_already_stopped": True
+                }
+            
+            await self.stop_frame_buffer_acquisition()
+            logger.info("Video buffering stopped manually")
+            
+            # Clear the buffer
+            with self.frame_buffer_lock:
+                self.frame_buffer.clear()
+                self.last_buffered_frame = None
+            
+            return {
+                "success": True,
+                "message": "Video buffering stopped successfully"
+            }
+        except Exception as e:
+            logger.error(f"Failed to stop video buffering: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to stop video buffering: {str(e)}"
+            }
+
+    @schema_function(skip_self=True)
+    async def stop_video_buffering(self, context=None):
+        """Manually stop video buffering to save resources."""
+        try:
+            if not self.buffer_acquisition_running:
+                return {
+                    "success": True,
+                    "message": "Video buffering is already stopped",
+                    "was_already_stopped": True
+                }
+            
+            await self.stop_frame_buffer_acquisition()
+            logger.info("Video buffering stopped manually")
+            
+            # Clear the buffer
+            with self.frame_buffer_lock:
+                self.frame_buffer.clear()
+                self.last_buffered_frame = None
+            
+            return {
+                "success": True,
+                "message": "Video buffering stopped successfully"
+            }
+        except Exception as e:
+            logger.error(f"Failed to stop video buffering: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to stop video buffering: {str(e)}"
+            }
+
+    @schema_function(skip_self=True)
+    def configure_video_idle_timeout(self, idle_timeout: float = Field(5.0, description="Idle timeout in seconds (0 to disable automatic stop)"), context=None):
+        """Configure how long to wait before automatically stopping video buffering when inactive."""
+        try:
+            self.video_idle_timeout = max(0, idle_timeout)  # Ensure non-negative
+            logger.info(f"Video idle timeout set to {self.video_idle_timeout} seconds")
+            
+            return {
+                "success": True,
+                "message": f"Video idle timeout configured to {self.video_idle_timeout} seconds",
+                "idle_timeout": self.video_idle_timeout,
+                "automatic_stop": self.video_idle_timeout > 0
+            }
+        except Exception as e:
+            logger.error(f"Failed to configure video idle timeout: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to configure video idle timeout: {str(e)}"
+            }
+
+    def _reset_video_activity_tracking(self):
+        """Reset video activity tracking (internal method)."""
+        self.last_video_request_time = None
+        logger.info("Video activity tracking reset")
+
+    async def cleanup_for_tests(self):
+        """Cleanup method specifically for test environments."""
+        try:
+            # Stop video buffering if running
+            if self.buffer_acquisition_running:
+                logger.info("Stopping video buffering for test cleanup")
+                await self.stop_frame_buffer_acquisition()
+            
+            # Close camera resources properly
+            if hasattr(self, 'squidController') and self.squidController:
+                if hasattr(self.squidController, 'camera') and self.squidController.camera:
+                    camera = self.squidController.camera
+                    if hasattr(camera, 'cleanup_zarr_resources_async'):
+                        try:
+                            await asyncio.wait_for(camera.cleanup_zarr_resources_async(), timeout=5.0)
+                            logger.info("ZarrImageManager resources cleaned up")
+                        except asyncio.TimeoutError:
+                            logger.warning("ZarrImageManager cleanup timed out")
+                        except Exception as e:
+                            logger.warning(f"ZarrImageManager cleanup error: {e}")
+        except Exception as e:
+            logger.error(f"Error during test cleanup: {e}")
 
     @schema_function(skip_self=True)
     async def start_video_buffering_api(self, context=None):
@@ -1517,14 +1694,21 @@ class Microscope:
         
         async def on_init(peer_connection):
             logger.info("WebRTC peer connection initialized")
+            # Mark as connected when peer connection starts
+            self.webrtc_connected = True
             
             @peer_connection.on("connectionstatechange")
             async def on_connectionstatechange():
                 logger.info(f"WebRTC connection state changed to: {peer_connection.connectionState}")
                 if peer_connection.connectionState in ["closed", "failed", "disconnected"]:
+                    # Mark as disconnected
+                    self.webrtc_connected = False
                     if self.video_track and self.video_track.running:
                         logger.info(f"Connection state is {peer_connection.connectionState}. Stopping video track.")
                         self.video_track.stop()
+                elif peer_connection.connectionState in ["connected"]:
+                    # Mark as connected
+                    self.webrtc_connected = True
             
             @peer_connection.on("track")
             def on_track(track):

@@ -538,9 +538,9 @@ async def test_microscope_video_track():
         assert video_track.kind == "video"
         assert video_track.microscope_instance == microscope
         assert video_track.running == True
-        assert video_track.fps == 3
-        assert video_track.frame_width == 720
-        assert video_track.frame_height == 720
+        assert video_track.fps == 5
+        assert video_track.frame_width == 640
+        assert video_track.frame_height == 640
         
         # Test crosshair drawing
         test_img = np.zeros((100, 100, 3), dtype=np.uint8)
