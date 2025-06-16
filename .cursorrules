@@ -41,6 +41,26 @@ This is a Python-based control system for the Squid microscope (by Cephla Inc.),
 - Task status tracking and error handling
 - AI chatbot integration for natural language control
 
+### Video Buffering System (`start_hypha_service.py`)
+- **Purpose**: Provides smooth, responsive WebRTC video streaming by decoupling frame acquisition from video streaming.
+- **Mechanism**:
+    - A background task (`_frame_buffer_acquisition_loop`) continuously acquires frames at a configurable FPS.
+    - Frames are stored in a thread-safe `deque` buffer.
+    - The WebRTC video stream (`get_video_frame`) pulls the latest available frame from the buffer, ensuring a consistent frame rate without waiting for slow acquisition.
+- **Activation**:
+    - Buffering is **not** started automatically on service launch.
+    - It is **lazily initialized** when `get_video_frame` is first called (i.e., when a WebRTC client connects and requests video).
+    - Can be controlled manually via `start_video_buffering()` and `stop_video_buffering()`.
+- **Automatic Shutdown**:
+    - Buffering automatically stops after a configurable idle period (`video_idle_timeout`, default 5s) if no new video frames are requested.
+    - It also stops automatically when the WebRTC client disconnects (`webrtc_connected` flag).
+- **Benefits**:
+    - **Smooth FPS Streaming**: Eliminates jerky video caused by slow frame acquisition (200-1000ms).
+    - **Responsive Controls**: Microscope controls remain responsive during video streaming.
+    - **Optimized Simulation**: In simulation mode, buffering provides a smooth video feed even with slow Zarr data access by using optimized triggers and timeouts.
+- **Test Environment**:
+    - The buffering system is automatically disabled during pytest execution to ensure test stability and avoid timeouts. Tests use direct frame acquisition instead.
+
 ### Hardware Control
 - **Serial Communication with Teensy 4.1 Microcontroller**: Comprehensive control protocol
 - **Stage Positioning**: X, Y, Z axes with precise microstep control

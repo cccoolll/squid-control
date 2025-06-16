@@ -5,6 +5,8 @@ import numpy as np
 from PIL import Image
 import os
 import sys
+import cv2
+import asyncio
 
 # Check if we're in simulation mode by looking for --simulation in sys.argv or environment
 _is_simulation_mode = (
@@ -31,7 +33,6 @@ from squid_control.control.camera import TriggerModeSetting
 from scipy.ndimage import gaussian_filter
 import zarr
 from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager, ZarrImageManager
-import asyncio
 script_dir = os.path.dirname(__file__)
 
 def get_sn_by_model(model_name):
@@ -919,3 +920,256 @@ class Camera_Simulation(object):
 
     def set_line3_to_exposure_active(self):
         pass
+
+    async def send_trigger_buffered(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.333, channel=0, intensity=100, exposure_time=100, magnification_factor=20, sample_data_alias="agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38"):
+        """
+        Progressive loading trigger method for video buffering.
+        Returns immediately with example image, then progressively loads Zarr chunks in background.
+        """
+        print(f"Sending progressive buffered trigger with x={x}, y={y}, dz={dz}, channel={channel}")
+        self.frame_ID += 1
+        self.timestamp = time.time()
+
+        channel_map = {
+            0: 'BF_LED_matrix_full',
+            11: 'Fluorescence_405_nm_Ex',
+            12: 'Fluorescence_488_nm_Ex',
+            14: 'Fluorescence_561_nm_Ex',
+            13: 'Fluorescence_638_nm_Ex'
+        }
+        channel_name = channel_map.get(channel, None)
+
+        # IMMEDIATE RESPONSE: Start with example image (0ms delay)
+        self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
+        print(f"Starting with example image for immediate response")
+
+        # Start progressive Zarr loading in background (non-blocking)
+        if channel_name is not None:
+            asyncio.create_task(self._progressive_zarr_loading(
+                x, y, pixel_size_um, channel_name, sample_data_alias, 
+                intensity, exposure_time, dz
+            ))
+
+        # Apply immediate processing to example image
+        self._apply_image_processing(intensity, exposure_time, dz)
+
+        if self.new_image_callback_external is not None and self.callback_is_enabled:
+            self.new_image_callback_external(self)
+
+    async def _progressive_zarr_loading(self, x, y, pixel_size_um, channel_name, sample_data_alias, intensity, exposure_time, dz):
+        """
+        Background task that progressively loads and composites Zarr chunks.
+        Updates the current image as chunks become available.
+        """
+        try:
+            # Lazily initialize ZarrImageManager if needed
+            if self.zarr_image_manager is None:
+                print("Creating ZarrImageManager for progressive loading...")
+                self.zarr_image_manager = ZarrImageManager()
+                await self.zarr_image_manager.connect(server_url=self.SERVER_URL)
+
+            # Convert coordinates
+            pixel_x = int((x / pixel_size_um) * 1000 / self.scale_factor)
+            pixel_y = int((y / pixel_size_um) * 1000 / self.scale_factor)
+            
+            # Calculate region boundaries
+            scaled_width = self.Width // self.scale_factor
+            scaled_height = self.Height // self.scale_factor
+            half_width = scaled_width // 2
+            half_height = scaled_height // 2
+            
+            y_start = max(0, pixel_y - half_height)
+            y_end = y_start + scaled_height
+            x_start = max(0, pixel_x - half_width)
+            x_end = x_start + scaled_width
+
+            # Get metadata to determine chunk layout
+            dataset_id = sample_data_alias
+            zarray_path = f"{channel_name}/scale{self.scale_level}/.zarray"
+            zarray_metadata = await self.zarr_image_manager._fetch_zarr_metadata(dataset_id, zarray_path)
+            
+            if not zarray_metadata:
+                print("No metadata available for progressive loading")
+                return
+
+            z_chunks = zarray_metadata["chunks"]  # [chunk_height, chunk_width]
+            
+            # Calculate which chunks we need
+            chunk_y_start = y_start // z_chunks[0]
+            chunk_y_end = (y_end - 1) // z_chunks[0] + 1
+            chunk_x_start = x_start // z_chunks[1]
+            chunk_x_end = (x_end - 1) // z_chunks[1] + 1
+
+            # Create base composite image from current example image
+            composite_image = self.image.copy()
+            
+            # Load chunks progressively
+            total_chunks = (chunk_y_end - chunk_y_start) * (chunk_x_end - chunk_x_start)
+            loaded_chunks = 0
+            
+            print(f"Progressive loading: {total_chunks} chunks needed")
+            
+            for chunk_y in range(chunk_y_start, chunk_y_end):
+                for chunk_x in range(chunk_x_start, chunk_x_end):
+                    try:
+                        # Load individual chunk with timeout
+                        chunk_data = await asyncio.wait_for(
+                            self.zarr_image_manager.get_chunk_np_data(
+                                dataset_id, channel_name, self.scale_level, chunk_x, chunk_y
+                            ),
+                            timeout=2.0  # 2s timeout per chunk
+                        )
+                        
+                        if chunk_data is not None:
+                            # Composite this chunk into the image
+                            self._composite_chunk_into_image(
+                                composite_image, chunk_data, chunk_x, chunk_y, 
+                                z_chunks, x_start, y_start, x_end, y_end
+                            )
+                            loaded_chunks += 1
+                            
+                            # Update the displayed image every few chunks
+                            if loaded_chunks % 4 == 0 or loaded_chunks == total_chunks:
+                                await self._update_progressive_image(
+                                    composite_image, intensity, exposure_time, dz
+                                )
+                                print(f"Progressive update: {loaded_chunks}/{total_chunks} chunks loaded")
+                    
+                    except asyncio.TimeoutError:
+                        print(f"Timeout loading chunk ({chunk_x}, {chunk_y})")
+                        continue
+                    except Exception as e:
+                        print(f"Error loading chunk ({chunk_x}, {chunk_y}): {e}")
+                        continue
+
+            print(f"Progressive loading complete: {loaded_chunks}/{total_chunks} chunks loaded")
+            
+        except Exception as e:
+            print(f"Error in progressive Zarr loading: {e}")
+
+    def _composite_chunk_into_image(self, composite_image, chunk_data, chunk_x, chunk_y, z_chunks, x_start, y_start, x_end, y_end):
+        """
+        Composite a single chunk into the composite image at the correct position.
+        """
+        try:
+            # Calculate chunk position in the full region
+            chunk_y_offset = chunk_y * z_chunks[0]
+            chunk_x_offset = chunk_x * z_chunks[1]
+            
+            # Calculate slice within the chunk that we need
+            chunk_y_slice_start = max(0, y_start - chunk_y_offset)
+            chunk_y_slice_end = min(z_chunks[0], y_end - chunk_y_offset)
+            chunk_x_slice_start = max(0, x_start - chunk_x_offset)
+            chunk_x_slice_end = min(z_chunks[1], x_end - chunk_x_offset)
+            
+            # Calculate where this goes in the composite image
+            composite_y_start = max(0, chunk_y_offset - y_start + chunk_y_slice_start)
+            composite_y_end = composite_y_start + (chunk_y_slice_end - chunk_y_slice_start)
+            composite_x_start = max(0, chunk_x_offset - x_start + chunk_x_slice_start)
+            composite_x_end = composite_x_start + (chunk_x_slice_end - chunk_x_slice_start)
+            
+            # Scale chunk to composite image size
+            chunk_height = chunk_y_slice_end - chunk_y_slice_start
+            chunk_width = chunk_x_slice_end - chunk_x_slice_start
+            
+            if chunk_height > 0 and chunk_width > 0:
+                chunk_slice = chunk_data[chunk_y_slice_start:chunk_y_slice_end, chunk_x_slice_start:chunk_x_slice_end]
+                
+                # Scale to full image dimensions
+                scale_y = self.Height / (y_end - y_start)
+                scale_x = self.Width / (x_end - x_start)
+                
+                scaled_y_start = int(composite_y_start * scale_y)
+                scaled_y_end = int(composite_y_end * scale_y)
+                scaled_x_start = int(composite_x_start * scale_x)
+                scaled_x_end = int(composite_x_end * scale_x)
+                
+                # Ensure bounds are within image
+                scaled_y_start = max(0, min(scaled_y_start, self.Height))
+                scaled_y_end = max(0, min(scaled_y_end, self.Height))
+                scaled_x_start = max(0, min(scaled_x_start, self.Width))
+                scaled_x_end = max(0, min(scaled_x_end, self.Width))
+                
+                if scaled_y_end > scaled_y_start and scaled_x_end > scaled_x_start:
+                    # Resize chunk to fit the target area
+                    target_height = scaled_y_end - scaled_y_start
+                    target_width = scaled_x_end - scaled_x_start
+                    
+                    if target_height > 0 and target_width > 0:
+                        resized_chunk = cv2.resize(chunk_slice, (target_width, target_height))
+                        composite_image[scaled_y_start:scaled_y_end, scaled_x_start:scaled_x_end] = resized_chunk
+                        
+        except Exception as e:
+            print(f"Error compositing chunk: {e}")
+
+    async def _update_progressive_image(self, composite_image, intensity, exposure_time, dz):
+        """
+        Update the current displayed image with the progressive composite.
+        """
+        try:
+            # Update the main image
+            self.image = composite_image.copy()
+            
+            # Apply processing
+            self._apply_image_processing(intensity, exposure_time, dz)
+            
+            # Trigger callback for updated image
+            if self.new_image_callback_external is not None and self.callback_is_enabled:
+                self.new_image_callback_external(self)
+                
+        except Exception as e:
+            print(f"Error updating progressive image: {e}")
+
+    def _apply_image_processing(self, intensity, exposure_time, dz):
+        """
+        Apply exposure, intensity, and blur processing to the current image.
+        """
+        try:
+            # Apply exposure and intensity scaling
+            exposure_factor = max(0.1, exposure_time / 100)
+            intensity_factor = max(0.1, intensity / 60)
+            
+            # Check if image contains any valid data before scaling
+            if np.count_nonzero(self.image) == 0:
+                print("WARNING: Image contains all zeros before scaling!")
+                self.image = np.ones((self.Height, self.Width), dtype=np.uint8) * 128
+            
+            # Convert to float32 for scaling, apply factors, then clip and convert back to uint8
+            self.image = np.clip(self.image.astype(np.float32) * exposure_factor * intensity_factor, 0, 255).astype(np.uint8)
+            
+            # Check if image contains any valid data after scaling
+            if np.count_nonzero(self.image) == 0:
+                print("WARNING: Image contains all zeros after scaling!")
+                self.image = np.ones((self.Height, self.Width), dtype=np.uint8) * 128
+
+            # Convert to appropriate pixel format
+            if self.pixel_format == "MONO8":
+                self.current_frame = self.image
+            elif self.pixel_format == "MONO12":
+                self.current_frame = (self.image.astype(np.uint16) * 16).astype(np.uint16)
+            elif self.pixel_format == "MONO16":
+                self.current_frame = (self.image.astype(np.uint16) * 256).astype(np.uint16)
+            else:
+                print(f"Unrecognized pixel format {self.pixel_format}, using MONO8")
+                self.current_frame = self.image
+
+            # Apply blur for Z offset
+            if dz != 0:
+                sigma = abs(dz) * 6
+                self.current_frame = gaussian_filter(self.current_frame, sigma=sigma)
+                print(f"Applied blur with dz={dz}, sigma={sigma}")
+            
+            # Final check to ensure we're not sending a completely black image
+            if np.count_nonzero(self.current_frame) == 0:
+                print("CRITICAL: Final image is completely black, setting to gray")
+                if self.pixel_format == "MONO8":
+                    self.current_frame = np.ones((self.Height, self.Width), dtype=np.uint8) * 128
+                elif self.pixel_format == "MONO12":
+                    self.current_frame = np.ones((self.Height, self.Width), dtype=np.uint16) * 2048
+                elif self.pixel_format == "MONO16":
+                    self.current_frame = np.ones((self.Height, self.Width), dtype=np.uint16) * 32768
+                    
+        except Exception as e:
+            print(f"Error in image processing: {e}")
+
+    # Note: get_image_from_zarr_optimized method removed - replaced by progressive loading system
