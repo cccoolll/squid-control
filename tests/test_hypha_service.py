@@ -1111,6 +1111,221 @@ async def test_task_status_edge_cases(test_microscope_service):
     for task in required_tasks:
         assert task in all_status
 
+# Video buffering tests
+async def test_video_buffering_functionality(test_microscope_service):
+    """Test the video buffering functionality for smooth video streaming."""
+    microscope, service = test_microscope_service
+    
+    print("Testing Video Buffering Feature")
+    
+    try:
+        # Test 1: Check initial buffering status
+        print("1. Checking initial buffering status...")
+        status = await service.get_video_buffering_status()
+        assert isinstance(status, dict)
+        assert "buffering_active" in status
+        assert "buffer_size" in status
+        assert "buffer_fps" in status
+        assert status['buffering_active'] == False
+        assert status['buffer_fps'] == 5  # Should be default of 5 FPS
+        print(f"   Initial status: active={status['buffering_active']}, size={status['buffer_size']}, fps={status['buffer_fps']}")
+        
+        # Test 2: Start video buffering
+        print("2. Starting video buffering...")
+        result = await service.start_video_buffering()
+        assert isinstance(result, dict)
+        assert result["success"] == True
+        assert "started successfully" in result["message"]
+        
+        # Wait a moment for buffer to fill
+        await asyncio.sleep(2)
+        
+        # Test 3: Check buffering status after start
+        print("3. Checking buffering status after start...")
+        status = await service.get_video_buffering_status()
+        assert status['buffering_active'] == True
+        assert status['buffer_size'] >= 0
+        assert status['has_frames'] == True or status['buffer_size'] == 0  # May still be filling
+        print(f"   Active status: size={status['buffer_size']}, has_frames={status['has_frames']}")
+        
+        # Test 4: Get several video frames rapidly (should be fast due to buffering)
+        print("4. Getting video frames rapidly...")
+        frame_times = []
+        for i in range(3):  # Reduced from 5 to 3 for faster test execution
+            start_time = time.time()
+            frame = await asyncio.wait_for(
+                service.get_video_frame(frame_width=320, frame_height=240),
+                timeout=10
+            )
+            elapsed = time.time() - start_time
+            frame_times.append(elapsed)
+            
+            assert frame is not None
+            assert hasattr(frame, 'shape')
+            assert frame.shape == (240, 320, 3)
+            print(f"   Frame {i+1}: {elapsed*1000:.1f}ms, Shape: {frame.shape}")
+        
+        # Frames should be consistently fast due to buffering
+        avg_time = sum(frame_times) / len(frame_times)
+        print(f"   Average frame time: {avg_time*1000:.1f}ms")
+        
+        # Test 5: Check buffer status after frame requests
+        print("5. Checking final buffer status...")
+        status = await service.get_video_buffering_status()
+        assert status['buffering_active'] == True
+        assert status['buffer_size'] >= 0
+        if status['frame_age_seconds'] is not None:
+            print(f"   Frame age: {status['frame_age_seconds']:.2f}s")
+        
+        # Test 6: Stop video buffering
+        print("6. Stopping video buffering...")
+        result = await service.stop_video_buffering()
+        assert isinstance(result, dict)
+        assert result["success"] == True
+        assert "stopped successfully" in result["message"]
+        
+        # Test 7: Final status check
+        print("7. Checking status after stop...")
+        status = await service.get_video_buffering_status()
+        assert status['buffering_active'] == False
+        assert status['buffer_size'] == 0
+        print(f"   Final status: active={status['buffering_active']}, size={status['buffer_size']}")
+        
+        print("✅ Video buffering test completed successfully!")
+        
+    except Exception as e:
+        print(f"❌ Video buffering test failed: {e}")
+        raise
+    
+    finally:
+        # Ensure buffering is stopped
+        try:
+            await service.stop_video_buffering()
+        except:
+            pass
+
+async def test_video_buffering_api_endpoints(test_microscope_service):
+    """Test video buffering API endpoints specifically."""
+    microscope, service = test_microscope_service
+    
+    # Test start_video_buffering API
+    result = await service.start_video_buffering()
+    assert isinstance(result, dict)
+    assert result["success"] == True
+    
+    # Test get_video_buffering_status API
+    status = await service.get_video_buffering_status()
+    assert isinstance(status, dict)
+    expected_keys = ["buffering_active", "buffer_size", "max_buffer_size", "buffer_fps", "has_frames"]
+    for key in expected_keys:
+        assert key in status
+    
+    # Test that buffering is actually active
+    assert status["buffering_active"] == True
+    assert status["buffer_fps"] == 5
+    assert status["max_buffer_size"] == 5
+    
+    # Test stop_video_buffering API
+    result = await service.stop_video_buffering()
+    assert isinstance(result, dict)
+    assert result["success"] == True
+    
+    # Verify buffering stopped
+    status = await service.get_video_buffering_status()
+    assert status["buffering_active"] == False
+
+async def test_video_buffering_with_parameter_changes(test_microscope_service):
+    """Test video buffering behavior when microscope parameters change."""
+    microscope, service = test_microscope_service
+    
+    try:
+        # Start buffering
+        await service.start_video_buffering()
+        await asyncio.sleep(1)  # Let buffer fill
+        
+        # Get initial frame
+        frame1 = await service.get_video_frame(frame_width=640, frame_height=480)
+        assert frame1.shape == (480, 640, 3)
+        
+        # Change illumination parameters
+        await service.set_illumination(channel=11, intensity=60)
+        await service.set_camera_exposure(channel=11, exposure_time=120)
+        
+        # Get frame with new parameters (should use updated parameters in buffer)
+        await asyncio.sleep(1)  # Allow new parameters to take effect in buffer
+        frame2 = await service.get_video_frame(frame_width=640, frame_height=480)
+        assert frame2.shape == (480, 640, 3)
+        
+        # Verify channel was updated
+        status = await service.get_status()
+        assert status['current_channel'] == 11
+        
+        # Change contrast settings
+        await service.adjust_video_frame(min_val=20, max_val=200)
+        frame3 = await service.get_video_frame(frame_width=640, frame_height=480)
+        assert frame3.shape == (480, 640, 3)
+        
+    finally:
+        await service.stop_video_buffering()
+
+async def test_video_buffering_performance(test_microscope_service):
+    """Test video buffering performance characteristics."""
+    microscope, service = test_microscope_service
+    
+    try:
+        # Start buffering
+        await service.start_video_buffering()
+        await asyncio.sleep(2)  # Let buffer fill
+        
+        # Test rapid frame requests (should be fast due to buffering)
+        num_frames = 10
+        start_time = time.time()
+        
+        frames = []
+        for i in range(num_frames):
+            frame = await service.get_video_frame(frame_width=320, frame_height=240)
+            frames.append(frame)
+        
+        total_time = time.time() - start_time
+        avg_time_per_frame = total_time / num_frames
+        
+        assert avg_time_per_frame <1.0, f"Average frame time {avg_time_per_frame:.3f}s too slow"
+        
+        # Verify all frames are valid
+        for i, frame in enumerate(frames):
+            assert frame is not None
+            assert frame.shape == (240, 320, 3)
+        
+        print(f"Performance test: {num_frames} frames in {total_time:.2f}s (avg: {avg_time_per_frame*1000:.1f}ms/frame)")
+        
+    finally:
+        await service.stop_video_buffering()
+
+async def test_video_buffering_error_handling(test_microscope_service):
+    """Test video buffering error handling scenarios."""
+    microscope, service = test_microscope_service
+    
+    # Test stopping buffering when not started
+    result = await service.stop_video_buffering()
+    assert result["success"] == True  # Should succeed gracefully
+    
+    # Test starting buffering multiple times
+    await service.start_video_buffering()
+    result = await service.start_video_buffering()  # Should handle gracefully
+    assert result["success"] == True
+    
+    # Test getting status in various states
+    status = await service.get_video_buffering_status()
+    assert "buffering_active" in status
+    
+    # Test video frame requests when buffer might be empty
+    frame = await service.get_video_frame(frame_width=160, frame_height=120)
+    assert frame is not None
+    assert frame.shape == (120, 160, 3)
+    
+    # Cleanup
+    await service.stop_video_buffering()
+
 # Cleanup and resource management tests
 async def test_service_cleanup(test_microscope_service):
     """Test that the service can be properly cleaned up."""

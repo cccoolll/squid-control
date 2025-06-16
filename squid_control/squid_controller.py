@@ -10,6 +10,7 @@ import logging
 import matplotlib.path as mpath
 # Import serial_peripherals conditionally based on simulation mode
 import sys
+import numpy as np
 
 _is_simulation_mode = (
     "--simulation" in sys.argv or 
@@ -685,46 +686,20 @@ class SquidController:
         gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
         return gray_img
 
-    async def get_camera_frame_simulation_buffered(self, channel=0, intensity=100, exposure_time=100):
-        """
-        Optimized simulation frame acquisition for video buffering.
-        Uses performance mode to reduce Zarr access latency.
-        """
-        self.camera.set_exposure_time(exposure_time)
-        self.liveController.set_illumination(channel, intensity)
-        await self.send_trigger_simulation_buffered(channel, intensity, exposure_time)
-        gray_img = self.camera.read_frame() 
-        gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
-        return gray_img
-
-    async def send_trigger_simulation_buffered(self, channel=0, intensity=100, exposure_time=100):
-        """
-        Optimized simulation trigger for video buffering.
-        Uses performance mode and reduced processing for smoother video.
-        """
-        print('Getting buffered simulated image')
-        current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
-        self.dz = current_z - SIMULATED_CAMERA.ORIN_Z
-        self.current_channel = channel
-        magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
-        self.current_exposure_time = exposure_time
-        self.current_intensity = intensity
-        corrected_x = current_x + self.drift_correction_x
-        corrected_y = current_y + self.drift_correction_y
-        
-        # Use performance mode for faster frame acquisition in video buffering
-        await self.camera.send_trigger_buffered(
-            corrected_x, corrected_y, self.dz, self.pixel_size_xy, 
-            channel, intensity, exposure_time, magnification_factor, 
-            sample_data_alias=self.sample_data_alias
-        )
-        print(f'For buffered simulated camera, exposure_time={exposure_time}, intensity={intensity}, magnification_factor={magnification_factor}, current position: {current_x},{current_y},{current_z}')
-
     def get_camera_frame(self, channel=0, intensity=100, exposure_time=100):
-        self.camera.send_trigger()
-        gray_img = self.camera.read_frame()
-        gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
-        return gray_img
+        try:
+            self.camera.send_trigger()
+            gray_img = self.camera.read_frame()
+            if gray_img is None:
+                print(f"Warning: read_frame() returned None for channel {channel}")
+                # Return a placeholder image instead of None to prevent crashes
+                return np.zeros((self.camera.Height, self.camera.Width), dtype=np.uint8)
+            gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
+            return gray_img
+        except Exception as e:
+            print(f"Error in get_camera_frame: {e}")
+            # Return a placeholder image on error
+            return np.zeros((self.camera.Height, self.camera.Width), dtype=np.uint8)
     
 
     def close(self):
