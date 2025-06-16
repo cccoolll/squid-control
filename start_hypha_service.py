@@ -625,11 +625,34 @@ class Microscope:
                 if stored_params and isinstance(stored_params, list) and len(stored_params) == 2:
                     intensity, exposure_time = stored_params
 
+            # LATENCY MEASUREMENT: Start timing camera frame acquisition
+            T_cam_start = time.time()
+            
             # Get frame directly using snap_image
             if self.is_simulation:
                 raw_frame = await self.squidController.get_camera_frame_simulation(channel, intensity, exposure_time)
             else:
                 raw_frame = self.squidController.get_camera_frame(channel, intensity, exposure_time)
+            
+            # LATENCY MEASUREMENT: End timing camera frame acquisition
+            T_cam_read_complete = time.time()
+            
+            # Calculate frame acquisition time and frame size
+            frame_acquisition_time_ms = (T_cam_read_complete - T_cam_start) * 1000
+            frame_size_bytes = raw_frame.nbytes
+            frame_size_kb = frame_size_bytes / 1024
+            
+            # Log timing and size information for latency analysis
+            logger.info(f"LATENCY_MEASUREMENT: Camera frame acquisition took {frame_acquisition_time_ms:.2f}ms, "
+                       f"frame size: {frame_size_kb:.2f}KB, exposure_time: {exposure_time}ms, "
+                       f"channel: {channel}, intensity: {intensity}")
+            
+            # Log detailed timing for analysis
+            logger.info(f"LATENCY_TIMING: T_cam_start={T_cam_start:.6f}, T_cam_read_complete={T_cam_read_complete:.6f}, "
+                       f"acquisition_time_ms={frame_acquisition_time_ms:.2f}")
+            
+            # LATENCY MEASUREMENT: Start timing image processing
+            T_process_start = time.time()
             
             # Adjust contrast
             min_val = self.video_contrast_min
@@ -656,6 +679,27 @@ class Microscope:
                 
             # Resize to standard dimensions
             processed_frame = cv2.resize(processed_frame, (frame_width, frame_height))
+            
+            # LATENCY MEASUREMENT: End timing image processing
+            T_process_complete = time.time()
+            
+            # Calculate processing time and final frame size
+            processing_time_ms = (T_process_complete - T_process_start) * 1000
+            processed_frame_size_bytes = processed_frame.nbytes
+            processed_frame_size_kb = processed_frame_size_bytes / 1024
+            total_time_ms = (T_process_complete - T_cam_start) * 1000
+            
+            # Log processing statistics
+            logger.info(f"LATENCY_PROCESSING: Image processing took {processing_time_ms:.2f}ms, "
+                       f"processed frame size: {processed_frame_size_kb:.2f}KB, "
+                       f"dimensions: {processed_frame.shape}, "
+                       f"contrast_range: [{min_val}, {max_val}]")
+            
+            # Log complete timing breakdown
+            logger.info(f"LATENCY_BREAKDOWN: camera_acquisition={frame_acquisition_time_ms:.2f}ms, "
+                       f"image_processing={processing_time_ms:.2f}ms, "
+                       f"total_time={total_time_ms:.2f}ms, "
+                       f"processing_ratio={processing_time_ms/total_time_ms*100:.1f}%")
             
             return processed_frame
             
