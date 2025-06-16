@@ -978,6 +978,22 @@ class Microscope:
             }
 
     @schema_function(skip_self=True)
+    def adjust_video_frame(self, min_val: int = Field(0, description="Minimum intensity value for contrast stretching"), max_val: Optional[int] = Field(None, description="Maximum intensity value for contrast stretching"), context=None):
+        """Adjust the contrast of the video stream by setting min and max intensity values."""
+        task_name = "adjust_video_frame"
+        self.task_status[task_name] = "started"
+        try:
+            self.video_contrast_min = min_val
+            self.video_contrast_max = max_val
+            logger.info(f"Video contrast adjusted: min={min_val}, max={max_val}")
+            self.task_status[task_name] = "finished"
+            return {"success": True, "message": f"Video contrast adjusted to min={min_val}, max={max_val}."}
+        except Exception as e:
+            self.task_status[task_name] = "failed"
+            logger.error(f"Failed to adjust video frame: {e}")
+            return {"success": False, "message": f"Failed to adjust video frame: {str(e)}"}
+
+    @schema_function(skip_self=True)
     async def snap(self, exposure_time: int=Field(100, description="Exposure time, in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
         """
         Get an image from microscope
