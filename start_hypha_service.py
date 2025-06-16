@@ -1941,8 +1941,8 @@ class Microscope:
                 # Acquire frame
                 try:
                     if self.is_simulation:
-                        # Use fast simulation method for video buffering
-                        raw_frame = await self.squidController.get_camera_frame_simulation_fast(
+                        # Use existing simulation method for video buffering
+                        raw_frame = await self.squidController.get_camera_frame_simulation(
                             channel, intensity, exposure_time
                         )
                     else:

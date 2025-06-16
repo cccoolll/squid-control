@@ -685,32 +685,6 @@ class SquidController:
         gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
         return gray_img
 
-    async def get_camera_frame_simulation_fast(self, channel=0, intensity=100, exposure_time=100):
-        """
-        Fast simulation frame acquisition for video buffering - optimized for speed
-        This method uses cached position data and minimal processing for smooth video streaming
-        """
-        # Use cached position data for faster acquisition
-        current_x, current_y, current_z, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
-        self.dz = current_z - SIMULATED_CAMERA.ORIN_Z
-        self.current_channel = channel
-        magnification_factor = SIMULATED_CAMERA.MAGNIFICATION_FACTOR
-        
-        # Apply drift correction
-        corrected_x = current_x + self.drift_correction_x
-        corrected_y = current_y + self.drift_correction_y
-        
-        # Fast trigger without full simulation overhead
-        await self.camera.send_trigger_fast(
-            corrected_x, corrected_y, self.dz, self.pixel_size_xy, 
-            channel, intensity, exposure_time, magnification_factor, 
-            sample_data_alias=self.sample_data_alias
-        )
-        
-        gray_img = self.camera.read_frame()
-        gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
-        return gray_img
-
     def get_camera_frame(self, channel=0, intensity=100, exposure_time=100):
         self.camera.send_trigger()
         gray_img = self.camera.read_frame()
