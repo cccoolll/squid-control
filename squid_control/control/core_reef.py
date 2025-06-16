@@ -1710,6 +1710,12 @@ class AutofocusWorker:
             self.navigationController.move_z_usteps(-z_af_offset_usteps)
             self.wait_till_operation_is_completed()
 
+        #check if the illumination is on
+        illumination_on = self.liveController.illumination_on
+        if illumination_on:
+            self.liveController.turn_off_illumination()
+            self.wait_till_operation_is_completed()
+            
         steps_moved = 0
         for i in range(self.N):
             self.navigationController.move_z_usteps(self.deltaZ_usteps)
@@ -1781,7 +1787,10 @@ class AutofocusWorker:
                 - steps_moved * self.deltaZ_usteps
             )
             self.wait_till_operation_is_completed()
-
+        #turn on the illumination if the illumination was on before the autofocus
+        if illumination_on:
+            self.liveController.turn_on_illumination()
+            self.wait_till_operation_is_completed()
         # move to the calculated in-focus position
         # self.navigationController.move_z_usteps(idx_in_focus*self.deltaZ_usteps)
         # self.wait_till_operation_is_completed() # combine with the movement above
