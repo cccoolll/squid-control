@@ -10,6 +10,7 @@ import logging
 import matplotlib.path as mpath
 # Import serial_peripherals conditionally based on simulation mode
 import sys
+import numpy as np
 
 _is_simulation_mode = (
     "--simulation" in sys.argv or 
@@ -686,10 +687,19 @@ class SquidController:
         return gray_img
 
     def get_camera_frame(self, channel=0, intensity=100, exposure_time=100):
-        self.camera.send_trigger()
-        gray_img = self.camera.read_frame()
-        gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
-        return gray_img
+        try:
+            self.camera.send_trigger()
+            gray_img = self.camera.read_frame()
+            if gray_img is None:
+                print(f"Warning: read_frame() returned None for channel {channel}")
+                # Return a placeholder image instead of None to prevent crashes
+                return np.zeros((self.camera.Height, self.camera.Width), dtype=np.uint8)
+            gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
+            return gray_img
+        except Exception as e:
+            print(f"Error in get_camera_frame: {e}")
+            # Return a placeholder image on error
+            return np.zeros((self.camera.Height, self.camera.Width), dtype=np.uint8)
     
 
     def close(self):

@@ -357,18 +357,26 @@ class Camera(object):
             print("trigger not sent - camera is not streaming")
 
     def read_frame(self):
-        raw_image = self.camera.data_stream[self.device_index].get_image()
-        if self.is_color:
-            rgb_image = raw_image.convert("RGB")
-            numpy_image = rgb_image.get_numpy_array()
-            if self.pixel_format == "BAYER_RG12":
-                numpy_image = numpy_image << 4
-        else:
-            numpy_image = raw_image.get_numpy_array()
-            if self.pixel_format == "MONO12":
-                numpy_image = numpy_image << 4
-        # self.current_frame = numpy_image
-        return numpy_image
+        try:
+            raw_image = self.camera.data_stream[self.device_index].get_image()
+            if raw_image is None:
+                print("Warning: Camera get_image() returned None - camera may be overloaded or busy")
+                return None
+                
+            if self.is_color:
+                rgb_image = raw_image.convert("RGB")
+                numpy_image = rgb_image.get_numpy_array()
+                if self.pixel_format == "BAYER_RG12":
+                    numpy_image = numpy_image << 4
+            else:
+                numpy_image = raw_image.get_numpy_array()
+                if self.pixel_format == "MONO12":
+                    numpy_image = numpy_image << 4
+            self.current_frame = numpy_image
+            return numpy_image
+        except Exception as e:
+            print(f"Error in read_frame(): {e}")
+            return None
 
     def _on_frame_callback(self, user_param, raw_image):
         if raw_image is None:
