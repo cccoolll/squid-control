@@ -704,9 +704,6 @@ class Microscope:
             # Update last video request time for auto-stop functionality
             self.last_video_request_time = time.time()
             
-            # For remote access through API calls, mark as connected
-            self.webrtc_connected = True
-            
             # Start video buffering if not already running, but be less aggressive
             if not self.frame_acquisition_running:
                 logger.info("Starting video buffering for remote video frame request")
