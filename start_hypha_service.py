@@ -62,6 +62,52 @@ def setup_logging(log_file="squid_control_service.log", max_bytes=100000, backup
 
 logger = setup_logging()
 
+class VideoBuffer:
+    """
+    Video buffer to store and manage microscope frames for smooth video streaming
+    """
+    def __init__(self, max_size=5):
+        self.max_size = max_size
+        self.buffer = deque(maxlen=max_size)
+        self.lock = threading.Lock()
+        self.last_frame = None
+        self.frame_timestamp = 0
+        
+    def put_frame(self, frame):
+        """Add a frame to the buffer"""
+        with self.lock:
+            self.buffer.append({
+                'frame': frame,
+                'timestamp': time.time()
+            })
+            self.last_frame = frame
+            self.frame_timestamp = time.time()
+            
+    def get_frame(self):
+        """Get the most recent frame from buffer"""
+        with self.lock:
+            if self.buffer:
+                return self.buffer[-1]['frame']
+            elif self.last_frame is not None:
+                return self.last_frame
+            else:
+                return None
+                
+    def get_frame_age(self):
+        """Get the age of the most recent frame in seconds"""
+        with self.lock:
+            if self.frame_timestamp > 0:
+                return time.time() - self.frame_timestamp
+            else:
+                return float('inf')
+                
+    def clear(self):
+        """Clear the buffer"""
+        with self.lock:
+            self.buffer.clear()
+            self.last_frame = None
+            self.frame_timestamp = 0
+
 class MicroscopeVideoTrack(MediaStreamTrack):
     """
     A video stream track that provides real-time microscope images.
@@ -215,25 +261,12 @@ class Microscope:
         self.video_contrast_max = None
 
         # Video buffering attributes
-        self.frame_buffer = deque(maxlen=5)  # Keep last 5 processed frames
-        self.frame_buffer_lock = threading.Lock()
-        self.buffer_acquisition_task = None
-        self.buffer_acquisition_running = False
-        self.last_buffered_frame = None
-        self.buffer_frame_width = 640
-        self.buffer_frame_height = 640
-        self.buffer_fps_target = 5  # Target FPS for buffer acquisition
-
-        # Video activity tracking for automatic cleanup
-        self.last_video_request_time = None
-        self.video_idle_timeout = 5.0  # Stop buffering after 5 seconds of inactivity
-        self.webrtc_connected = False
-        
-        # Test environment detection
-        self.is_test_environment = (
-            os.environ.get("PYTEST_CURRENT_TEST") is not None or
-            (self.service_id and "test" in self.service_id.lower())
-        )
+        self.video_buffer = VideoBuffer(max_size=5)
+        self.frame_acquisition_task = None
+        self.frame_acquisition_running = False
+        self.buffer_fps = 5  # Background frame acquisition FPS
+        self.last_parameters_update = 0
+        self.parameters_update_interval = 1.0  # Update parameters every 1 second
 
         # Add task status tracking
         self.task_status = {
@@ -259,8 +292,6 @@ class Microscope:
             "navigate_to_well": "not_started",
             "get_chatbot_url": "not_started",
             "adjust_video_frame": "not_started",
-            "configure_video_buffer": "not_started",
-            "get_video_buffer_status": "not_started",
             "start_video_buffering": "not_started",
             "stop_video_buffering": "not_started",
         }
@@ -643,34 +674,41 @@ class Microscope:
     @schema_function(skip_self=True)
     async def get_video_frame(self, frame_width: int=Field(640, description="Width of the video frame"), frame_height: int=Field(480, description="Height of the video frame"), context=None):
         """
-        Get the raw frame from the microscope
+        Get the raw frame from the microscope using video buffering
         Returns: A processed frame ready for video streaming
         """
         try:
-            # Update last video request time for idle timeout tracking
-            self.last_video_request_time = time.time()
+            # Start video buffering if not already running
+            if not self.frame_acquisition_running:
+                await self.start_video_buffering()
             
-            # In test environments, prefer direct acquisition to avoid buffering complexity
-            if self.is_test_environment:
-                logger.info("Test environment detected - using direct frame acquisition")
+            # Get frame from buffer
+            buffered_frame = self.video_buffer.get_frame()
+            
+            if buffered_frame is not None:
+                # Check if buffered frame needs resizing
+                if buffered_frame.shape[:2] != (frame_height, frame_width):
+                    buffered_frame = cv2.resize(buffered_frame, (frame_width, frame_height))
+                
+                # Check frame freshness (fallback if frame is too old)
+                frame_age = self.video_buffer.get_frame_age()
+                if frame_age > 5.0:  # Frame older than 5 seconds
+                    logger.warning(f"Buffered frame is {frame_age:.1f}s old, acquiring fresh frame")
+                    return await self._get_fresh_frame(frame_width, frame_height)
+                
+                return buffered_frame
             else:
-                # Start buffering if not already running (lazy initialization)
-                if not self.buffer_acquisition_running:
-                    logger.info("Video frame requested - starting frame buffer acquisition")
-                    await self.start_frame_buffer_acquisition()
+                # No buffered frame available, get fresh frame
+                logger.warning("No buffered frame available, acquiring fresh frame")
+                return await self._get_fresh_frame(frame_width, frame_height)
                 
-                # Try to get frame from buffer first
-                with self.frame_buffer_lock:
-                    if self.last_buffered_frame is not None:
-                        buffered_frame = self.last_buffered_frame.copy()
-                        # Resize if dimensions don't match
-                        if buffered_frame.shape[:2] != (frame_height, frame_width):
-                            buffered_frame = cv2.resize(buffered_frame, (frame_width, frame_height))
-                        return buffered_frame
-                
-                # Fallback to direct acquisition if no buffered frame available yet
-                logger.info("No buffered frame available yet, using direct acquisition")
-            
+        except Exception as e:
+            logger.error(f"Error getting video frame: {e}", exc_info=True)
+            return self._create_placeholder_frame(frame_width, frame_height, f"Error: {str(e)}")
+    
+    async def _get_fresh_frame(self, frame_width, frame_height):
+        """Get a fresh frame directly from the microscope (fallback method)"""
+        try:
             # Get current channel and parameters
             channel = self.squidController.current_channel
             param_name = self.channel_param_map.get(channel)
@@ -680,213 +718,20 @@ class Microscope:
                 if stored_params and isinstance(stored_params, list) and len(stored_params) == 2:
                     intensity, exposure_time = stored_params
 
-            # Get frame directly using snap_image
+            # Get frame directly
             if self.is_simulation:
                 raw_frame = await self.squidController.get_camera_frame_simulation(channel, intensity, exposure_time)
             else:
-                raw_frame = self.squidController.get_camera_frame(channel, intensity, exposure_time)
+                raw_frame = await asyncio.get_event_loop().run_in_executor(
+                    None, self.squidController.get_camera_frame, channel, intensity, exposure_time
+                )
             
-            # Process frame using the same logic as buffer processing
-            processed_frame = self._process_frame_for_video(raw_frame, frame_width, frame_height)
-            return processed_frame
-            
-        except Exception as e:
-            logger.error(f"Error getting video frame: {e}", exc_info=True)
-            # Return a blank frame with error message
-            return self._create_error_frame(str(e), frame_width, frame_height)
-
-    @schema_function(skip_self=True)
-    def adjust_video_frame(self, min_val: int = Field(0, description="Minimum intensity value for contrast stretching"), max_val: Optional[int] = Field(None, description="Maximum intensity value for contrast stretching"), context=None):
-        """Adjust the contrast of the video stream by setting min and max intensity values."""
-        task_name = "adjust_video_frame"
-        self.task_status[task_name] = "started"
-        try:
-            self.video_contrast_min = min_val
-            self.video_contrast_max = max_val
-            logger.info(f"Video contrast adjusted: min={min_val}, max={max_val}")
-            self.task_status[task_name] = "finished"
-            return {"success": True, "message": f"Video contrast adjusted to min={min_val}, max={max_val}."}
-        except Exception as e:
-            self.task_status[task_name] = "failed"
-            logger.error(f"Failed to adjust video frame: {e}")
-            raise e
-
-    async def start_frame_buffer_acquisition(self):
-        """Start the background frame acquisition task for video buffering."""
-        if self.buffer_acquisition_task is not None:
-            logger.info("Frame buffer acquisition already running")
-            return
-        
-        self.buffer_acquisition_running = True
-        self.buffer_acquisition_task = asyncio.create_task(self._frame_buffer_acquisition_loop())
-        logger.info("Started frame buffer acquisition")
-
-    async def stop_frame_buffer_acquisition(self):
-        """Stop the background frame acquisition task."""
-        if self.buffer_acquisition_task is None:
-            return
-        
-        self.buffer_acquisition_running = False
-        
-        try:
-            # Cancel the task and wait for it to complete
-            self.buffer_acquisition_task.cancel()
-            await asyncio.wait_for(self.buffer_acquisition_task, timeout=2.0)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            pass
-        except Exception as e:
-            logger.error(f"Error stopping frame buffer acquisition: {e}")
-        
-        self.buffer_acquisition_task = None
-        
-        # Clear the buffer and reset tracking
-        with self.frame_buffer_lock:
-            self.frame_buffer.clear()
-            self.last_buffered_frame = None
-        
-        self._reset_video_activity_tracking()
-        logger.info("Stopped frame buffer acquisition and cleared buffer")
-
-    async def _frame_buffer_acquisition_loop(self):
-        """Background loop that continuously acquires frames and adds them to the buffer."""
-        logger.info("Frame buffer acquisition loop started")
-        frame_interval = 1.0 / self.buffer_fps_target
-        
-        try:
-            while self.buffer_acquisition_running:
-                start_time = time.time()
-                
-                # In test environments, skip connection-based stopping logic
-                if not self.is_test_environment:
-                    # Check for idle timeout - stop buffering if no video requests for too long
-                    if (self.last_video_request_time is not None and 
-                        start_time - self.last_video_request_time > self.video_idle_timeout):
-                        logger.info(f"Video idle timeout ({self.video_idle_timeout}s) - stopping buffer acquisition")
-                        self.buffer_acquisition_running = False
-                        break
-                    
-                    # Check WebRTC connection status
-                    if not self.webrtc_connected and self.last_video_request_time is not None:
-                        # If WebRTC disconnected and we have been running, stop after a grace period
-                        grace_period = 2.0  # 2 seconds grace period after disconnection
-                        if start_time - self.last_video_request_time > grace_period:
-                            logger.info("WebRTC disconnected - stopping buffer acquisition")
-                            self.buffer_acquisition_running = False
-                            break
-                else:
-                    # In test environments, use a longer idle timeout and ignore WebRTC status
-                    test_idle_timeout = 30.0  # 30 seconds for tests
-                    if (self.last_video_request_time is not None and 
-                        start_time - self.last_video_request_time > test_idle_timeout):
-                        logger.info(f"Test environment idle timeout ({test_idle_timeout}s) - stopping buffer acquisition")
-                        self.buffer_acquisition_running = False
-                        break
-                
-                try:
-                    # Get current channel and parameters
-                    channel = self.squidController.current_channel
-                    param_name = self.channel_param_map.get(channel)
-                    intensity, exposure_time = 10, 10  # Default values
-                    if param_name:
-                        stored_params = getattr(self, param_name, None)
-                        if stored_params and isinstance(stored_params, list) and len(stored_params) == 2:
-                            intensity, exposure_time = stored_params
-
-                    # Acquire frame (this is where the slow operation happens)
-                    if self.is_simulation:
-                        raw_frame = await self.squidController.get_camera_frame_simulation_buffered(
-                            channel, intensity, exposure_time
-                        )
-                    else:
-                        raw_frame = await self._get_camera_frame_non_blocking(
-                            channel, intensity, exposure_time
-                        )
-                    
-                    # Process frame (same processing as get_video_frame)
-                    processed_frame = self._process_frame_for_video(
-                        raw_frame, self.buffer_frame_width, self.buffer_frame_height
-                    )
-                    
-                    # Add to buffer thread-safely
-                    with self.frame_buffer_lock:
-                        self.frame_buffer.append(processed_frame)
-                        self.last_buffered_frame = processed_frame
-                    
-                    # Log periodically
-                    if len(self.frame_buffer) % 25 == 0:
-                        logger.info(f"Frame buffer size: {len(self.frame_buffer)}, target FPS: {self.buffer_fps_target}")
-                        
-                except Exception as e:
-                    logger.error(f"Error in frame buffer acquisition: {e}")
-                    # Create error frame
-                    error_frame = self._create_error_frame(
-                        str(e), self.buffer_frame_width, self.buffer_frame_height
-                    )
-                    with self.frame_buffer_lock:
-                        self.frame_buffer.append(error_frame)
-                        self.last_buffered_frame = error_frame
-                
-                # Sleep to maintain target FPS
-                elapsed = time.time() - start_time
-                sleep_time = max(0, frame_interval - elapsed)
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
-                    
-        except asyncio.CancelledError:
-            logger.info("Frame buffer acquisition loop cancelled")
-            raise
-        except Exception as e:
-            logger.error(f"Frame buffer acquisition loop error: {e}")
-        finally:
-            logger.info("Frame buffer acquisition loop ended")
-
-    def _process_frame_for_video(self, raw_frame, frame_width, frame_height):
-        """Process raw frame for video streaming (same logic as get_video_frame)."""
-        try:
-            # Adjust contrast
-            min_val = self.video_contrast_min
-            max_val = self.video_contrast_max
-
-            if max_val is None:
-                if raw_frame.dtype == np.uint16:
-                    max_val = 65535
-                else:
-                    max_val = 255
-            
-            # Clip and scale to 0-255
-            processed_frame = np.clip(raw_frame, min_val, max_val)
-            if max_val > min_val:
-                processed_frame = ((processed_frame.astype(np.float32) - min_val) / (max_val - min_val) * 255).astype(np.uint8)
-            else:
-                processed_frame = np.zeros_like(raw_frame, dtype=np.uint8)
-            
-            # Convert to RGB if needed
-            if len(processed_frame.shape) == 2:
-                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
-            elif processed_frame.shape[2] == 1:
-                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
-                
-            # Resize to standard dimensions
-            processed_frame = cv2.resize(processed_frame, (frame_width, frame_height))
-            
-            return processed_frame
+            # Process the frame
+            return self._process_raw_frame(raw_frame, frame_width, frame_height)
             
         except Exception as e:
-            logger.error(f"Error processing frame for video: {e}")
-            return self._create_error_frame(str(e), frame_width, frame_height)
-
-    def _create_error_frame(self, error_msg, frame_width, frame_height):
-        """Create an error frame with the error message."""
-        placeholder_img = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
-        cv2.putText(placeholder_img, f"Error: {error_msg}", (10, frame_height//2), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
-        return placeholder_img
-
-    async def _get_camera_frame_non_blocking(self, channel, intensity, exposure_time):
-        """Get camera frame for non-simulation mode (wrapper for future real hardware buffering)."""
-        # For now, this is the same as the original method
-        # In the future, this could be optimized for real hardware
-        return self.squidController.get_camera_frame(channel, intensity, exposure_time)
+            logger.error(f"Error getting fresh frame: {e}")
+            return self._create_placeholder_frame(frame_width, frame_height, f"Fresh Frame Error: {str(e)}")
 
     @schema_function(skip_self=True)
     def configure_video_buffer(self, buffer_fps: int = Field(5, description="Target FPS for buffer acquisition"), buffer_size: int = Field(5, description="Maximum number of frames to keep in buffer"), context=None):
@@ -1076,6 +921,61 @@ class Microscope:
                             logger.warning(f"ZarrImageManager cleanup error: {e}")
         except Exception as e:
             logger.error(f"Error during test cleanup: {e}")
+
+    @schema_function(skip_self=True)
+    async def start_video_buffering_api(self, context=None):
+        """Start video buffering for smooth video streaming"""
+        task_name = "start_video_buffering"
+        self.task_status[task_name] = "started"
+        try:
+            await self.start_video_buffering()
+            self.task_status[task_name] = "finished"
+            return {"success": True, "message": "Video buffering started successfully"}
+        except Exception as e:
+            self.task_status[task_name] = "failed"
+            logger.error(f"Failed to start video buffering: {e}")
+            raise e
+
+    @schema_function(skip_self=True)
+    async def stop_video_buffering_api(self, context=None):
+        """Stop video buffering"""
+        task_name = "stop_video_buffering"
+        self.task_status[task_name] = "started"
+        try:
+            await self.stop_video_buffering()
+            self.task_status[task_name] = "finished"
+            return {"success": True, "message": "Video buffering stopped successfully"}
+        except Exception as e:
+            self.task_status[task_name] = "failed"
+            logger.error(f"Failed to stop video buffering: {e}")
+            raise e
+
+    @schema_function(skip_self=True)
+    def get_video_buffering_status(self, context=None):
+        """Get the current video buffering status"""
+        try:
+            buffer_size = len(self.video_buffer.buffer) if self.video_buffer else 0
+            frame_age = self.video_buffer.get_frame_age() if self.video_buffer else float('inf')
+            
+            return {
+                "buffering_active": self.frame_acquisition_running,
+                "buffer_size": buffer_size,
+                "max_buffer_size": self.video_buffer.max_size if self.video_buffer else 0,
+                "frame_age_seconds": frame_age if frame_age != float('inf') else None,
+                "buffer_fps": self.buffer_fps,
+                "has_frames": buffer_size > 0
+            }
+        except Exception as e:
+            logger.error(f"Failed to get video buffering status: {e}")
+            return {
+                "buffering_active": False,
+                "buffer_size": 0,
+                "max_buffer_size": 0,
+                "frame_age_seconds": None,
+                "buffer_fps": 0,
+                "has_frames": False,
+                "error": str(e)
+            }
 
     @schema_function(skip_self=True)
     async def snap(self, exposure_time: int=Field(100, description="Exposure time, in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
@@ -1739,10 +1639,9 @@ class Microscope:
                 "reset_task_status": self.reset_task_status,
                 "reset_all_task_status": self.reset_all_task_status,
                 "adjust_video_frame": self.adjust_video_frame,
-                "configure_video_buffer": self.configure_video_buffer,
-                "get_video_buffer_status": self.get_video_buffer_status,
-                "start_video_buffering": self.start_video_buffering,
-                "stop_video_buffering": self.stop_video_buffering,
+                "start_video_buffering": self.start_video_buffering_api,
+                "stop_video_buffering": self.stop_video_buffering_api,
+                "get_video_buffering_status": self.get_video_buffering_status,
             },
         )
 
@@ -1821,6 +1720,10 @@ class Microscope:
                 self.video_track = MicroscopeVideoTrack(self) 
                 peer_connection.addTrack(self.video_track)
                 logger.info("Added MicroscopeVideoTrack to peer connection")
+                self.is_streaming = True
+                
+                # Start video buffering when WebRTC starts
+                asyncio.create_task(self.start_video_buffering())
                 
                 @track.on("ended")
                 def on_ended():
@@ -1829,6 +1732,10 @@ class Microscope:
                         logger.info("Stopping MicroscopeVideoTrack.")
                         self.video_track.stop()  # Now synchronous
                         self.video_track = None
+                    self.is_streaming = False
+                    
+                    # Stop video buffering when WebRTC ends
+                    asyncio.create_task(self.stop_video_buffering())
 
         ice_servers = await self.fetch_ice_servers()
         if not ice_servers:
@@ -1965,17 +1872,156 @@ class Microscope:
         logger.info("ZarrImageManager initialized successfully for health check")
         return camera.zarr_image_manager
 
+    async def start_video_buffering(self):
+        """Start the background frame acquisition task for video buffering"""
+        if self.frame_acquisition_running:
+            logger.info("Video buffering already running")
+            return
+            
+        self.frame_acquisition_running = True
+        self.frame_acquisition_task = asyncio.create_task(self._background_frame_acquisition())
+        logger.info("Video buffering started")
+        
+    async def stop_video_buffering(self):
+        """Stop the background frame acquisition task"""
+        if not self.frame_acquisition_running:
+            logger.info("Video buffering not running")
+            return
+            
+        self.frame_acquisition_running = False
+        if self.frame_acquisition_task:
+            try:
+                await asyncio.wait_for(self.frame_acquisition_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                logger.warning("Frame acquisition task did not stop gracefully, cancelling")
+                self.frame_acquisition_task.cancel()
+                try:
+                    await self.frame_acquisition_task
+                except asyncio.CancelledError:
+                    pass
+        
+        self.video_buffer.clear()
+        logger.info("Video buffering stopped")
+        
+    async def _background_frame_acquisition(self):
+        """Background task that continuously acquires frames and stores them in buffer"""
+        logger.info("Background frame acquisition started")
+        
+        while self.frame_acquisition_running:
+            try:
+                # Control frame acquisition rate
+                start_time = time.time()
+                
+                # Get current parameters
+                channel = self.squidController.current_channel
+                param_name = self.channel_param_map.get(channel)
+                intensity, exposure_time = 10, 10  # Default values
+                
+                if param_name:
+                    stored_params = getattr(self, param_name, None)
+                    if stored_params and isinstance(stored_params, list) and len(stored_params) == 2:
+                        intensity, exposure_time = stored_params
+
+                # Acquire frame
+                try:
+                    if self.is_simulation:
+                        # Use fast simulation method for video buffering
+                        raw_frame = await self.squidController.get_camera_frame_simulation_fast(
+                            channel, intensity, exposure_time
+                        )
+                    else:
+                        # For real hardware, run in executor to avoid blocking
+                        raw_frame = await asyncio.get_event_loop().run_in_executor(
+                            None, self.squidController.get_camera_frame, channel, intensity, exposure_time
+                        )
+                    
+                    # Process frame
+                    processed_frame = self._process_raw_frame(
+                        raw_frame, frame_width=640, frame_height=480
+                    )
+                    
+                    # Store in buffer
+                    self.video_buffer.put_frame(processed_frame)
+                    
+                except Exception as e:
+                    logger.error(f"Error in background frame acquisition: {e}")
+                    # Create placeholder frame on error
+                    placeholder_frame = self._create_placeholder_frame(
+                        640, 480, f"Acquisition Error: {str(e)}"
+                    )
+                    self.video_buffer.put_frame(placeholder_frame)
+                
+                # Control frame rate
+                elapsed = time.time() - start_time
+                sleep_time = max(0, (1.0 / self.buffer_fps) - elapsed)
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
+                    
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Unexpected error in background frame acquisition: {e}")
+                await asyncio.sleep(0.1)  # Brief pause before retry
+                
+        logger.info("Background frame acquisition stopped")
+        
+    def _process_raw_frame(self, raw_frame, frame_width=640, frame_height=480):
+        """Process raw frame for video streaming"""
+        try:
+            # Adjust contrast
+            min_val = self.video_contrast_min
+            max_val = self.video_contrast_max
+
+            if max_val is None:
+                if raw_frame.dtype == np.uint16:
+                    max_val = 65535
+                else:
+                    max_val = 255
+            
+            # Clip and scale to 0-255
+            processed_frame = np.clip(raw_frame, min_val, max_val)
+            if max_val > min_val:
+                processed_frame = ((processed_frame.astype(np.float32) - min_val) / (max_val - min_val) * 255).astype(np.uint8)
+            else:
+                processed_frame = np.zeros_like(raw_frame, dtype=np.uint8)
+            
+            # Convert to RGB if needed
+            if len(processed_frame.shape) == 2:
+                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
+            elif processed_frame.shape[2] == 1:
+                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
+                
+            # Resize to standard dimensions
+            processed_frame = cv2.resize(processed_frame, (frame_width, frame_height))
+            
+            return processed_frame
+            
+        except Exception as e:
+            logger.error(f"Error processing frame: {e}")
+            return self._create_placeholder_frame(frame_width, frame_height, f"Processing Error: {str(e)}")
+            
+    def _create_placeholder_frame(self, width, height, message="No Frame Available"):
+        """Create a placeholder frame with error message"""
+        placeholder_img = np.zeros((height, width, 3), dtype=np.uint8)
+        cv2.putText(placeholder_img, message, (10, height//2), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
+        return placeholder_img
+
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):
     logger.info('Signal received, shutting down gracefully...')
-    # Stop video buffering task
-    if hasattr(microscope, 'buffer_acquisition_task') and microscope.buffer_acquisition_task is not None:
-        logger.info('Stopping frame buffer acquisition...')
+    
+    # Stop video buffering
+    if hasattr(microscope, 'frame_acquisition_running') and microscope.frame_acquisition_running:
+        logger.info('Stopping video buffering...')
         try:
             loop = asyncio.get_event_loop()
-            loop.run_until_complete(microscope.stop_frame_buffer_acquisition())
+            if loop.is_running():
+                loop.create_task(microscope.stop_video_buffering())
+            else:
+                loop.run_until_complete(microscope.stop_video_buffering())
         except Exception as e:
-            logger.error(f'Error stopping frame buffer: {e}')
+            logger.error(f'Error stopping video buffering: {e}')
     
     microscope.squidController.close()
     sys.exit(0)
