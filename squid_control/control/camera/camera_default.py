@@ -923,10 +923,11 @@ class Camera_Simulation(object):
 
     async def send_trigger_buffered(self, x=29.81, y=36.85, dz=0, pixel_size_um=0.333, channel=0, intensity=100, exposure_time=100, magnification_factor=20, sample_data_alias="agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38"):
         """
-        Progressive loading trigger method for video buffering.
-        Returns immediately with example image, then progressively loads Zarr chunks in background.
+        Buffered trigger method for video buffering.
+        Loads Zarr chunks directly without fallback to example images.
+        Fails if Zarr loading is unsuccessful.
         """
-        print(f"Sending progressive buffered trigger with x={x}, y={y}, dz={dz}, channel={channel}")
+        print(f"Sending buffered trigger with x={x}, y={y}, dz={dz}, channel={channel}")
         self.frame_ID += 1
         self.timestamp = time.time()
 
@@ -939,113 +940,113 @@ class Camera_Simulation(object):
         }
         channel_name = channel_map.get(channel, None)
 
-        # IMMEDIATE RESPONSE: Start with example image (0ms delay)
-        self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
-        print(f"Starting with example image for immediate response")
+        if channel_name is None:
+            raise ValueError(f"Invalid channel {channel}, no mapping available")
 
-        # Start progressive Zarr loading in background (non-blocking)
-        if channel_name is not None:
-            asyncio.create_task(self._progressive_zarr_loading(
+        # Load Zarr data directly - no fallback to example images
+        try:
+            await self._load_zarr_data_buffered(
                 x, y, pixel_size_um, channel_name, sample_data_alias, 
                 intensity, exposure_time, dz
-            ))
-
-        # Apply immediate processing to example image
-        self._apply_image_processing(intensity, exposure_time, dz)
+            )
+        except Exception as e:
+            print(f"Failed to load Zarr data for buffered trigger: {e}")
+            raise  # Fail completely, no fallback
 
         if self.new_image_callback_external is not None and self.callback_is_enabled:
             self.new_image_callback_external(self)
 
-    async def _progressive_zarr_loading(self, x, y, pixel_size_um, channel_name, sample_data_alias, intensity, exposure_time, dz):
+    async def _load_zarr_data_buffered(self, x, y, pixel_size_um, channel_name, sample_data_alias, intensity, exposure_time, dz):
         """
-        Background task that progressively loads and composites Zarr chunks.
-        Updates the current image as chunks become available.
+        Direct Zarr data loading for buffered video streaming.
+        Fails completely if any chunk fails to load - no fallback to example images.
         """
-        try:
-            # Lazily initialize ZarrImageManager if needed
-            if self.zarr_image_manager is None:
-                print("Creating ZarrImageManager for progressive loading...")
-                self.zarr_image_manager = ZarrImageManager()
-                await self.zarr_image_manager.connect(server_url=self.SERVER_URL)
+        # Lazily initialize ZarrImageManager if needed
+        if self.zarr_image_manager is None:
+            print("Creating ZarrImageManager for buffered loading...")
+            self.zarr_image_manager = ZarrImageManager()
+            await self.zarr_image_manager.connect(server_url=self.SERVER_URL)
 
-            # Convert coordinates
-            pixel_x = int((x / pixel_size_um) * 1000 / self.scale_factor)
-            pixel_y = int((y / pixel_size_um) * 1000 / self.scale_factor)
-            
-            # Calculate region boundaries
-            scaled_width = self.Width // self.scale_factor
-            scaled_height = self.Height // self.scale_factor
-            half_width = scaled_width // 2
-            half_height = scaled_height // 2
-            
-            y_start = max(0, pixel_y - half_height)
-            y_end = y_start + scaled_height
-            x_start = max(0, pixel_x - half_width)
-            x_end = x_start + scaled_width
+        # Convert coordinates
+        pixel_x = int((x / pixel_size_um) * 1000 / self.scale_factor)
+        pixel_y = int((y / pixel_size_um) * 1000 / self.scale_factor)
+        
+        # Calculate region boundaries
+        scaled_width = self.Width // self.scale_factor
+        scaled_height = self.Height // self.scale_factor
+        half_width = scaled_width // 2
+        half_height = scaled_height // 2
+        
+        y_start = max(0, pixel_y - half_height)
+        y_end = y_start + scaled_height
+        x_start = max(0, pixel_x - half_width)
+        x_end = x_start + scaled_width
 
-            # Get metadata to determine chunk layout
-            dataset_id = sample_data_alias
-            zarray_path = f"{channel_name}/scale{self.scale_level}/.zarray"
-            zarray_metadata = await self.zarr_image_manager._fetch_zarr_metadata(dataset_id, zarray_path)
-            
-            if not zarray_metadata:
-                print("No metadata available for progressive loading")
-                return
+        # Get metadata to determine chunk layout
+        dataset_id = sample_data_alias
+        zarray_path = f"{channel_name}/scale{self.scale_level}/.zarray"
+        zarray_metadata = await self.zarr_image_manager._fetch_zarr_metadata(dataset_id, zarray_path)
+        
+        if not zarray_metadata:
+            raise Exception(f"No metadata available for {dataset_id}/{zarray_path}")
 
-            z_chunks = zarray_metadata["chunks"]  # [chunk_height, chunk_width]
-            
-            # Calculate which chunks we need
-            chunk_y_start = y_start // z_chunks[0]
-            chunk_y_end = (y_end - 1) // z_chunks[0] + 1
-            chunk_x_start = x_start // z_chunks[1]
-            chunk_x_end = (x_end - 1) // z_chunks[1] + 1
+        z_chunks = zarray_metadata["chunks"]  # [chunk_height, chunk_width]
+        
+        # Calculate which chunks we need
+        chunk_y_start = y_start // z_chunks[0]
+        chunk_y_end = (y_end - 1) // z_chunks[0] + 1
+        chunk_x_start = x_start // z_chunks[1]
+        chunk_x_end = (x_end - 1) // z_chunks[1] + 1
 
-            # Create base composite image from current example image
-            composite_image = self.image.copy()
-            
-            # Load chunks progressively
-            total_chunks = (chunk_y_end - chunk_y_start) * (chunk_x_end - chunk_x_start)
-            loaded_chunks = 0
-            
-            print(f"Progressive loading: {total_chunks} chunks needed")
-            
-            for chunk_y in range(chunk_y_start, chunk_y_end):
-                for chunk_x in range(chunk_x_start, chunk_x_end):
-                    try:
-                        # Load individual chunk with timeout
-                        chunk_data = await asyncio.wait_for(
-                            self.zarr_image_manager.get_chunk_np_data(
-                                dataset_id, channel_name, self.scale_level, chunk_x, chunk_y
-                            ),
-                            timeout=2.0  # 2s timeout per chunk
-                        )
-                        
-                        if chunk_data is not None:
-                            # Composite this chunk into the image
-                            self._composite_chunk_into_image(
-                                composite_image, chunk_data, chunk_x, chunk_y, 
-                                z_chunks, x_start, y_start, x_end, y_end
-                            )
-                            loaded_chunks += 1
-                            
-                            # Update the displayed image every few chunks
-                            if loaded_chunks % 4 == 0 or loaded_chunks == total_chunks:
-                                await self._update_progressive_image(
-                                    composite_image, intensity, exposure_time, dz
-                                )
-                                print(f"Progressive update: {loaded_chunks}/{total_chunks} chunks loaded")
+        # Create empty composite image 
+        composite_image = np.zeros((self.Height, self.Width), dtype=np.uint8)
+        
+        # Load all chunks - fail if any chunk fails
+        total_chunks = (chunk_y_end - chunk_y_start) * (chunk_x_end - chunk_x_start)
+        loaded_chunks = 0
+        failed_chunks = []
+        
+        print(f"Buffered loading: {total_chunks} chunks needed")
+        
+        for chunk_y in range(chunk_y_start, chunk_y_end):
+            for chunk_x in range(chunk_x_start, chunk_x_end):
+                try:
+                    # Load individual chunk with increased timeout (5 seconds)
+                    chunk_data = await asyncio.wait_for(
+                        self.zarr_image_manager.get_chunk_np_data(
+                            dataset_id, channel_name, self.scale_level, chunk_x, chunk_y
+                        ),
+                        timeout=5.0  # 5s timeout per chunk (increased from 2s)
+                    )
                     
-                    except asyncio.TimeoutError:
-                        print(f"Timeout loading chunk ({chunk_x}, {chunk_y})")
-                        continue
-                    except Exception as e:
-                        print(f"Error loading chunk ({chunk_x}, {chunk_y}): {e}")
-                        continue
+                    if chunk_data is not None:
+                        # Composite this chunk into the image
+                        self._composite_chunk_into_image(
+                            composite_image, chunk_data, chunk_x, chunk_y, 
+                            z_chunks, x_start, y_start, x_end, y_end
+                        )
+                        loaded_chunks += 1
+                    else:
+                        failed_chunks.append((chunk_x, chunk_y))
+                        
+                except asyncio.TimeoutError:
+                    print(f"Timeout loading chunk ({chunk_x}, {chunk_y})")
+                    failed_chunks.append((chunk_x, chunk_y))
+                except Exception as e:
+                    print(f"Error loading chunk ({chunk_x}, {chunk_y}): {e}")
+                    failed_chunks.append((chunk_x, chunk_y))
 
-            print(f"Progressive loading complete: {loaded_chunks}/{total_chunks} chunks loaded")
-            
-        except Exception as e:
-            print(f"Error in progressive Zarr loading: {e}")
+        # Fail completely if any chunks failed to load
+        if failed_chunks:
+            raise Exception(f"Failed to load {len(failed_chunks)}/{total_chunks} chunks: {failed_chunks}")
+
+        print(f"Buffered loading complete: {loaded_chunks}/{total_chunks} chunks loaded successfully")
+        
+        # Update the main image with the successfully loaded composite
+        self.image = composite_image
+        
+        # Apply processing
+        self._apply_image_processing(intensity, exposure_time, dz)
 
     def _composite_chunk_into_image(self, composite_image, chunk_data, chunk_x, chunk_y, z_chunks, x_start, y_start, x_end, y_end):
         """
@@ -1101,24 +1102,6 @@ class Camera_Simulation(object):
                         
         except Exception as e:
             print(f"Error compositing chunk: {e}")
-
-    async def _update_progressive_image(self, composite_image, intensity, exposure_time, dz):
-        """
-        Update the current displayed image with the progressive composite.
-        """
-        try:
-            # Update the main image
-            self.image = composite_image.copy()
-            
-            # Apply processing
-            self._apply_image_processing(intensity, exposure_time, dz)
-            
-            # Trigger callback for updated image
-            if self.new_image_callback_external is not None and self.callback_is_enabled:
-                self.new_image_callback_external(self)
-                
-        except Exception as e:
-            print(f"Error updating progressive image: {e}")
 
     def _apply_image_processing(self, intensity, exposure_time, dz):
         """
