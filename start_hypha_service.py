@@ -150,11 +150,12 @@ class MicroscopeVideoTrack(MediaStreamTrack):
         self.start_time = None
         # Use the same FPS as the microscope's buffer FPS for synchronization
         self.fps = self.microscope_instance.buffer_fps
-        self.frame_width = 640
-        self.frame_height = 640
+        # Use microscope's current buffer frame size
+        self.frame_width = self.microscope_instance.buffer_frame_width
+        self.frame_height = self.microscope_instance.buffer_frame_height
         # Set WebRTC connection status
         self.microscope_instance.webrtc_connected = True
-        logger.info(f"MicroscopeVideoTrack initialized with {self.fps} FPS")
+        logger.info(f"MicroscopeVideoTrack initialized with {self.fps} FPS, frame size: {self.frame_width}x{self.frame_height}")
 
     def draw_crosshair(self, img, center_x, center_y, size=20, color=[255, 255, 255]):
         """Draw a crosshair at the specified position"""
@@ -303,6 +304,12 @@ class Microscope:
         self.buffer_fps = 5  # Background frame acquisition FPS
         self.last_parameters_update = 0
         self.parameters_update_interval = 1.0  # Update parameters every 1 second
+        
+        # Adjustable frame size attributes - replaces hardcoded 640x640
+        self.buffer_frame_width = 640  # Current buffer frame width
+        self.buffer_frame_height = 640  # Current buffer frame height
+        self.default_frame_width = 640  # Default frame size
+        self.default_frame_height = 640
         
         # Auto-stop video buffering attributes
         self.last_video_request_time = None
@@ -761,8 +768,9 @@ class Microscope:
             
             if frame_data is not None:
                 # Check if we need to resize the frame
-                buffered_width = 640  # Buffer always stores 640x640 frames
-                buffered_height = 640
+                # Use current buffer frame size instead of hardcoded values
+                buffered_width = self.buffer_frame_width
+                buffered_height = self.buffer_frame_height
                 
                 if frame_width != buffered_width or frame_height != buffered_height:
                     # Need to resize - decompress, resize, and recompress
@@ -850,23 +858,23 @@ class Microscope:
     def get_video_buffer_status(self, context=None):
         """Get the current status of the video buffer."""
         try:
-            with self.frame_buffer_lock:
-                buffer_fill = len(self.frame_buffer)
-                buffer_capacity = self.frame_buffer.maxlen
-                has_buffered_frame = self.last_buffered_frame is not None
-                
+            buffer_fill = len(self.video_buffer.frame_buffer)
+            buffer_capacity = self.video_buffer.max_size
+            
             return {
                 "success": True,
-                "buffer_running": self.buffer_acquisition_running,
+                "buffer_running": self.frame_acquisition_running,
                 "buffer_fill": buffer_fill,
                 "buffer_capacity": buffer_capacity,
                 "buffer_fill_percent": (buffer_fill / buffer_capacity * 100) if buffer_capacity > 0 else 0,
-                "has_buffered_frame": has_buffered_frame,
-                "target_fps": self.buffer_fps_target,
+                "buffer_fps": self.buffer_fps,
                 "frame_dimensions": {
                     "width": self.buffer_frame_width,
                     "height": self.buffer_frame_height
-                }
+                },
+                "video_idle_timeout": self.video_idle_timeout,
+                "last_video_request": self.last_video_request_time,
+                "webrtc_connected": self.webrtc_connected
             }
         except Exception as e:
             logger.error(f"Failed to get video buffer status: {e}")
@@ -2166,7 +2174,7 @@ class Microscope:
                         logger.warning(f"Camera frame acquisition returned None - camera may be overloaded (failure #{consecutive_failures})")
                         # Create placeholder frame on None return
                         placeholder_frame = self._create_placeholder_frame(
-                            640, 640, "Camera Overloaded"
+                            self.buffer_frame_width, self.buffer_frame_height, "Camera Overloaded"
                         )
                         compressed_placeholder = self._encode_frame_jpeg(placeholder_frame, quality=85)
                         self.video_buffer.put_frame(compressed_placeholder)
@@ -2184,7 +2192,7 @@ class Microscope:
                         T_process_start = time.time()
                         
                         processed_frame = self._process_raw_frame(
-                            raw_frame, frame_width=640, frame_height=640
+                            raw_frame, frame_width=self.buffer_frame_width, frame_height=self.buffer_frame_height
                         )
                         
                         # LATENCY MEASUREMENT: End timing image processing
@@ -2219,7 +2227,7 @@ class Microscope:
                     logger.error(f"Error in background frame acquisition: {e}")
                     # Create placeholder frame on error
                     placeholder_frame = self._create_placeholder_frame(
-                        640, 640, f"Acquisition Error: {str(e)}"
+                        self.buffer_frame_width, self.buffer_frame_height, f"Acquisition Error: {str(e)}"
                     )
                     compressed_placeholder = self._encode_frame_jpeg(placeholder_frame, quality=85)
                     self.video_buffer.put_frame(compressed_placeholder)
@@ -2326,8 +2334,8 @@ class Microscope:
             logger.error(f"Error decoding frame: {e}")
         
         # Return placeholder on error
-        width = frame_data.get('width', 640)
-        height = frame_data.get('height', 640)
+        width = frame_data.get('width', self.buffer_frame_width)
+        height = frame_data.get('height', self.buffer_frame_height)
         return self._create_placeholder_frame(width, height, "Decode Error")
 
     def _encode_frame_jpeg(self, frame, quality=85):
@@ -2428,6 +2436,52 @@ class Microscope:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to get current well location: {e}")
             raise e
+
+    @schema_function(skip_self=True)
+    def configure_video_buffer_frame_size(self, frame_width: int = Field(640, description="Width of the video buffer frames"), frame_height: int = Field(640, description="Height of the video buffer frames"), context=None):
+        """Configure video buffer frame size for optimal streaming performance."""
+        try:
+            # Validate frame size parameters
+            frame_width = max(64, min(4096, frame_width))  # Clamp between 64-4096 pixels
+            frame_height = max(64, min(4096, frame_height))  # Clamp between 64-4096 pixels
+            
+            old_width = self.buffer_frame_width
+            old_height = self.buffer_frame_height
+            
+            # Update buffer frame size
+            self.buffer_frame_width = frame_width
+            self.buffer_frame_height = frame_height
+            
+            # If buffer is running and size changed, restart it to use new size
+            restart_needed = (frame_width != old_width or frame_height != old_height) and self.frame_acquisition_running
+            
+            if restart_needed:
+                logger.info(f"Buffer frame size changed from {old_width}x{old_height} to {frame_width}x{frame_height}, restarting buffer")
+                # Clear existing buffer to remove old-sized frames
+                self.video_buffer.clear()
+                # Note: The frame acquisition loop will automatically use the new size for subsequent frames
+            
+            # Update WebRTC video track if it exists
+            if hasattr(self, 'video_track') and self.video_track:
+                self.video_track.frame_width = frame_width
+                self.video_track.frame_height = frame_height
+                logger.info(f"Updated WebRTC video track frame size to {frame_width}x{frame_height}")
+            
+            logger.info(f"Video buffer frame size configured: {frame_width}x{frame_height} (was {old_width}x{old_height})")
+            
+            return {
+                "success": True,
+                "message": f"Video buffer frame size configured to {frame_width}x{frame_height}",
+                "previous_size": {"width": old_width, "height": old_height},
+                "new_size": {"width": frame_width, "height": frame_height},
+                "buffer_restarted": restart_needed
+            }
+        except Exception as e:
+            logger.error(f"Failed to configure video buffer frame size: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to configure video buffer frame size: {str(e)}"
+            }
 
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):
