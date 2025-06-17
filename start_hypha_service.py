@@ -64,34 +64,61 @@ logger = setup_logging()
 
 class VideoBuffer:
     """
-    Video buffer to store and manage microscope frames for smooth video streaming
+    Video buffer to store and manage compressed microscope frames for smooth video streaming
     """
     def __init__(self, max_size=5):
         self.max_size = max_size
         self.buffer = deque(maxlen=max_size)
         self.lock = threading.Lock()
-        self.last_frame = None
+        self.last_frame_data = None  # Store compressed frame data
         self.frame_timestamp = 0
         
-    def put_frame(self, frame):
-        """Add a frame to the buffer"""
+    def put_frame(self, frame_data):
+        """Add a compressed frame to the buffer
+        
+        Args:
+            frame_data: dict with compressed frame info from _encode_frame_jpeg()
+        """
         with self.lock:
             self.buffer.append({
-                'frame': frame,
+                'frame_data': frame_data,
                 'timestamp': time.time()
             })
-            self.last_frame = frame
+            self.last_frame_data = frame_data
             self.frame_timestamp = time.time()
             
-    def get_frame(self):
-        """Get the most recent frame from buffer"""
+    def get_frame_data(self):
+        """Get the most recent compressed frame data from buffer"""
         with self.lock:
             if self.buffer:
-                return self.buffer[-1]['frame']
-            elif self.last_frame is not None:
-                return self.last_frame
+                return self.buffer[-1]['frame_data']
+            elif self.last_frame_data is not None:
+                return self.last_frame_data
             else:
                 return None
+    
+    def get_frame(self):
+        """Get the most recent decompressed frame from buffer (for backward compatibility)"""
+        frame_data = self.get_frame_data()
+        if frame_data is None:
+            return None
+            
+        # Decode JPEG back to numpy array
+        try:
+            if frame_data['format'] == 'jpeg':
+                # Decode JPEG data
+                nparr = np.frombuffer(frame_data['data'], np.uint8)
+                bgr_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if bgr_frame is not None:
+                    # Convert BGR back to RGB
+                    return cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+            elif frame_data['format'] == 'raw':
+                # Raw numpy data
+                return np.frombuffer(frame_data['data'], dtype=np.uint8).reshape((-1, 640, 3))
+        except Exception as e:
+            logger.error(f"Error decoding frame: {e}")
+        
+        return None
                 
     def get_frame_age(self):
         """Get the age of the most recent frame in seconds"""
@@ -105,7 +132,7 @@ class VideoBuffer:
         """Clear the buffer"""
         with self.lock:
             self.buffer.clear()
-            self.last_frame = None
+            self.last_frame_data = None
             self.frame_timestamp = 0
 
 class MicroscopeVideoTrack(MediaStreamTrack):
@@ -121,12 +148,13 @@ class MicroscopeVideoTrack(MediaStreamTrack):
         self.count = 0
         self.running = True
         self.start_time = None
-        self.fps = 5 # Target FPS for WebRTC stream
+        # Use the same FPS as the microscope's buffer FPS for synchronization
+        self.fps = self.microscope_instance.buffer_fps
         self.frame_width = 640
         self.frame_height = 640
         # Set WebRTC connection status
         self.microscope_instance.webrtc_connected = True
-        logger.info("MicroscopeVideoTrack initialized")
+        logger.info(f"MicroscopeVideoTrack initialized with {self.fps} FPS")
 
     def draw_crosshair(self, img, center_x, center_y, size=20, color=[255, 255, 255]):
         """Draw a crosshair at the specified position"""
@@ -158,11 +186,14 @@ class MicroscopeVideoTrack(MediaStreamTrack):
             if sleep_duration > 0:
                 await asyncio.sleep(sleep_duration)
 
-            # Get frame using the get_video_frame method with frame dimensions
-            processed_frame = await self.microscope_instance.get_video_frame(
+            # Get compressed frame data from microscope
+            frame_data = await self.microscope_instance.get_video_frame(
                 frame_width=self.frame_width,
                 frame_height=self.frame_height
             )
+            
+            # Decompress JPEG data to numpy array for WebRTC
+            processed_frame = self.microscope_instance._decode_frame_jpeg(frame_data)
             
             current_time = time.time()
             # Use a 90kHz timebase, common for video, to provide accurate frame timing.
@@ -189,6 +220,11 @@ class MicroscopeVideoTrack(MediaStreamTrack):
             logger.error(f"MicroscopeVideoTrack: Error in recv(): {e}", exc_info=True)
             self.running = False
             raise
+
+    def update_fps(self, new_fps):
+        """Update the FPS of the video track"""
+        self.fps = new_fps
+        logger.info(f"MicroscopeVideoTrack FPS updated to {new_fps}")
 
     def stop(self):
         logger.info("MicroscopeVideoTrack stop() called.")
@@ -584,6 +620,8 @@ class Microscope:
                 'F561_intensity_exposure': self.F561_intensity_exposure,
                 'F638_intensity_exposure': self.F638_intensity_exposure,
                 'F730_intensity_exposure': self.F730_intensity_exposure,
+                'video_fps': self.buffer_fps,
+                'video_buffering_active': self.frame_acquisition_running,
             }
             self.task_status[task_name] = "finished"
             return self.parameters
@@ -697,8 +735,8 @@ class Microscope:
     @schema_function(skip_self=True)
     async def get_video_frame(self, frame_width: int=Field(640, description="Width of the video frame"), frame_height: int=Field(640, description="Height of the video frame"), context=None):
         """
-        Get the raw frame from the microscope using video buffering
-        Returns: A processed frame ready for video streaming
+        Get compressed frame data from the microscope using video buffering
+        Returns: Compressed frame data (JPEG bytes) for efficient network transmission
         """
         try:
             # Update last video request time for auto-stop functionality
@@ -713,23 +751,37 @@ class Microscope:
             if self.video_idle_check_task is None or self.video_idle_check_task.done():
                 self.video_idle_check_task = asyncio.create_task(self._monitor_video_idle())
             
-            # Get frame from buffer
-            buffered_frame = self.video_buffer.get_frame()
+            # Get compressed frame data from buffer (NO DECOMPRESSION)
+            frame_data = self.video_buffer.get_frame_data()
             
-            if buffered_frame is not None:
-                # Check if buffered frame needs resizing
-                if buffered_frame.shape[:2] != (frame_height, frame_width):
-                    buffered_frame = cv2.resize(buffered_frame, (frame_width, frame_height))
-                
-                return buffered_frame
+            if frame_data is not None:
+                # Return compressed data directly for efficient network transfer
+                return {
+                    'format': frame_data['format'],
+                    'data': frame_data['data'],
+                    'width': frame_width,
+                    'height': frame_height,
+                    'size_bytes': frame_data['size_bytes'],
+                    'compression_ratio': frame_data.get('compression_ratio', 1.0)
+                }
             else:
-                # No buffered frame available, return placeholder
+                # No buffered frame available, create and compress placeholder
                 logger.warning("No buffered frame available")
-                return self._create_placeholder_frame(frame_width, frame_height, "No buffered frame available")
+                placeholder = self._create_placeholder_frame(frame_width, frame_height, "No buffered frame available")
+                placeholder_compressed = self._encode_frame_jpeg(placeholder, quality=85)
+                return {
+                    'format': placeholder_compressed['format'],
+                    'data': placeholder_compressed['data'],
+                    'width': frame_width,
+                    'height': frame_height,
+                    'size_bytes': placeholder_compressed['size_bytes'],
+                    'compression_ratio': placeholder_compressed.get('compression_ratio', 1.0)
+                }
                 
         except Exception as e:
             logger.error(f"Error getting video frame: {e}", exc_info=True)
-            return self._create_placeholder_frame(frame_width, frame_height, f"Error: {str(e)}")
+            # Create error placeholder and compress it
+            raise e
 
     @schema_function(skip_self=True)
     def configure_video_buffer(self, buffer_fps: int = Field(5, description="Target FPS for buffer acquisition"), buffer_size: int = Field(5, description="Maximum number of frames to keep in buffer"), context=None):
@@ -866,6 +918,65 @@ class Microscope:
                 "success": False,
                 "message": f"Failed to configure video idle timeout: {str(e)}"
             }
+
+    @schema_function(skip_self=True)
+    async def set_video_fps(self, fps: int = Field(5, description="Target frames per second for video acquisition (1-30 FPS)"), context=None):
+        """
+        Set the video acquisition frame rate for smooth streaming.
+        This controls how fast the microscope acquires frames for video streaming.
+        Higher FPS provides smoother video but uses more resources.
+        """
+        task_name = "set_video_fps"
+        self.task_status[task_name] = "started"
+        
+        try:
+            # Validate FPS range
+            if not isinstance(fps, int) or fps < 1 or fps > 30:
+                return {
+                    "success": False,
+                    "message": f"Invalid FPS value: {fps}. Must be an integer between 1 and 30.",
+                    "current_fps": self.buffer_fps
+                }
+            
+            # Store old FPS for comparison
+            old_fps = self.buffer_fps
+            was_running = self.frame_acquisition_running
+            
+            # Update FPS setting
+            self.buffer_fps = fps
+            logger.info(f"Video FPS updated from {old_fps} to {fps}")
+            
+            # Update any active WebRTC video tracks with the new FPS
+            if hasattr(self, 'video_track') and self.video_track is not None:
+                self.video_track.update_fps(fps)
+                logger.info("Updated WebRTC video track FPS")
+            
+            # If video buffering is currently running, restart it with new FPS
+            if was_running:
+                logger.info("Restarting video buffering with new FPS settings")
+                await self.stop_video_buffering()
+                # Brief pause to ensure clean shutdown
+                await asyncio.sleep(0.2)
+                await self.start_video_buffering()
+                logger.info(f"Video buffering restarted with {fps} FPS")
+            
+            return {
+                "success": True,
+                "message": f"Video FPS successfully updated from {old_fps} to {fps} FPS",
+                "old_fps": old_fps,
+                "new_fps": fps,
+                "buffering_restarted": was_running
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to set video FPS: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to set video FPS: {str(e)}",
+                "current_fps": getattr(self, 'buffer_fps', 5)
+            }
+
+
 
     def _reset_video_activity_tracking(self):
         """Reset video activity tracking (internal method)."""
@@ -1662,6 +1773,7 @@ class Microscope:
                 "start_video_buffering": self.start_video_buffering_api,
                 "stop_video_buffering": self.stop_video_buffering_api,
                 "get_video_buffering_status": self.get_video_buffering_status,
+                "set_video_fps": self.set_video_fps,
             },
         )
 
@@ -2007,7 +2119,8 @@ class Microscope:
                         placeholder_frame = self._create_placeholder_frame(
                             640, 640, "Camera Overloaded"
                         )
-                        self.video_buffer.put_frame(placeholder_frame)
+                        compressed_placeholder = self._encode_frame_jpeg(placeholder_frame, quality=85)
+                        self.video_buffer.put_frame(compressed_placeholder)
                         
                         # If too many failures, wait longer before next attempt
                         if consecutive_failures >= 5:
@@ -2028,17 +2141,29 @@ class Microscope:
                         # LATENCY MEASUREMENT: End timing image processing
                         T_process_complete = time.time()
                         
-                        # Calculate processing time and total time
+                        # LATENCY MEASUREMENT: Start timing JPEG compression
+                        T_compress_start = time.time()
+                        
+                        # Compress frame for efficient storage and transmission
+                        compressed_frame = self._encode_frame_jpeg(processed_frame, quality=85)
+                        
+                        # LATENCY MEASUREMENT: End timing JPEG compression
+                        T_compress_complete = time.time()
+                        
+                        # Calculate timing statistics
                         processing_time_ms = (T_process_complete - T_process_start) * 1000
-                        total_time_ms = (T_process_complete - T_cam_start) * 1000
+                        compression_time_ms = (T_compress_complete - T_compress_start) * 1000
+                        total_time_ms = (T_compress_complete - T_cam_start) * 1000
                         
-                        # Log processing statistics for background acquisition
+                        # Log comprehensive performance statistics
                         logger.info(f"LATENCY_PROCESSING: Background frame processing took {processing_time_ms:.2f}ms, "
+                                   f"compression took {compression_time_ms:.2f}ms, "
                                    f"total_time={total_time_ms:.2f}ms, "
-                                   f"processing_ratio={processing_time_ms/total_time_ms*100:.1f}%")
+                                   f"compression_ratio={compressed_frame['compression_ratio']:.1f}x, "
+                                   f"size: {compressed_frame['original_size']//1024}KB -> {compressed_frame['size_bytes']//1024}KB")
                         
-                        # Store in buffer
-                        self.video_buffer.put_frame(processed_frame)
+                        # Store compressed frame in buffer
+                        self.video_buffer.put_frame(compressed_frame)
                     
                 except Exception as e:
                     consecutive_failures += 1
@@ -2047,7 +2172,8 @@ class Microscope:
                     placeholder_frame = self._create_placeholder_frame(
                         640, 640, f"Acquisition Error: {str(e)}"
                     )
-                    self.video_buffer.put_frame(placeholder_frame)
+                    compressed_placeholder = self._encode_frame_jpeg(placeholder_frame, quality=85)
+                    self.video_buffer.put_frame(compressed_placeholder)
                 
                 # Control frame rate with adaptive timing
                 elapsed = time.time() - start_time
@@ -2064,33 +2190,52 @@ class Microscope:
         logger.info("Background frame acquisition stopped")
         
     def _process_raw_frame(self, raw_frame, frame_width=640, frame_height=640):
-        """Process raw frame for video streaming"""
+        """Process raw frame for video streaming - OPTIMIZED"""
         try:
-            # Adjust contrast
+            # OPTIMIZATION 1: Resize FIRST to reduce data for all subsequent operations
+            if raw_frame.shape[:2] != (frame_height, frame_width):
+                # Use INTER_AREA for downsampling (faster than INTER_LINEAR)
+                processed_frame = cv2.resize(raw_frame, (frame_width, frame_height), interpolation=cv2.INTER_AREA)
+            else:
+                processed_frame = raw_frame.copy()
+            
+            # OPTIMIZATION 2: Robust contrast adjustment (fixed)
             min_val = self.video_contrast_min
             max_val = self.video_contrast_max
 
             if max_val is None:
-                if raw_frame.dtype == np.uint16:
+                if processed_frame.dtype == np.uint16:
                     max_val = 65535
                 else:
                     max_val = 255
             
-            # Clip and scale to 0-255
-            processed_frame = np.clip(raw_frame, min_val, max_val)
+            # OPTIMIZATION 3: Improved contrast scaling with proper range handling
             if max_val > min_val:
-                processed_frame = ((processed_frame.astype(np.float32) - min_val) / (max_val - min_val) * 255).astype(np.uint8)
-            else:
-                processed_frame = np.zeros_like(raw_frame, dtype=np.uint8)
-            
-            # Convert to RGB if needed
-            if len(processed_frame.shape) == 2:
-                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
-            elif processed_frame.shape[2] == 1:
-                processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_GRAY2RGB)
+                # Clip values to the specified range
+                processed_frame = np.clip(processed_frame, min_val, max_val)
                 
-            # Resize to standard dimensions
-            processed_frame = cv2.resize(processed_frame, (frame_width, frame_height))
+                # Scale to 0-255 range using float for precision, then convert to uint8
+                if max_val > min_val:
+                    # Use float32 for accurate scaling, then convert to uint8
+                    processed_frame = ((processed_frame.astype(np.float32) - min_val) / (max_val - min_val) * 255).astype(np.uint8)
+                else:
+                    # Edge case: min_val == max_val
+                    processed_frame = np.full_like(processed_frame, 127, dtype=np.uint8)
+            else:
+                # Edge case: max_val <= min_val, return mid-gray
+                height, width = processed_frame.shape[:2]
+                processed_frame = np.full((height, width), 127, dtype=np.uint8)
+            
+            # Ensure we have uint8 output
+            if processed_frame.dtype != np.uint8:
+                processed_frame = processed_frame.astype(np.uint8)
+            
+            # OPTIMIZATION 4: Fast color space conversion
+            if len(processed_frame.shape) == 2:
+                # Direct array manipulation is faster than cv2.cvtColor for grayscale->RGB
+                processed_frame = np.stack([processed_frame] * 3, axis=2)
+            elif processed_frame.shape[2] == 1:
+                processed_frame = np.repeat(processed_frame, 3, axis=2)
             
             return processed_frame
             
@@ -2104,6 +2249,85 @@ class Microscope:
         cv2.putText(placeholder_img, message, (10, height//2), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
         return placeholder_img
+    
+    def _decode_frame_jpeg(self, frame_data):
+        """
+        Decode compressed frame data back to numpy array
+        
+        Args:
+            frame_data: dict from _encode_frame_jpeg() or get_video_frame()
+        
+        Returns:
+            numpy array: RGB image data
+        """
+        try:
+            if frame_data['format'] == 'jpeg':
+                # Decode JPEG data
+                nparr = np.frombuffer(frame_data['data'], np.uint8)
+                bgr_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if bgr_frame is not None:
+                    # Convert BGR back to RGB
+                    return cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+            elif frame_data['format'] == 'raw':
+                # Raw numpy data
+                height = frame_data.get('height', 640)
+                width = frame_data.get('width', 640)
+                return np.frombuffer(frame_data['data'], dtype=np.uint8).reshape((height, width, 3))
+        except Exception as e:
+            logger.error(f"Error decoding frame: {e}")
+        
+        # Return placeholder on error
+        width = frame_data.get('width', 640)
+        height = frame_data.get('height', 640)
+        return self._create_placeholder_frame(width, height, "Decode Error")
+
+    def _encode_frame_jpeg(self, frame, quality=85):
+        """
+        Encode frame to JPEG format for efficient network transmission
+        
+        Args:
+            frame: RGB numpy array
+            quality: JPEG quality (1-100, higher = better quality, larger size)
+        
+        Returns:
+            dict: {
+                'format': 'jpeg',
+                'data': bytes,
+                'size_bytes': int,
+                'compression_ratio': float
+            }
+        """
+        try:
+            # Convert RGB to BGR for OpenCV JPEG encoding
+            if len(frame.shape) == 3 and frame.shape[2] == 3:
+                bgr_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            else:
+                bgr_frame = frame
+            
+            # Encode to JPEG with specified quality
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+            success, encoded_img = cv2.imencode('.jpg', bgr_frame, encode_params)
+            
+            if not success:
+                raise ValueError("Failed to encode frame to JPEG")
+            
+            # Calculate compression statistics
+            original_size = frame.nbytes
+            compressed_size = len(encoded_img)
+            compression_ratio = original_size / compressed_size if compressed_size > 0 else 1.0
+            
+            return {
+                'format': 'jpeg',
+                'data': encoded_img.tobytes(),
+                'size_bytes': compressed_size,
+                'compression_ratio': compression_ratio,
+                'original_size': original_size
+            }
+            
+        except Exception as e:
+            logger.error(f"Error encoding frame to JPEG: {e}")
+            # Return uncompressed as fallback
+            raise e
 
     async def _monitor_video_idle(self):
         """Monitor video request activity and stop buffering after idle timeout"""
