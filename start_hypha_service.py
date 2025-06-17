@@ -751,19 +751,52 @@ class Microscope:
             if self.video_idle_check_task is None or self.video_idle_check_task.done():
                 self.video_idle_check_task = asyncio.create_task(self._monitor_video_idle())
             
-            # Get compressed frame data from buffer (NO DECOMPRESSION)
+            # Get compressed frame data from buffer
             frame_data = self.video_buffer.get_frame_data()
             
             if frame_data is not None:
-                # Return compressed data directly for efficient network transfer
-                return {
-                    'format': frame_data['format'],
-                    'data': frame_data['data'],
-                    'width': frame_width,
-                    'height': frame_height,
-                    'size_bytes': frame_data['size_bytes'],
-                    'compression_ratio': frame_data.get('compression_ratio', 1.0)
-                }
+                # Check if we need to resize the frame
+                buffered_width = 640  # Buffer always stores 640x640 frames
+                buffered_height = 640
+                
+                if frame_width != buffered_width or frame_height != buffered_height:
+                    # Need to resize - decompress, resize, and recompress
+                    decompressed_frame = self._decode_frame_jpeg(frame_data)
+                    if decompressed_frame is not None:
+                        # Resize the frame to requested dimensions
+                        resized_frame = cv2.resize(decompressed_frame, (frame_width, frame_height), interpolation=cv2.INTER_AREA)
+                        # Recompress at requested size
+                        resized_compressed = self._encode_frame_jpeg(resized_frame, quality=85)
+                        return {
+                            'format': resized_compressed['format'],
+                            'data': resized_compressed['data'],
+                            'width': frame_width,
+                            'height': frame_height,
+                            'size_bytes': resized_compressed['size_bytes'],
+                            'compression_ratio': resized_compressed.get('compression_ratio', 1.0)
+                        }
+                    else:
+                        # Fallback to placeholder if decompression fails
+                        placeholder = self._create_placeholder_frame(frame_width, frame_height, "Frame decompression failed")
+                        placeholder_compressed = self._encode_frame_jpeg(placeholder, quality=85)
+                        return {
+                            'format': placeholder_compressed['format'],
+                            'data': placeholder_compressed['data'],
+                            'width': frame_width,
+                            'height': frame_height,
+                            'size_bytes': placeholder_compressed['size_bytes'],
+                            'compression_ratio': placeholder_compressed.get('compression_ratio', 1.0)
+                        }
+                else:
+                    # Return buffered frame directly (no resize needed)
+                    return {
+                        'format': frame_data['format'],
+                        'data': frame_data['data'],
+                        'width': frame_width,
+                        'height': frame_height,
+                        'size_bytes': frame_data['size_bytes'],
+                        'compression_ratio': frame_data.get('compression_ratio', 1.0)
+                    }
             else:
                 # No buffered frame available, create and compress placeholder
                 logger.warning("No buffered frame available")
