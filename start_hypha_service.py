@@ -247,7 +247,7 @@ class Microscope:
         self.authorized_emails = self.load_authorized_emails(self.login_required)
         logger.info(f"Authorized emails: {self.authorized_emails}")
         self.datastore = None
-        self.server_url = "http://reef.dyn.scilifelab.se:9527" if is_local else "https://hypha.aicell.io/"
+        self.server_url = "http://192.168.2.1:9527" if is_local else "https://hypha.aicell.io/"
         self.server = None
         self.service_id = os.environ.get("MICROSCOPE_SERVICE_ID")
         self.setup_task = None  # Track the setup task
@@ -695,7 +695,7 @@ class Microscope:
                 await self.start_video_buffering()
 
     @schema_function(skip_self=True)
-    async def get_video_frame(self, frame_width: int=Field(640, description="Width of the video frame"), frame_height: int=Field(6, description="Height of the video frame"), context=None):
+    async def get_video_frame(self, frame_width: int=Field(640, description="Width of the video frame"), frame_height: int=Field(640, description="Height of the video frame"), context=None):
         """
         Get the raw frame from the microscope using video buffering
         Returns: A processed frame ready for video streaming
@@ -704,7 +704,7 @@ class Microscope:
             # Update last video request time for auto-stop functionality
             self.last_video_request_time = time.time()
             
-            # Start video buffering if not already running, but be less aggressive
+            # Start video buffering if not already running
             if not self.frame_acquisition_running:
                 logger.info("Starting video buffering for remote video frame request")
                 await self.start_video_buffering()
@@ -721,48 +721,15 @@ class Microscope:
                 if buffered_frame.shape[:2] != (frame_height, frame_width):
                     buffered_frame = cv2.resize(buffered_frame, (frame_width, frame_height))
                 
-                # Check frame freshness (fallback if frame is too old)
-                frame_age = self.video_buffer.get_frame_age()
-                if frame_age > 10.0:  # Increased tolerance to 10 seconds
-                    logger.warning(f"Buffered frame is {frame_age:.1f}s old, acquiring fresh frame")
-                    return await self._get_fresh_frame(frame_width, frame_height)
-                
                 return buffered_frame
             else:
-                # No buffered frame available, get fresh frame
-                logger.info("No buffered frame available, acquiring fresh frame")
-                return await self._get_fresh_frame(frame_width, frame_height)
+                # No buffered frame available, return placeholder
+                logger.warning("No buffered frame available")
+                return self._create_placeholder_frame(frame_width, frame_height, "No buffered frame available")
                 
         except Exception as e:
             logger.error(f"Error getting video frame: {e}", exc_info=True)
             return self._create_placeholder_frame(frame_width, frame_height, f"Error: {str(e)}")
-    
-    async def _get_fresh_frame(self, frame_width, frame_height):
-        """Get a fresh frame directly from the microscope (fallback method)"""
-        try:
-            # Get current channel and parameters
-            channel = self.squidController.current_channel
-            param_name = self.channel_param_map.get(channel)
-            intensity, exposure_time = 10, 10  # Default values
-            if param_name:
-                stored_params = getattr(self, param_name, None)
-                if stored_params and isinstance(stored_params, list) and len(stored_params) == 2:
-                    intensity, exposure_time = stored_params
-
-            # Get frame directly
-            if self.is_simulation:
-                raw_frame = await self.squidController.get_camera_frame_simulation(channel, intensity, exposure_time)
-            else:
-                raw_frame = await asyncio.get_event_loop().run_in_executor(
-                    None, self.squidController.get_camera_frame, channel, intensity, exposure_time
-                )
-            
-            # Process the frame
-            return self._process_raw_frame(raw_frame, frame_width, frame_height)
-            
-        except Exception as e:
-            logger.error(f"Error getting fresh frame: {e}")
-            return self._create_placeholder_frame(frame_width, frame_height, f"Fresh Frame Error: {str(e)}")
 
     @schema_function(skip_self=True)
     def configure_video_buffer(self, buffer_fps: int = Field(5, description="Target FPS for buffer acquisition"), buffer_size: int = Field(5, description="Maximum number of frames to keep in buffer"), context=None):
@@ -1999,6 +1966,9 @@ class Microscope:
 
                 # Acquire frame
                 try:
+                    # LATENCY MEASUREMENT: Start timing background frame acquisition
+                    T_cam_start = time.time()
+                    
                     if self.is_simulation:
                         # Use existing simulation method for video buffering
                         raw_frame = await self.squidController.get_camera_frame_simulation(
@@ -2009,6 +1979,25 @@ class Microscope:
                         raw_frame = await asyncio.get_event_loop().run_in_executor(
                             None, self.squidController.get_camera_frame, channel, intensity, exposure_time
                         )
+                    
+                    # LATENCY MEASUREMENT: End timing background frame acquisition
+                    T_cam_read_complete = time.time()
+                    
+                    # Calculate frame acquisition time and frame size (only if frame is valid)
+                    if raw_frame is not None:
+                        frame_acquisition_time_ms = (T_cam_read_complete - T_cam_start) * 1000
+                        frame_size_bytes = raw_frame.nbytes
+                        frame_size_kb = frame_size_bytes / 1024
+                        
+                        # Log timing and size information for latency analysis (less frequent to avoid spam)
+                        if consecutive_failures == 0:  # Only log on successful acquisitions
+                            logger.info(f"LATENCY_MEASUREMENT: Background frame acquisition took {frame_acquisition_time_ms:.2f}ms, "
+                                       f"frame size: {frame_size_kb:.2f}KB, exposure_time: {exposure_time}ms, "
+                                       f"channel: {channel}, intensity: {intensity}")
+                    else:
+                        frame_acquisition_time_ms = (T_cam_read_complete - T_cam_start) * 1000
+                        logger.info(f"LATENCY_MEASUREMENT: Background frame acquisition failed after {frame_acquisition_time_ms:.2f}ms, "
+                                   f"exposure_time: {exposure_time}ms, channel: {channel}, intensity: {intensity}")
                     
                     # Check if frame acquisition was successful
                     if raw_frame is None:
@@ -2028,9 +2017,25 @@ class Microscope:
                     else:
                         # Process frame normally and reset failure counter
                         consecutive_failures = 0
+                        
+                        # LATENCY MEASUREMENT: Start timing image processing
+                        T_process_start = time.time()
+                        
                         processed_frame = self._process_raw_frame(
                             raw_frame, frame_width=640, frame_height=640
                         )
+                        
+                        # LATENCY MEASUREMENT: End timing image processing
+                        T_process_complete = time.time()
+                        
+                        # Calculate processing time and total time
+                        processing_time_ms = (T_process_complete - T_process_start) * 1000
+                        total_time_ms = (T_process_complete - T_cam_start) * 1000
+                        
+                        # Log processing statistics for background acquisition
+                        logger.info(f"LATENCY_PROCESSING: Background frame processing took {processing_time_ms:.2f}ms, "
+                                   f"total_time={total_time_ms:.2f}ms, "
+                                   f"processing_ratio={processing_time_ms/total_time_ms*100:.1f}%")
                         
                         # Store in buffer
                         self.video_buffer.put_frame(processed_frame)
