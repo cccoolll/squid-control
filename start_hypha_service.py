@@ -2246,7 +2246,7 @@ class Microscope:
                         frame_timestamp = time.time()
                         try:
                             # Update position and get current coordinates
-                            self.squidController.navigationController.update_pos()
+                            self.squidController.navigationController.update_pos(microcontroller=self.squidController.microcontroller)
                             current_x = self.squidController.navigationController.x_pos_mm
                             current_y = self.squidController.navigationController.y_pos_mm
                             current_z = self.squidController.navigationController.z_pos_mm
