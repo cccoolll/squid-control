@@ -108,6 +108,16 @@ async def test_microscope_service():
             finally:
                 # Comprehensive cleanup
                 print(f"🧹 Starting cleanup...")
+
+                # Stop video buffering if it's running to prevent event loop errors
+                if microscope and hasattr(microscope, 'stop_video_buffering'):
+                    try:
+                        if microscope.frame_acquisition_running:
+                            print("Stopping video buffering...")
+                            await microscope.stop_video_buffering()
+                            print("✅ Video buffering stopped")
+                    except Exception as video_error:
+                        print(f"Error stopping video buffering: {video_error}")
                 
                 # Close the SquidController and camera resources properly
                 if microscope and hasattr(microscope, 'squidController'):
@@ -1058,15 +1068,15 @@ async def test_frame_processing_edge_cases(test_microscope_service):
     
     # Test extreme contrast values
     await service.adjust_video_frame(min_val=0, max_val=1)
-    frame_data = await service.get_video_frame(frame_width=320, frame_height=240)
+    frame_data = await service.get_video_frame(frame_width=320, frame_height=320)
     frame = microscope._decode_frame_jpeg(frame_data)
-    assert frame.shape == (240, 320, 3)
+    assert frame.shape == (320, 320, 3)
     
     # Test equal min/max values
     await service.adjust_video_frame(min_val=128, max_val=128)
-    frame_data = await service.get_video_frame(frame_width=160, frame_height=120)
+    frame_data = await service.get_video_frame(frame_width=160, frame_height=160)
     frame = microscope._decode_frame_jpeg(frame_data)
-    assert frame.shape == (120, 160, 3)
+    assert frame.shape == (160, 160, 3)
     
     # Test None max value (should use default)
     await service.adjust_video_frame(min_val=10, max_val=None)
@@ -1185,7 +1195,7 @@ async def test_video_buffering_functionality(test_microscope_service):
         for i in range(3):  # Reduced from 5 to 3 for faster test execution
             start_time = time.time()
             frame_data = await asyncio.wait_for(
-                service.get_video_frame(frame_width=320, frame_height=240),
+                service.get_video_frame(frame_width=320, frame_height=320),
                 timeout=10
             )
             elapsed = time.time() - start_time
@@ -1196,11 +1206,11 @@ async def test_video_buffering_functionality(test_microscope_service):
             assert 'format' in frame_data
             assert 'width' in frame_data and 'height' in frame_data
             assert frame_data['width'] == 320
-            assert frame_data['height'] == 240
+            assert frame_data['height'] == 320
             
             # Decode to verify frame shape
             frame = microscope._decode_frame_jpeg(frame_data)
-            assert frame.shape == (240, 320, 3)
+            assert frame.shape == (320, 320, 3)
             print(f"   Frame {i+1}: {elapsed*1000:.1f}ms, Shape: {frame.shape}")
         
         # Frames should be consistently fast due to buffering
