@@ -71,35 +71,44 @@ class VideoBuffer:
         self.buffer = deque(maxlen=max_size)
         self.lock = threading.Lock()
         self.last_frame_data = None  # Store compressed frame data
+        self.last_metadata = None  # Store metadata for last frame
         self.frame_timestamp = 0
         
-    def put_frame(self, frame_data):
-        """Add a compressed frame to the buffer
+    def put_frame(self, frame_data, metadata=None):
+        """Add a compressed frame and its metadata to the buffer
         
         Args:
             frame_data: dict with compressed frame info from _encode_frame_jpeg()
+            metadata: dict with frame metadata including stage position and timestamp
         """
         with self.lock:
             self.buffer.append({
                 'frame_data': frame_data,
+                'metadata': metadata,
                 'timestamp': time.time()
             })
             self.last_frame_data = frame_data
+            self.last_metadata = metadata
             self.frame_timestamp = time.time()
             
     def get_frame_data(self):
-        """Get the most recent compressed frame data from buffer"""
+        """Get the most recent compressed frame data and metadata from buffer
+        
+        Returns:
+            tuple: (frame_data, metadata) or (None, None) if no frame available
+        """
         with self.lock:
             if self.buffer:
-                return self.buffer[-1]['frame_data']
+                buffer_entry = self.buffer[-1]
+                return buffer_entry['frame_data'], buffer_entry.get('metadata')
             elif self.last_frame_data is not None:
-                return self.last_frame_data
+                return self.last_frame_data, self.last_metadata
             else:
-                return None
+                return None, None
     
     def get_frame(self):
         """Get the most recent decompressed frame from buffer (for backward compatibility)"""
-        frame_data = self.get_frame_data()
+        frame_data, _ = self.get_frame_data()  # Ignore metadata for backward compatibility
         if frame_data is None:
             return None
             
@@ -133,6 +142,7 @@ class VideoBuffer:
         with self.lock:
             self.buffer.clear()
             self.last_frame_data = None
+            self.last_metadata = None
             self.frame_timestamp = 0
 
 class MicroscopeVideoTrack(MediaStreamTrack):
@@ -747,8 +757,8 @@ class Microscope:
     @schema_function(skip_self=True)
     async def get_video_frame(self, frame_width: int=Field(640, description="Width of the video frame"), frame_height: int=Field(640, description="Height of the video frame"), context=None):
         """
-        Get compressed frame data from the microscope using video buffering
-        Returns: Compressed frame data (JPEG bytes) for efficient network transmission
+        Get compressed frame data with metadata from the microscope using video buffering
+        Returns: Compressed frame data (JPEG bytes) with associated metadata including stage position and timestamp
         """
         try:
             # Update last video request time for auto-stop functionality
@@ -763,8 +773,8 @@ class Microscope:
             if self.video_idle_check_task is None or self.video_idle_check_task.done():
                 self.video_idle_check_task = asyncio.create_task(self._monitor_video_idle())
             
-            # Get compressed frame data from buffer
-            frame_data = self.video_buffer.get_frame_data()
+            # Get compressed frame data and metadata from buffer
+            frame_data, frame_metadata = self.video_buffer.get_frame_data()
             
             if frame_data is not None:
                 # Check if we need to resize the frame
@@ -786,7 +796,8 @@ class Microscope:
                             'width': frame_width,
                             'height': frame_height,
                             'size_bytes': resized_compressed['size_bytes'],
-                            'compression_ratio': resized_compressed.get('compression_ratio', 1.0)
+                            'compression_ratio': resized_compressed.get('compression_ratio', 1.0),
+                            'metadata': frame_metadata
                         }
                     else:
                         # Fallback to placeholder if decompression fails
@@ -798,7 +809,8 @@ class Microscope:
                             'width': frame_width,
                             'height': frame_height,
                             'size_bytes': placeholder_compressed['size_bytes'],
-                            'compression_ratio': placeholder_compressed.get('compression_ratio', 1.0)
+                            'compression_ratio': placeholder_compressed.get('compression_ratio', 1.0),
+                            'metadata': frame_metadata
                         }
                 else:
                     # Return buffered frame directly (no resize needed)
@@ -808,20 +820,33 @@ class Microscope:
                         'width': frame_width,
                         'height': frame_height,
                         'size_bytes': frame_data['size_bytes'],
-                        'compression_ratio': frame_data.get('compression_ratio', 1.0)
+                        'compression_ratio': frame_data.get('compression_ratio', 1.0),
+                        'metadata': frame_metadata
                     }
             else:
                 # No buffered frame available, create and compress placeholder
                 logger.warning("No buffered frame available")
                 placeholder = self._create_placeholder_frame(frame_width, frame_height, "No buffered frame available")
                 placeholder_compressed = self._encode_frame_jpeg(placeholder, quality=85)
+                
+                # Create metadata for placeholder frame
+                placeholder_metadata = {
+                    'stage_position': {'x_mm': None, 'y_mm': None, 'z_mm': None},
+                    'timestamp': time.time(),
+                    'channel': None,
+                    'intensity': None,
+                    'exposure_time_ms': None,
+                    'error': 'No buffered frame available'
+                }
+                
                 return {
                     'format': placeholder_compressed['format'],
                     'data': placeholder_compressed['data'],
                     'width': frame_width,
                     'height': frame_height,
                     'size_bytes': placeholder_compressed['size_bytes'],
-                    'compression_ratio': placeholder_compressed.get('compression_ratio', 1.0)
+                    'compression_ratio': placeholder_compressed.get('compression_ratio', 1.0),
+                    'metadata': placeholder_metadata
                 }
                 
         except Exception as e:
@@ -2177,7 +2202,17 @@ class Microscope:
                             self.buffer_frame_width, self.buffer_frame_height, "Camera Overloaded"
                         )
                         compressed_placeholder = self._encode_frame_jpeg(placeholder_frame, quality=85)
-                        self.video_buffer.put_frame(compressed_placeholder)
+                        
+                        # Create placeholder metadata
+                        placeholder_metadata = {
+                            'stage_position': {'x_mm': None, 'y_mm': None, 'z_mm': None},
+                            'timestamp': time.time(),
+                            'channel': channel,
+                            'intensity': intensity,
+                            'exposure_time_ms': exposure_time,
+                            'error': 'Camera Overloaded'
+                        }
+                        self.video_buffer.put_frame(compressed_placeholder, placeholder_metadata)
                         
                         # If too many failures, wait longer before next attempt
                         if consecutive_failures >= 5:
@@ -2207,6 +2242,41 @@ class Microscope:
                         # LATENCY MEASUREMENT: End timing JPEG compression
                         T_compress_complete = time.time()
                         
+                        # METADATA CAPTURE: Get current stage position and create metadata
+                        frame_timestamp = time.time()
+                        try:
+                            # Update position and get current coordinates
+                            self.squidController.navigationController.update_pos()
+                            current_x = self.squidController.navigationController.x_pos_mm
+                            current_y = self.squidController.navigationController.y_pos_mm
+                            current_z = self.squidController.navigationController.z_pos_mm
+                            print(f"current_x: {current_x}, current_y: {current_y}, current_z: {current_z}")
+                            frame_metadata = {
+                                'stage_position': {
+                                    'x_mm': current_x,
+                                    'y_mm': current_y,
+                                    'z_mm': current_z
+                                },
+                                'timestamp': frame_timestamp,
+                                'channel': channel,
+                                'intensity': intensity,
+                                'exposure_time_ms': exposure_time
+                            }
+                        except Exception as e:
+                            logger.warning(f"Failed to capture stage position for metadata: {e}")
+                            # Fallback metadata without stage position
+                            frame_metadata = {
+                                'stage_position': {
+                                    'x_mm': None,
+                                    'y_mm': None,
+                                    'z_mm': None
+                                },
+                                'timestamp': frame_timestamp,
+                                'channel': channel,
+                                'intensity': intensity,
+                                'exposure_time_ms': exposure_time
+                            }
+                        
                         # Calculate timing statistics
                         processing_time_ms = (T_process_complete - T_process_start) * 1000
                         compression_time_ms = (T_compress_complete - T_compress_start) * 1000
@@ -2219,8 +2289,8 @@ class Microscope:
                                    f"compression_ratio={compressed_frame['compression_ratio']:.1f}x, "
                                    f"size: {compressed_frame['original_size']//1024}KB -> {compressed_frame['size_bytes']//1024}KB")
                         
-                        # Store compressed frame in buffer
-                        self.video_buffer.put_frame(compressed_frame)
+                        # Store compressed frame with metadata in buffer
+                        self.video_buffer.put_frame(compressed_frame, frame_metadata)
                     
                 except Exception as e:
                     consecutive_failures += 1
@@ -2230,7 +2300,17 @@ class Microscope:
                         self.buffer_frame_width, self.buffer_frame_height, f"Acquisition Error: {str(e)}"
                     )
                     compressed_placeholder = self._encode_frame_jpeg(placeholder_frame, quality=85)
-                    self.video_buffer.put_frame(compressed_placeholder)
+                    
+                    # Create placeholder metadata for error case
+                    error_metadata = {
+                        'stage_position': {'x_mm': None, 'y_mm': None, 'z_mm': None},
+                        'timestamp': time.time(),
+                        'channel': channel if 'channel' in locals() else 0,
+                        'intensity': intensity if 'intensity' in locals() else 0,
+                        'exposure_time_ms': exposure_time if 'exposure_time' in locals() else 0,
+                        'error': f"Acquisition Error: {str(e)}"
+                    }
+                    self.video_buffer.put_frame(compressed_placeholder, error_metadata)
                 
                 # Control frame rate with adaptive timing
                 elapsed = time.time() - start_time
