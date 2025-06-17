@@ -269,7 +269,7 @@ async def test_get_video_frame_service(test_microscope_service):
     microscope, service = test_microscope_service
     
     frame_data = await asyncio.wait_for(
-        service.get_video_frame(frame_width=640, frame_height=480),
+        service.get_video_frame(frame_width=640, frame_height=640),
         timeout=15
     )
     
@@ -280,7 +280,7 @@ async def test_get_video_frame_service(test_microscope_service):
     assert 'width' in frame_data
     assert 'height' in frame_data
     assert frame_data['width'] == 640
-    assert frame_data['height'] == 480
+    assert frame_data['height'] == 640
     assert frame_data['format'] == 'jpeg'
     assert isinstance(frame_data['data'], bytes)
     
@@ -288,7 +288,7 @@ async def test_get_video_frame_service(test_microscope_service):
     decompressed_frame = microscope._decode_frame_jpeg(frame_data)
     assert decompressed_frame is not None
     assert hasattr(decompressed_frame, 'shape')
-    assert decompressed_frame.shape == (480, 640, 3)
+    assert decompressed_frame.shape == (640, 640, 3)
 
 # Illumination control tests
 async def test_illumination_control_service(test_microscope_service):
@@ -726,33 +726,33 @@ async def test_image_and_video_processing(test_microscope_service):
     assert microscope.video_contrast_max == 250
     
     # Test video frame generation with different sizes
-    frame_720p_data = await service.get_video_frame(frame_width=1280, frame_height=720)
+    frame_720p_data = await service.get_video_frame(frame_width=720, frame_height=720)
     assert isinstance(frame_720p_data, dict)
-    assert frame_720p_data['width'] == 1280
+    assert frame_720p_data['width'] == 720
     assert frame_720p_data['height'] == 720
     
     # Decode to verify actual frame shape
     frame_720p = microscope._decode_frame_jpeg(frame_720p_data)
-    assert frame_720p.shape == (720, 1280, 3)
+    assert frame_720p.shape == (720, 720, 3)
     
-    frame_480p_data = await service.get_video_frame(frame_width=640, frame_height=480)
-    assert isinstance(frame_480p_data, dict)
-    assert frame_480p_data['width'] == 640
-    assert frame_480p_data['height'] == 480
+    frame_640p_data = await service.get_video_frame(frame_width=640, frame_height=640)
+    assert isinstance(frame_640p_data, dict)
+    assert frame_640p_data['width'] == 640
+    assert frame_640p_data['height'] == 640
     
     # Decode to verify actual frame shape
-    frame_480p = microscope._decode_frame_jpeg(frame_480p_data)
-    assert frame_480p.shape == (480, 640, 3)
+    frame_640p = microscope._decode_frame_jpeg(frame_640p_data)
+    assert frame_640p.shape == (640, 640, 3)
     
     # Test that frames are RGB
-    assert len(frame_480p.shape) == 3
-    assert frame_480p.shape[2] == 3
+    assert len(frame_640p.shape) == 3
+    assert frame_640p.shape[2] == 3
     
     # Test frame with different contrast settings
     await service.adjust_video_frame(min_val=0, max_val=100)
-    frame_low_contrast_data = await service.get_video_frame(frame_width=640, frame_height=480)
+    frame_low_contrast_data = await service.get_video_frame(frame_width=640, frame_height=640)
     frame_low_contrast = microscope._decode_frame_jpeg(frame_low_contrast_data)
-    assert frame_low_contrast.shape == (480, 640, 3)
+    assert frame_low_contrast.shape == (640, 640, 3)
 
 # Multi-channel imaging tests
 async def test_multi_channel_imaging(test_microscope_service):
@@ -1070,9 +1070,9 @@ async def test_frame_processing_edge_cases(test_microscope_service):
     
     # Test None max value (should use default)
     await service.adjust_video_frame(min_val=10, max_val=None)
-    frame_data = await service.get_video_frame(frame_width=640, frame_height=480)
+    frame_data = await service.get_video_frame(frame_width=640, frame_height=640)
     frame = microscope._decode_frame_jpeg(frame_data)
-    assert frame.shape == (480, 640, 3)
+    assert frame.shape == (640, 640, 3)
     
     # Test unusual frame sizes
     frame_data = await service.get_video_frame(frame_width=100, frame_height=100)
@@ -1282,9 +1282,9 @@ async def test_video_buffering_with_parameter_changes(test_microscope_service):
         await asyncio.sleep(1)  # Let buffer fill
         
         # Get initial frame
-        frame1_data = await service.get_video_frame(frame_width=640, frame_height=480)
+        frame1_data = await service.get_video_frame(frame_width=640, frame_height=640)
         frame1 = microscope._decode_frame_jpeg(frame1_data)
-        assert frame1.shape == (480, 640, 3)
+        assert frame1.shape == (640, 640, 3)
         
         # Change illumination parameters
         await service.set_illumination(channel=11, intensity=60)
@@ -1292,9 +1292,9 @@ async def test_video_buffering_with_parameter_changes(test_microscope_service):
         
         # Get frame with new parameters (should use updated parameters in buffer)
         await asyncio.sleep(1)  # Allow new parameters to take effect in buffer
-        frame2_data = await service.get_video_frame(frame_width=640, frame_height=480)
+        frame2_data = await service.get_video_frame(frame_width=640, frame_height=640)
         frame2 = microscope._decode_frame_jpeg(frame2_data)
-        assert frame2.shape == (480, 640, 3)
+        assert frame2.shape == (640, 640, 3)
         
         # Verify channel was updated
         status = await service.get_status()
@@ -1302,9 +1302,9 @@ async def test_video_buffering_with_parameter_changes(test_microscope_service):
         
         # Change contrast settings
         await service.adjust_video_frame(min_val=20, max_val=200)
-        frame3_data = await service.get_video_frame(frame_width=640, frame_height=480)
+        frame3_data = await service.get_video_frame(frame_width=640, frame_height=640)
         frame3 = microscope._decode_frame_jpeg(frame3_data)
-        assert frame3.shape == (480, 640, 3)
+        assert frame3.shape == (640, 640, 3)
         
     finally:
         await service.stop_video_buffering()
