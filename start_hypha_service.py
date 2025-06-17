@@ -338,6 +338,7 @@ class Microscope:
             "adjust_video_frame": "not_started",
             "start_video_buffering": "not_started",
             "stop_video_buffering": "not_started",
+            "get_current_well_location": "not_started",
         }
 
     def load_authorized_emails(self, login_required=True):
@@ -602,6 +603,9 @@ class Microscope:
             is_illumination_on = self.squidController.liveController.illumination_on
             scan_channel = self.squidController.multipointController.selected_configurations
             is_busy = self.squidController.is_busy
+            # Get current well location information
+            well_info = self.squidController.get_well_from_position('96')  # Default to 96-well plate
+            
             self.parameters = {
                 'is_busy': is_busy,
                 'current_x': current_x,
@@ -622,6 +626,7 @@ class Microscope:
                 'F730_intensity_exposure': self.F730_intensity_exposure,
                 'video_fps': self.buffer_fps,
                 'video_buffering_active': self.frame_acquisition_running,
+                'current_well_location': well_info,  # Add well location information
             }
             self.task_status[task_name] = "finished"
             return self.parameters
@@ -1621,6 +1626,10 @@ class Microscope:
         query_input: str = Field(..., description="The URL of the image of the query input for the similarity search.")
         top_k: int = Field(..., description="The number of similar images to return.")
 
+    class GetCurrentWellLocationInput(BaseModel):
+        """Get the current well location based on the stage position."""
+        wellplate_type: str = Field('96', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')")
+
     async def inspect_tool(self, images: List[dict], query: str, context_description: str) -> str:
         image_infos = [
             self.ImageInfo(url=image_dict['http_url'], title=image_dict.get('title'))
@@ -1702,6 +1711,10 @@ class Microscope:
         response = self.get_status(context)
         return {"result": response}
 
+    def get_current_well_location_schema(self, config: GetCurrentWellLocationInput, context=None):
+        response = self.get_current_well_location(config.wellplate_type, context)
+        return {"result": response}
+
     def get_schema(self, context=None):
         return {
             "move_by_distance": self.MoveByDistanceInput.model_json_schema(),
@@ -1719,7 +1732,8 @@ class Microscope:
             "set_laser_reference": self.SetLaserReferenceInput.model_json_schema(),
             "get_status": self.GetStatusInput.model_json_schema(),
             "find_similar_image_text": self.FindSimilarImageTextInput.model_json_schema(),
-            "find_similar_image_image": self.FindSimilarImageImageInput.model_json_schema()
+            "find_similar_image_image": self.FindSimilarImageImageInput.model_json_schema(),
+            "get_current_well_location": self.GetCurrentWellLocationInput.model_json_schema(),
         }
 
     async def start_hypha_service(self, server, service_id, run_in_executor=None):
@@ -1774,6 +1788,7 @@ class Microscope:
                 "stop_video_buffering": self.stop_video_buffering_api,
                 "get_video_buffering_status": self.get_video_buffering_status,
                 "set_video_fps": self.set_video_fps,
+                "get_current_well_location": self.get_current_well_location,
             },
         )
 
@@ -1813,7 +1828,8 @@ class Microscope:
                 "set_laser_reference": self.set_laser_reference_schema,
                 "get_status": self.get_status_schema,
                 "find_similar_image_text": self.find_similar_image_text_schema,
-                "find_similar_image_image": self.find_similar_image_image_schema
+                "find_similar_image_image": self.find_similar_image_image_schema,
+                "get_current_well_location": self.get_current_well_location_schema,
             }
         }
 
@@ -2359,6 +2375,26 @@ class Microscope:
                 await asyncio.sleep(2.0)  # Longer sleep on error
                 
         logger.info("Video idle monitoring stopped")
+
+    @schema_function(skip_self=True)
+    def get_current_well_location(self, wellplate_type: str=Field('96', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), context=None):
+        """
+        Get the current well location based on the stage position.
+        Returns: Dictionary with well location information including row, column, well_id, and position status
+        """
+        task_name = "get_current_well_location"
+        if task_name not in self.task_status:
+            self.task_status[task_name] = "not_started"
+        self.task_status[task_name] = "started"
+        try:
+            well_info = self.squidController.get_well_from_position(wellplate_type)
+            logger.info(f'Current well location: {well_info["well_id"]} ({well_info["position_status"]})')
+            self.task_status[task_name] = "finished"
+            return well_info
+        except Exception as e:
+            self.task_status[task_name] = "failed"
+            logger.error(f"Failed to get current well location: {e}")
+            raise e
 
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):

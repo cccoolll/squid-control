@@ -1382,4 +1382,220 @@ async def test_service_cleanup(test_microscope_service):
     
     # Test that SquidController can be closed
     # (This will be handled by the fixture cleanup)
-    assert microscope.squidController is not None 
+    assert microscope.squidController is not None
+
+async def test_well_location_detection_service(test_microscope_service):
+    """Test the well location detection functionality through the service."""
+    microscope, service = test_microscope_service
+    
+    print("Testing Well Location Detection Service")
+    
+    try:
+        # Test 1: Navigate to a specific well and check location
+        print("1. Testing navigation to well C5 and location detection...")
+        await service.navigate_to_well(row='C', col=5, wellplate_type='96')
+        
+        # Get current well location
+        well_location = await service.get_current_well_location(wellplate_type='96')
+        
+        print(f"   Expected: C5, Got: {well_location}")
+        assert isinstance(well_location, dict)
+        assert well_location['row'] == 'C'
+        assert well_location['column'] == 5
+        assert well_location['well_id'] == 'C5'
+        assert well_location['plate_type'] == '96'
+        assert 'position_status' in well_location
+        assert 'distance_from_center' in well_location
+        assert 'is_inside_well' in well_location
+        
+        # Test 2: Test different plate types
+        print("2. Testing different plate types...")
+        
+        # Test 24-well plate
+        await service.navigate_to_well(row='B', col=3, wellplate_type='24')
+        well_location = await service.get_current_well_location(wellplate_type='24')
+        
+        print(f"   24-well: Expected B3, Got: {well_location['well_id']}")
+        assert well_location['row'] == 'B'
+        assert well_location['column'] == 3
+        assert well_location['well_id'] == 'B3'
+        assert well_location['plate_type'] == '24'
+        
+        # Test 384-well plate
+        await service.navigate_to_well(row='D', col=12, wellplate_type='384')
+        well_location = await service.get_current_well_location(wellplate_type='384')
+        
+        print(f"   384-well: Expected D12, Got: {well_location['well_id']}")
+        assert well_location['row'] == 'D'
+        assert well_location['column'] == 12
+        assert well_location['well_id'] == 'D12'
+        assert well_location['plate_type'] == '384'
+        
+        # Test 3: Check that get_status includes well location
+        print("3. Testing that get_status includes well location...")
+        status = await service.get_status()
+        
+        assert isinstance(status, dict)
+        assert 'current_well_location' in status
+        assert isinstance(status['current_well_location'], dict)
+        
+        well_info = status['current_well_location']
+        print(f"   Status well info: {well_info}")
+        assert 'well_id' in well_info
+        assert 'row' in well_info
+        assert 'column' in well_info
+        assert 'position_status' in well_info
+        assert 'plate_type' in well_info
+        
+        # Test 4: Test multiple wells in sequence
+        print("4. Testing multiple wells in sequence...")
+        test_wells = [
+            ('A', 1), ('A', 12), ('H', 1), ('H', 12)
+        ]
+        
+        for row, col in test_wells:
+            print(f"   Testing well {row}{col}...")
+            await service.navigate_to_well(row=row, col=col, wellplate_type='96')
+            
+            well_location = await service.get_current_well_location(wellplate_type='96')
+            expected_well_id = f"{row}{col}"
+            
+            print(f"      Expected: {expected_well_id}, Got: {well_location['well_id']}")
+            assert well_location['row'] == row
+            assert well_location['column'] == col
+            assert well_location['well_id'] == expected_well_id
+            
+            # Also verify through get_status
+            status = await service.get_status()
+            status_well_id = status['current_well_location']['well_id']
+            print(f"      Status confirms: {status_well_id}")
+            assert status_well_id == expected_well_id
+        
+        print("✅ Well location detection service tests passed!")
+        
+    except Exception as e:
+        print(f"❌ Well location detection test failed: {e}")
+        raise
+
+async def test_well_location_edge_cases_service(test_microscope_service):
+    """Test edge cases for well location detection through the service."""
+    microscope, service = test_microscope_service
+    
+    print("Testing Well Location Edge Cases")
+    
+    try:
+        # Test 1: Default plate type behavior
+        print("1. Testing default plate type...")
+        await service.navigate_to_well(row='E', col=7)  # Default should be 96-well
+        
+        # Get location without specifying plate type (should default to 96)
+        well_location = await service.get_current_well_location()
+        
+        print(f"   Default plate type result: {well_location}")
+        assert well_location['plate_type'] == '96'
+        assert well_location['well_id'] == 'E7'
+        
+        # Test 2: Verify consistency between navigation and location detection
+        print("2. Testing consistency between navigation and detection...")
+        test_positions = [
+            ('A', 1, '96'), ('B', 6, '24'), ('C', 8, '384'), ('A', 3, '6')
+        ]
+        
+        for row, col, plate_type in test_positions:
+            print(f"   Testing {row}{col} on {plate_type}-well plate...")
+            
+            # Navigate to position
+            await service.navigate_to_well(row=row, col=col, wellplate_type=plate_type)
+            
+            # Detect location
+            well_location = await service.get_current_well_location(wellplate_type=plate_type)
+            
+            # Verify consistency
+            assert well_location['row'] == row
+            assert well_location['column'] == col
+            assert well_location['well_id'] == f"{row}{col}"
+            assert well_location['plate_type'] == plate_type
+            
+            print(f"      ✓ {plate_type}-well {row}{col}: {well_location['position_status']}")
+        
+        # Test 3: Position accuracy metrics
+        print("3. Testing position accuracy metrics...")
+        await service.navigate_to_well(row='F', col=8, wellplate_type='96')
+        well_location = await service.get_current_well_location(wellplate_type='96')
+        
+        print(f"   Position metrics for F8:")
+        print(f"      Distance from center: {well_location['distance_from_center']:.4f}mm")
+        print(f"      Position status: {well_location['position_status']}")
+        print(f"      Inside well: {well_location['is_inside_well']}")
+        
+        # In simulation, should be very accurate
+        assert well_location['distance_from_center'] < 0.1
+        assert well_location['position_status'] in ['in_well', 'between_wells']
+        
+        print("✅ Well location edge cases tests passed!")
+        
+    except Exception as e:
+        print(f"❌ Well location edge cases test failed: {e}")
+        raise
+
+async def test_get_status_well_location_integration(test_microscope_service):
+    """Test that get_status properly integrates well location information."""
+    microscope, service = test_microscope_service
+    
+    print("Testing get_status well location integration")
+    
+    try:
+        # Test 1: Move to different wells and verify status updates
+        print("1. Testing status updates with well movement...")
+        
+        test_wells = [('B', 4), ('G', 11), ('A', 1), ('H', 12)]
+        
+        for row, col in test_wells:
+            print(f"   Moving to well {row}{col}...")
+            await service.navigate_to_well(row=row, col=col, wellplate_type='96')
+            
+            # Get full status
+            status = await service.get_status()
+            
+            # Verify well location is included and correct
+            assert 'current_well_location' in status
+            well_info = status['current_well_location']
+            
+            print(f"      Status well location: {well_info}")
+            assert well_info['row'] == row
+            assert well_info['column'] == col
+            assert well_info['well_id'] == f"{row}{col}"
+            assert well_info['plate_type'] == '96'  # Default plate type in status
+            
+            # Verify other status fields are still present
+            required_fields = [
+                'current_x', 'current_y', 'current_z', 'is_illumination_on',
+                'current_channel', 'video_fps', 'is_busy'
+            ]
+            
+            for field in required_fields:
+                assert field in status, f"Missing required field: {field}"
+        
+        # Test 2: Verify status coordinates match well location calculation
+        print("2. Testing coordinate consistency...")
+        await service.navigate_to_well(row='D', col=6, wellplate_type='96')
+        status = await service.get_status()
+        
+        # Extract coordinates from status
+        x_pos = status['current_x']
+        y_pos = status['current_y']
+        well_info = status['current_well_location']
+        
+        print(f"   Coordinates: ({x_pos:.3f}, {y_pos:.3f})")
+        print(f"   Well: {well_info['well_id']} at distance {well_info['distance_from_center']:.3f}mm")
+        
+        # The coordinates should match the well position
+        assert well_info['well_id'] == 'D6'
+        assert well_info['x_mm'] == x_pos
+        assert well_info['y_mm'] == y_pos
+        
+        print("✅ get_status well location integration tests passed!")
+        
+    except Exception as e:
+        print(f"❌ get_status integration test failed: {e}")
+        raise 
