@@ -1855,6 +1855,7 @@ class Microscope:
                 "get_video_buffering_status": self.get_video_buffering_status,
                 "set_video_fps": self.set_video_fps,
                 "get_current_well_location": self.get_current_well_location,
+                "get_canvas_chunk": self.get_canvas_chunk,
             },
         )
 
@@ -2561,6 +2562,119 @@ class Microscope:
             return {
                 "success": False,
                 "message": f"Failed to configure video buffer frame size: {str(e)}"
+            }
+
+    @schema_function(skip_self=True)
+    async def get_canvas_chunk(self, x_mm: float = Field(..., description="X coordinate of the stage location in millimeters"), y_mm: float = Field(..., description="Y coordinate of the stage location in millimeters"), scale_level: int = Field(1, description="Scale level for the chunk (0-2, where 0 is highest resolution)"), context=None):
+        """Get a canvas chunk based on microscope stage location (available only in simulation mode when not running locally)"""
+        
+        # Check if this function is available in current mode
+        if self.is_local:
+            return {
+                "success": False,
+                "error": "get_canvas_chunk is not available in local mode"
+            }
+        
+        if not self.is_simulation:
+            return {
+                "success": False,
+                "error": "get_canvas_chunk is only available in simulation mode"
+            }
+        
+        try:
+            logger.info(f"Getting canvas chunk at position: x={x_mm}mm, y={y_mm}mm, scale_level={scale_level}")
+            
+            # Initialize ZarrImageManager if not already initialized
+            if not hasattr(self, 'zarr_image_manager') or self.zarr_image_manager is None:
+                from squid_control.hypha_tools.artifact_manager.artifact_manager import ZarrImageManager
+                self.zarr_image_manager = ZarrImageManager()
+                success = await self.zarr_image_manager.connect(server_url=self.server_url)
+                if not success:
+                    raise RuntimeError("Failed to connect to ZarrImageManager")
+                logger.info("ZarrImageManager initialized for get_canvas_chunk")
+            
+            # Use the current simulated sample data alias
+            dataset_id = self.get_simulated_sample_data_alias()
+            channel_name = 'BF_LED_matrix_full'  # Always use brightfield channel
+            
+            # Use parameters similar to the simulation camera
+            pixel_size_um = 0.333  # Default pixel size used in simulation
+            
+            # Get scale factor based on scale level
+            scale_factors = {0: 1, 1: 4, 2: 16}  # scale0=1x, scale1=1/4x, scale2=1/16x
+            scale_factor = scale_factors.get(scale_level, 4)  # Default to scale1
+            
+            # Convert microscope coordinates (mm) to pixel coordinates
+            pixel_x = int((x_mm / pixel_size_um) * 1000 / scale_factor)
+            pixel_y = int((y_mm / pixel_size_um) * 1000 / scale_factor)
+            
+            # Convert pixel coordinates to chunk coordinates
+            chunk_size = 256  # Default chunk size used by ZarrImageManager
+            chunk_x = pixel_x // chunk_size
+            chunk_y = pixel_y // chunk_size
+            
+            logger.info(f"Converted coordinates: x={x_mm}mm, y={y_mm}mm to pixel coords: x={pixel_x}, y={pixel_y}, chunk coords: x={chunk_x}, y={chunk_y} (scale{scale_level})")
+            
+            # Get the single chunk data from ZarrImageManager
+            region_data = await self.zarr_image_manager.get_region_np_data(
+                dataset_id, 
+                channel_name, 
+                scale_level,
+                chunk_x,  # Chunk X coordinate
+                chunk_y,  # Chunk Y coordinate
+                direct_region=None,  # Don't use direct_region, use chunk coordinates instead
+                width=chunk_size,
+                height=chunk_size
+            )
+            
+            if region_data is None:
+                return {
+                    "success": False,
+                    "error": "Failed to retrieve chunk data from Zarr storage"
+                }
+            
+            # Convert numpy array to base64 encoded PNG for transmission
+            try:
+                # Ensure data is in uint8 format
+                if region_data.dtype != np.uint8:
+                    if region_data.dtype == np.float32 or region_data.dtype == np.float64:
+                        # Normalize floating point data
+                        if region_data.max() > 0:
+                            region_data = (region_data / region_data.max() * 255).astype(np.uint8)
+                        else:
+                            region_data = np.zeros(region_data.shape, dtype=np.uint8)
+                    else:
+                        # For other integer types, scale appropriately
+                        region_data = (region_data / region_data.max() * 255).astype(np.uint8) if region_data.max() > 0 else region_data.astype(np.uint8)
+                        
+                # Convert to PIL Image and then to base64
+                pil_image = Image.fromarray(region_data)
+                buffer = io.BytesIO()
+                pil_image.save(buffer, format="PNG")
+                img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                
+                return {
+                    "data": img_base64,
+                    "format": "png_base64",
+                    "scale_level": scale_level,
+                    "stage_location": {"x_mm": x_mm, "y_mm": y_mm},
+                    "chunk_coordinates": {"chunk_x": chunk_x, "chunk_y": chunk_y}
+                }
+                
+            except Exception as e:
+                logger.error(f"Error converting chunk data to base64: {e}")
+                return {
+                    "success": False,
+                    "error": f"Failed to convert chunk data: {str(e)}"
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in get_canvas_chunk: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "error": f"Failed to get canvas chunk: {str(e)}"
             }
 
 # Define a signal handler for graceful shutdown
