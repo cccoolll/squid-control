@@ -221,21 +221,21 @@ class MicroscopeVideoTrack(MediaStreamTrack):
             time_base = fractions.Fraction(1, 90000)
             pts = int((current_time - self.start_time) * time_base.denominator)
 
-            # Create VideoFrame with embedded metadata
+            # Create VideoFrame
             new_video_frame = VideoFrame.from_ndarray(processed_frame, format="rgb24")
             new_video_frame.pts = pts
             new_video_frame.time_base = time_base
             
-            # EMBED METADATA INTO WEBRTC FRAME
-            # Store metadata as JSON string in the frame's private_data attribute
-            if frame_metadata:
+            # SEND METADATA VIA WEBRTC DATA CHANNEL
+            # Send metadata through data channel instead of embedding in video frame
+            if frame_metadata and hasattr(self.microscope_instance, 'metadata_data_channel'):
                 try:
                     metadata_json = json.dumps(frame_metadata)
-                    # Store metadata in VideoFrame private data (this is a standard WebRTC feature)
-                    new_video_frame.private_data = metadata_json.encode('utf-8')
-                    logger.debug(f"Embedded metadata into WebRTC frame: {len(metadata_json)} bytes")
+                    # Send metadata via WebRTC data channel
+                    asyncio.create_task(self._send_metadata_via_datachannel(metadata_json))
+                    logger.debug(f"Sent metadata via data channel: {len(metadata_json)} bytes")
                 except Exception as e:
-                    logger.warning(f"Failed to embed metadata into WebRTC frame: {e}")
+                    logger.warning(f"Failed to send metadata via data channel: {e}")
             
             if self.count % (self.fps * 5) == 0:  # Log every 5 seconds
                 duration = current_time - self.start_time
@@ -244,7 +244,14 @@ class MicroscopeVideoTrack(MediaStreamTrack):
                     logger.info(f"MicroscopeVideoTrack: Sent frame {self.count}, actual FPS: {actual_fps:.2f}")
                     if frame_metadata:
                         stage_pos = frame_metadata.get('stage_position', {})
-                        logger.info(f"Frame metadata: stage=({stage_pos.get('x_mm'):.2f}, {stage_pos.get('y_mm'):.2f}, {stage_pos.get('z_mm'):.2f}), "
+                        x_mm = stage_pos.get('x_mm')
+                        y_mm = stage_pos.get('y_mm')
+                        z_mm = stage_pos.get('z_mm')
+                        # Handle None values in position logging
+                        x_str = f"{x_mm:.2f}" if x_mm is not None else "None"
+                        y_str = f"{y_mm:.2f}" if y_mm is not None else "None"
+                        z_str = f"{z_mm:.2f}" if z_mm is not None else "None"
+                        logger.info(f"Frame metadata: stage=({x_str}, {y_str}, {z_str}), "
                                    f"channel={frame_metadata.get('channel')}, intensity={frame_metadata.get('intensity')}")
                 else:
                     logger.info(f"MicroscopeVideoTrack: Sent frame {self.count}")
@@ -261,6 +268,18 @@ class MicroscopeVideoTrack(MediaStreamTrack):
         """Update the FPS of the video track"""
         self.fps = new_fps
         logger.info(f"MicroscopeVideoTrack FPS updated to {new_fps}")
+
+    async def _send_metadata_via_datachannel(self, metadata_json):
+        """Send metadata via WebRTC data channel"""
+        try:
+            if hasattr(self.microscope_instance, 'metadata_data_channel') and self.microscope_instance.metadata_data_channel:
+                if self.microscope_instance.metadata_data_channel.readyState == 'open':
+                    self.microscope_instance.metadata_data_channel.send(metadata_json)
+                    logger.debug(f"Metadata sent via data channel: {len(metadata_json)} bytes")
+                else:
+                    logger.debug(f"Data channel not ready, state: {self.microscope_instance.metadata_data_channel.readyState}")
+        except Exception as e:
+            logger.warning(f"Error sending metadata via data channel: {e}")
 
     def stop(self):
         logger.info("MicroscopeVideoTrack stop() called.")
@@ -331,6 +350,7 @@ class Microscope:
         self.similarity_search_svc = None
         self.video_contrast_min = 0
         self.video_contrast_max = None
+        self.metadata_data_channel = None  # WebRTC data channel for metadata
 
         # Video buffering attributes
         self.video_buffer = VideoBuffer(max_size=5)
@@ -1937,12 +1957,29 @@ class Microscope:
             # Mark as connected when peer connection starts
             self.webrtc_connected = True
             
+            # Create data channel for metadata transmission
+            self.metadata_data_channel = peer_connection.createDataChannel("metadata", ordered=True)
+            logger.info("Created metadata data channel")
+            
+            @self.metadata_data_channel.on("open")
+            def on_data_channel_open():
+                logger.info("Metadata data channel opened")
+            
+            @self.metadata_data_channel.on("close")
+            def on_data_channel_close():
+                logger.info("Metadata data channel closed")
+            
+            @self.metadata_data_channel.on("error")
+            def on_data_channel_error(error):
+                logger.error(f"Metadata data channel error: {error}")
+            
             @peer_connection.on("connectionstatechange")
             async def on_connectionstatechange():
                 logger.info(f"WebRTC connection state changed to: {peer_connection.connectionState}")
                 if peer_connection.connectionState in ["closed", "failed", "disconnected"]:
                     # Mark as disconnected
                     self.webrtc_connected = False
+                    self.metadata_data_channel = None
                     if self.video_track and self.video_track.running:
                         logger.info(f"Connection state is {peer_connection.connectionState}. Stopping video track.")
                         self.video_track.stop()
@@ -1973,6 +2010,7 @@ class Microscope:
                         self.video_track.stop()  # Now synchronous
                         self.video_track = None
                     self.is_streaming = False
+                    self.metadata_data_channel = None
                     
                     # Stop video buffering when WebRTC ends
                     asyncio.create_task(self.stop_video_buffering())

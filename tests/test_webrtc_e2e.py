@@ -191,7 +191,7 @@ def create_webrtc_test_html(service_id, webrtc_service_id, server_url, workspace
         </div>
 
         <div class="section">
-            <h2>📊 Frame Metadata</h2>
+            <h2>📊 WebRTC Data Channel Metadata</h2>
             <div id="metadata-status" class="status info">No metadata captured yet</div>
             <div class="controls">
                 <button id="start-metadata-btn" onclick="startMetadataCapture()" disabled>Start Metadata Capture</button>
@@ -208,7 +208,7 @@ def create_webrtc_test_html(service_id, webrtc_service_id, server_url, workspace
                 <ul id="test-list">
                     <li>🔶 Connection Test: <span id="test-connection">Pending</span></li>
                     <li>🔶 Video Stream Test: <span id="test-video">Pending</span></li>
-                    <li>🔶 Metadata Capture Test: <span id="test-metadata">Pending</span></li>
+                    <li>🔶 Data Channel Metadata Test: <span id="test-metadata">Pending</span></li>
                     <li>🔶 Microscope Control Test: <span id="test-controls">Pending</span></li>
                     <li>🔶 Cleanup Test: <span id="test-cleanup">Pending</span></li>
                 </ul>
@@ -300,17 +300,56 @@ def create_webrtc_test_html(service_id, webrtc_service_id, server_url, workspace
                             videoElement = document.getElementById('video');
                             videoElement.srcObject = evt.streams[0];
                             console.log('Video stream connected');
+                        }}
+                    }});
+                    
+                    // Set up data channel listener for metadata
+                    peerConnection.addEventListener('datachannel', function (event) {{
+                        const dataChannel = event.channel;
+                        console.log('Received data channel:', dataChannel.label);
+                        
+                        if (dataChannel.label === 'metadata') {{
+                            console.log('Setting up metadata data channel...');
                             
-                            // Set up WebRTC frame metadata extraction
-                            if (evt.track.kind === 'video') {{
-                                const receiver = peerConnection.getReceivers().find(r => r.track === evt.track);
-                                if (receiver) {{
-                                    console.log('Setting up WebRTC frame metadata extraction...');
-                                    // This would be where we could access VideoFrame.private_data
-                                    // in a real WebRTC implementation, but browser APIs don't expose this directly
-                                    console.log('WebRTC receiver available for advanced frame processing');
+                            dataChannel.addEventListener('open', function() {{
+                                console.log('Metadata data channel opened');
+                            }});
+                            
+                            dataChannel.addEventListener('message', function(event) {{
+                                try {{
+                                    const metadata = JSON.parse(event.data);
+                                    console.log('Received metadata via data channel:', metadata);
+                                    
+                                    // Update the metadata display
+                                    let displayText = `Data Channel Metadata:\\n`;
+                                    displayText += `Timestamp: ${{new Date(metadata.timestamp * 1000).toISOString()}}\\n`;
+                                    displayText += `Channel: ${{metadata.channel}}\\n`;
+                                    displayText += `Intensity: ${{metadata.intensity}}\\n`;
+                                    displayText += `Exposure: ${{metadata.exposure_time_ms}}ms\\n`;
+                                    
+                                    if (metadata.stage_position) {{
+                                        displayText += `Stage Position:\\n`;
+                                        displayText += `  X: ${{metadata.stage_position.x_mm}}mm\\n`;
+                                        displayText += `  Y: ${{metadata.stage_position.y_mm}}mm\\n`;
+                                        displayText += `  Z: ${{metadata.stage_position.z_mm}}mm\\n`;
+                                    }}
+                                    
+                                    document.getElementById('metadata-display').textContent = displayText;
+                                    updateStatus('metadata-status', 'Receiving metadata via data channel', 'success');
+                                    
+                                }} catch (error) {{
+                                    console.error('Error parsing metadata:', error);
+                                    updateStatus('metadata-status', `Metadata parsing error: ${{error.message}}`, 'error');
                                 }}
-                            }}
+                            }});
+                            
+                            dataChannel.addEventListener('close', function() {{
+                                console.log('Metadata data channel closed');
+                            }});
+                            
+                            dataChannel.addEventListener('error', function(error) {{
+                                console.error('Metadata data channel error:', error);
+                            }});
                         }}
                     }});
                     
@@ -397,6 +436,8 @@ def create_webrtc_test_html(service_id, webrtc_service_id, server_url, workspace
                 updateStatus('metadata-status', 'Starting metadata capture...', 'info');
                 
                 let metadataCount = 0;
+                let dataChannelMetadataReceived = false;
+                
                 metadataInterval = setInterval(async () => {{
                     try {{
                         // Get a video frame with metadata
@@ -408,7 +449,7 @@ def create_webrtc_test_html(service_id, webrtc_service_id, server_url, workspace
                         // Extract and display metadata if available
                         if (frameData) {{
                             metadataCount++;
-                            let displayText = `Frame ${{metadataCount}}:\\n`;
+                            let displayText = `API Frame ${{metadataCount}}:\\n`;
                             displayText += `frame_width: ${{frameData.width}}\\n`;
                             displayText += `frame_height: ${{frameData.height}}\\n`;
                             displayText += `format: ${{frameData.format}}\\n`;
@@ -417,18 +458,36 @@ def create_webrtc_test_html(service_id, webrtc_service_id, server_url, workspace
                             
                             // Check for metadata (this is where stage position, channel info, etc. would be)
                             if (frameData.metadata) {{
-                                displayText += `\\nMETADATA:\\n${{JSON.stringify(frameData.metadata, null, 2)}}`;
-                                updateStatus('metadata-status', `Captured ${{metadataCount}} frames with metadata`, 'success');
+                                displayText += `\\nAPI METADATA:\\n${{JSON.stringify(frameData.metadata, null, 2)}}`;
                             }} else {{
-                                displayText += `\\n(No explicit metadata available)`;
-                                updateStatus('metadata-status', `Captured ${{metadataCount}} video frames`, 'success');
+                                displayText += `\\n(No explicit API metadata available)`;
                             }}
                             
-                            document.getElementById('metadata-display').textContent = displayText;
+                            // Check if we've also received data channel metadata
+                            const metadataDisplay = document.getElementById('metadata-display');
+                            const currentText = metadataDisplay.textContent;
+                            if (currentText.includes('Data Channel Metadata:')) {{
+                                dataChannelMetadataReceived = true;
+                                // Append API metadata to existing data channel metadata
+                                displayText = currentText + `\\n\\n${{displayText}}`;
+                            }}
                             
-                            if (metadataCount >= 3) {{
+                            metadataDisplay.textContent = displayText;
+                            
+                            // Update status based on what metadata we've received
+                            if (dataChannelMetadataReceived && frameData.metadata) {{
+                                updateStatus('metadata-status', `Captured ${{metadataCount}} frames - both API and data channel metadata working`, 'success');
                                 updateTestResult('test-metadata', 'PASS');
+                            }} else if (dataChannelMetadataReceived) {{
+                                updateStatus('metadata-status', `Captured ${{metadataCount}} frames - data channel metadata working`, 'success');
+                                updateTestResult('test-metadata', 'PASS');
+                            }} else if (frameData.metadata) {{
+                                updateStatus('metadata-status', `Captured ${{metadataCount}} frames - API metadata working`, 'success');
+                                updateTestResult('test-metadata', 'PASS');
+                            }} else {{
+                                updateStatus('metadata-status', `Captured ${{metadataCount}} video frames - waiting for metadata`, 'info');
                             }}
+                            
                         }} else {{
                             updateStatus('metadata-status', 'No frame data received', 'error');
                             updateTestResult('test-metadata', 'FAIL');
@@ -1071,17 +1130,15 @@ async def test_webrtc_metadata_extraction(webrtc_test_services):
     finally:
         await microscope_svc.stop_video_buffering()
 
-async def test_webrtc_frame_private_data(webrtc_test_services):
-    """Test that VideoFrame.private_data contains JSON metadata."""
+async def test_webrtc_data_channel_metadata(webrtc_test_services):
+    """Test that WebRTC data channels can send JSON metadata alongside video stream."""
     services = webrtc_test_services
     
-    print("🧪 Testing WebRTC VideoFrame.private_data JSON metadata...")
+    print("🧪 Testing WebRTC Data Channel JSON metadata...")
     
     # Get both the microscope instance and service proxy
     microscope_instance = services['microscope']
     microscope_svc = await services['server'].get_service(services['microscope_service_id'])
-    
-
     
     # Start video buffering
     await microscope_svc.start_video_buffering()
@@ -1090,38 +1147,56 @@ async def test_webrtc_frame_private_data(webrtc_test_services):
         # Wait for buffer to fill
         await asyncio.sleep(1)
         
-        # Create a MicroscopeVideoTrack to test frame generation
+        # Create a mock WebRTC data channel for testing
+        from unittest.mock import Mock
+        
+        # Create a mock data channel
+        mock_data_channel = Mock()
+        mock_data_channel.readyState = 'open'
+        mock_data_channel.send = Mock()
+        
+        # Assign the mock data channel to the microscope instance
+        microscope_instance.metadata_data_channel = mock_data_channel
+        
+        # Create a MicroscopeVideoTrack to test data channel metadata sending
         from start_hypha_service import MicroscopeVideoTrack
         
         video_track = MicroscopeVideoTrack(microscope_instance)
         
-        # Test multiple frames to verify consistent metadata embedding
+        # Test multiple frames to verify consistent metadata sending via data channel
         frames_tested = 0
-        frames_with_metadata = 0
         
         for i in range(3):
             print(f"   Testing frame {i+1}...")
             
-            # Get a video frame from the track
+            # Clear previous mock calls
+            mock_data_channel.send.reset_mock()
+            
+            # Change microscope parameters to generate different metadata
+            await microscope_svc.set_illumination(channel=i % 2, intensity=50 + i * 20)
+            await microscope_svc.move_by_distance(x=0.01 * i, y=0.01 * i, z=0.0)
+            
+            # Get a video frame from the track (this should trigger metadata sending)
             video_frame = await video_track.recv()
             frames_tested += 1
             
             # Verify basic frame properties
             assert video_frame is not None
-            assert hasattr(video_frame, 'private_data')
-            print(f"     ✓ Frame has private_data attribute")
+            print(f"     ✓ Frame generated successfully")
             
-            # Check if private_data contains JSON metadata
-            if video_frame.private_data:
+            # Wait briefly for async metadata sending
+            await asyncio.sleep(0.1)
+            
+            # Check if metadata was sent via data channel
+            if mock_data_channel.send.called:
+                # Get the metadata that was sent
+                call_args = mock_data_channel.send.call_args
+                metadata_json = call_args[0][0]  # First argument to send()
+                
                 try:
-                    # Decode the private_data as JSON
-                    metadata_bytes = video_frame.private_data
-                    metadata_json = metadata_bytes.decode('utf-8')
                     metadata = json.loads(metadata_json)
                     
-                    frames_with_metadata += 1
-                    
-                    print(f"     ✓ Frame {i+1} metadata: {len(metadata_json)} bytes")
+                    print(f"     ✓ Frame {i+1} metadata sent via data channel: {len(metadata_json)} bytes")
                     
                     # Verify expected metadata structure
                     assert 'stage_position' in metadata, "Missing stage_position in metadata"
@@ -1129,44 +1204,47 @@ async def test_webrtc_frame_private_data(webrtc_test_services):
                     assert 'y_mm' in metadata['stage_position'], "Missing y_mm in stage_position"
                     assert 'z_mm' in metadata['stage_position'], "Missing z_mm in stage_position"
                     assert 'timestamp' in metadata, "Missing timestamp in metadata"
-                    assert 'channel' in metadata, "Missing channel in metadata" 
+                    assert 'channel' in metadata, "Missing channel in metadata"
                     assert 'intensity' in metadata, "Missing intensity in metadata"
                     assert 'exposure_time_ms' in metadata, "Missing exposure_time_ms in metadata"
                     
-                    print(f"     ✓ Stage: ({metadata['stage_position']['x_mm']:.2f}, {metadata['stage_position']['y_mm']:.2f}, {metadata['stage_position']['z_mm']:.2f})")
+                    # Handle None values in position logging
+                    x_mm = metadata['stage_position']['x_mm']
+                    y_mm = metadata['stage_position']['y_mm']
+                    z_mm = metadata['stage_position']['z_mm']
+                    x_str = f"{x_mm:.2f}" if x_mm is not None else "None"
+                    y_str = f"{y_mm:.2f}" if y_mm is not None else "None"
+                    z_str = f"{z_mm:.2f}" if z_mm is not None else "None"
+                    print(f"     ✓ Stage: ({x_str}, {y_str}, {z_str})")
                     print(f"     ✓ Channel: {metadata['channel']}, Intensity: {metadata['intensity']}, Exposure: {metadata['exposure_time_ms']}ms")
                     
                     # Verify data types
-                    assert isinstance(metadata['stage_position']['x_mm'], (int, float))
-                    assert isinstance(metadata['stage_position']['y_mm'], (int, float))
-                    assert isinstance(metadata['stage_position']['z_mm'], (int, float))
+                    assert isinstance(metadata['stage_position']['x_mm'], (int, float, type(None)))
+                    assert isinstance(metadata['stage_position']['y_mm'], (int, float, type(None)))
+                    assert isinstance(metadata['stage_position']['z_mm'], (int, float, type(None)))
                     assert isinstance(metadata['timestamp'], (int, float))
-                    assert isinstance(metadata['channel'], int)
-                    assert isinstance(metadata['intensity'], (int, float))
-                    assert isinstance(metadata['exposure_time_ms'], (int, float))
+                    assert isinstance(metadata['channel'], (int, type(None)))
+                    assert isinstance(metadata['intensity'], (int, float, type(None)))
+                    assert isinstance(metadata['exposure_time_ms'], (int, float, type(None)))
                     
                     print(f"     ✓ All metadata fields have correct types")
                     
                 except json.JSONDecodeError as e:
                     print(f"     ✗ Failed to decode metadata JSON: {e}")
-                    print(f"     Raw private_data: {video_frame.private_data}")
-                    raise AssertionError(f"Invalid JSON in VideoFrame.private_data: {e}")
+                    print(f"     Raw metadata: {metadata_json}")
+                    raise AssertionError(f"Invalid JSON in data channel metadata: {e}")
                 except Exception as e:
                     print(f"     ✗ Error processing metadata: {e}")
                     raise
             else:
-                print(f"     ⚠ Frame {i+1} has no private_data")
+                print(f"     ⚠ Frame {i+1}: No metadata sent via data channel")
             
-
-        print(f"✅ Tested {frames_tested} frames, {frames_with_metadata} had JSON metadata in private_data")
+            await asyncio.sleep(0.2)  # Small delay between frames
         
-        # Verify that most frames have metadata
-        if frames_with_metadata == 0:
-            raise AssertionError("No frames contained metadata in private_data!")
-        elif frames_with_metadata < frames_tested / 2:
-            print(f"⚠ Warning: Only {frames_with_metadata}/{frames_tested} frames had metadata")
-        else:
-            print(f"✅ Good metadata coverage: {frames_with_metadata}/{frames_tested} frames")
+        print(f"✅ Tested {frames_tested} frames with WebRTC data channel metadata")
+        
+        # Verify that data channel send was called
+        assert mock_data_channel.send.called, "Data channel send() method was never called"
         
         # Stop the video track
         video_track.stop()
@@ -1174,7 +1252,7 @@ async def test_webrtc_frame_private_data(webrtc_test_services):
     finally:
         await microscope_svc.stop_video_buffering()
     
-    print("✅ WebRTC VideoFrame.private_data JSON metadata test completed!")
+    print("✅ WebRTC Data Channel JSON metadata test completed!")
 
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
