@@ -546,15 +546,12 @@ async def test_schema_methods(test_microscope_service):
     assert "result" in result
 
 # WebRTC video track tests
-async def test_microscope_video_track():
+async def test_microscope_video_track(test_microscope_service):
     """Test MicroscopeVideoTrack functionality."""
-    # Create a minimal microscope instance for testing
-    microscope = Microscope(is_simulation=True, is_local=False)
-    microscope.login_required = False
-    microscope.datastore = SimpleTestDataStore()
+    microscope, service = test_microscope_service
     
     try:
-        # Create video track
+        # Create video track using the existing microscope from the fixture
         video_track = MicroscopeVideoTrack(microscope)
         
         # Test initialization
@@ -576,10 +573,17 @@ async def test_microscope_video_track():
         video_track.stop()
         assert video_track.running == False
         
+    except Exception as e:
+        print(f"Video track test error: {e}")
+        raise
     finally:
-        # Cleanup
-        if hasattr(microscope, 'squidController'):
-            microscope.squidController.close()
+        # Cleanup - the fixture will handle the main cleanup
+        # Just ensure video track is stopped
+        try:
+            if 'video_track' in locals():
+                video_track.stop()
+        except:
+            pass
 
 # Permission and authentication tests
 async def test_permission_system(test_microscope_service):
