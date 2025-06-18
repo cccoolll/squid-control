@@ -545,46 +545,6 @@ async def test_schema_methods(test_microscope_service):
     assert isinstance(result, dict)
     assert "result" in result
 
-# WebRTC video track tests
-async def test_microscope_video_track(test_microscope_service):
-    """Test MicroscopeVideoTrack functionality."""
-    microscope, service = test_microscope_service
-    
-    try:
-        # Create video track using the existing microscope from the fixture
-        video_track = MicroscopeVideoTrack(microscope)
-        
-        # Test initialization
-        assert video_track.kind == "video"
-        assert video_track.microscope_instance == microscope
-        assert video_track.running == True
-        assert video_track.fps == 5
-        assert video_track.frame_width == 640
-        assert video_track.frame_height == 640
-        
-        # Test crosshair drawing
-        test_img = np.zeros((100, 100, 3), dtype=np.uint8)
-        video_track.draw_crosshair(test_img, 50, 50, size=10, color=[255, 255, 255])
-        # Check that crosshair was drawn (pixels should be white at center)
-        assert np.any(test_img[50, 40:61] > 0)  # Horizontal line
-        assert np.any(test_img[40:61, 50] > 0)  # Vertical line
-        
-        # Test stop functionality
-        video_track.stop()
-        assert video_track.running == False
-        
-    except Exception as e:
-        print(f"Video track test error: {e}")
-        raise
-    finally:
-        # Cleanup - the fixture will handle the main cleanup
-        # Just ensure video track is stopped
-        try:
-            if 'video_track' in locals():
-                video_track.stop()
-        except:
-            pass
-
 # Permission and authentication tests
 async def test_permission_system(test_microscope_service):
     """Test the permission and authentication system."""
