@@ -1208,6 +1208,18 @@ async def test_webrtc_data_channel_metadata(webrtc_test_services):
                     assert 'intensity' in metadata, "Missing intensity in metadata"
                     assert 'exposure_time_ms' in metadata, "Missing exposure_time_ms in metadata"
                     
+                    # Verify gray level statistics are included
+                    assert 'gray_level_stats' in metadata, "Missing gray_level_stats in metadata"
+                    gray_stats = metadata['gray_level_stats']
+                    if gray_stats is not None:  # May be None if calculation failed
+                        assert 'mean_percent' in gray_stats, "Missing mean_percent in gray_level_stats"
+                        assert 'std_percent' in gray_stats, "Missing std_percent in gray_level_stats"
+                        assert 'min_percent' in gray_stats, "Missing min_percent in gray_level_stats"
+                        assert 'max_percent' in gray_stats, "Missing max_percent in gray_level_stats"
+                        assert 'histogram' in gray_stats, "Missing histogram in gray_level_stats"
+                        assert 'exposure_quality' in gray_stats, "Missing exposure_quality in gray_level_stats"
+                        print(f"     ✓ Gray level stats: mean={gray_stats['mean_percent']:.1f}%, std={gray_stats['std_percent']:.1f}%")
+                    
                     # Handle None values in position logging
                     x_mm = metadata['stage_position']['x_mm']
                     y_mm = metadata['stage_position']['y_mm']

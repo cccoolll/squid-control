@@ -212,9 +212,12 @@ class MicroscopeVideoTrack(MediaStreamTrack):
                 frame_data = frame_response
                 frame_metadata = {}
             
-            # Decompress JPEG data to numpy array for WebRTC
+                        # Decompress JPEG data to numpy array for WebRTC
             processed_frame = self.microscope_instance._decode_frame_jpeg(frame_data)
-            
+
+            # Calculate gray level statistics for microscope analysis
+            gray_level_stats = self._calculate_gray_level_statistics(processed_frame)
+
             current_time = time.time()
             # Use a 90kHz timebase, common for video, to provide accurate frame timing.
             # This prevents video from speeding up if frame acquisition is slow.
@@ -225,15 +228,19 @@ class MicroscopeVideoTrack(MediaStreamTrack):
             new_video_frame = VideoFrame.from_ndarray(processed_frame, format="rgb24")
             new_video_frame.pts = pts
             new_video_frame.time_base = time_base
-            
+
             # SEND METADATA VIA WEBRTC DATA CHANNEL
             # Send metadata through data channel instead of embedding in video frame
             if frame_metadata and hasattr(self.microscope_instance, 'metadata_data_channel'):
                 try:
-                    metadata_json = json.dumps(frame_metadata)
+                    # Add gray level statistics to metadata
+                    enhanced_metadata = frame_metadata.copy()
+                    enhanced_metadata['gray_level_stats'] = gray_level_stats
+                    
+                    metadata_json = json.dumps(enhanced_metadata)
                     # Send metadata via WebRTC data channel
                     asyncio.create_task(self._send_metadata_via_datachannel(metadata_json))
-                    logger.debug(f"Sent metadata via data channel: {len(metadata_json)} bytes")
+                    logger.debug(f"Sent metadata via data channel: {len(metadata_json)} bytes (with gray level stats)")
                 except Exception as e:
                     logger.warning(f"Failed to send metadata via data channel: {e}")
             
@@ -268,6 +275,67 @@ class MicroscopeVideoTrack(MediaStreamTrack):
         """Update the FPS of the video track"""
         self.fps = new_fps
         logger.info(f"MicroscopeVideoTrack FPS updated to {new_fps}")
+
+    def _calculate_gray_level_statistics(self, rgb_frame):
+        """Calculate comprehensive gray level statistics for microscope analysis"""
+        try:
+            import numpy as np
+            
+            # Convert RGB to grayscale for analysis (standard luminance formula)
+            if len(rgb_frame.shape) == 3:
+                # RGB to grayscale: Y = 0.299*R + 0.587*G + 0.114*B
+                gray_frame = np.dot(rgb_frame[...,:3], [0.299, 0.587, 0.114])
+            else:
+                gray_frame = rgb_frame
+            
+            # Ensure we have a valid grayscale image
+            if gray_frame.size == 0:
+                return None
+                
+            # Convert to 0-100% range for analysis
+            gray_normalized = (gray_frame / 255.0) * 100.0
+            
+            # Calculate comprehensive statistics
+            stats = {
+                'mean_percent': float(np.mean(gray_normalized)),
+                'std_percent': float(np.std(gray_normalized)),
+                'min_percent': float(np.min(gray_normalized)),
+                'max_percent': float(np.max(gray_normalized)),
+                'median_percent': float(np.median(gray_normalized)),
+                'percentiles': {
+                    'p5': float(np.percentile(gray_normalized, 5)),
+                    'p25': float(np.percentile(gray_normalized, 25)),
+                    'p75': float(np.percentile(gray_normalized, 75)),
+                    'p95': float(np.percentile(gray_normalized, 95))
+                },
+                'histogram': {
+                    'bins': 20,  # 20 bins for 0-100% range (5% per bin)
+                    'counts': [],
+                    'bin_edges': []
+                }
+            }
+            
+            # Calculate histogram (20 bins from 0-100%)
+            hist_counts, bin_edges = np.histogram(gray_normalized, bins=20, range=(0, 100))
+            stats['histogram']['counts'] = hist_counts.tolist()
+            stats['histogram']['bin_edges'] = bin_edges.tolist()
+            
+            # Additional microscope-specific metrics
+            stats['dynamic_range_percent'] = stats['max_percent'] - stats['min_percent']
+            stats['contrast_ratio'] = stats['std_percent'] / stats['mean_percent'] if stats['mean_percent'] > 0 else 0
+            
+            # Exposure quality indicators
+            stats['exposure_quality'] = {
+                'underexposed_pixels_percent': float(np.sum(gray_normalized < 5) / gray_normalized.size * 100),
+                'overexposed_pixels_percent': float(np.sum(gray_normalized > 95) / gray_normalized.size * 100),
+                'well_exposed_pixels_percent': float(np.sum((gray_normalized >= 5) & (gray_normalized <= 95)) / gray_normalized.size * 100)
+            }
+            
+            return stats
+            
+        except Exception as e:
+            logger.warning(f"Error calculating gray level statistics: {e}")
+            return None
 
     async def _send_metadata_via_datachannel(self, metadata_json):
         """Send metadata via WebRTC data channel"""
