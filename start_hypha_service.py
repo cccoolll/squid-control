@@ -197,11 +197,20 @@ class MicroscopeVideoTrack(MediaStreamTrack):
             if sleep_duration > 0:
                 await asyncio.sleep(sleep_duration)
 
-            # Get compressed frame data from microscope
-            frame_data = await self.microscope_instance.get_video_frame(
+            # Get compressed frame data WITH METADATA from microscope
+            frame_response = await self.microscope_instance.get_video_frame(
                 frame_width=self.frame_width,
                 frame_height=self.frame_height
             )
+            
+            # Extract frame data and metadata
+            if isinstance(frame_response, dict) and 'data' in frame_response:
+                frame_data = frame_response
+                frame_metadata = frame_response.get('metadata', {})
+            else:
+                # Fallback for backward compatibility
+                frame_data = frame_response
+                frame_metadata = {}
             
             # Decompress JPEG data to numpy array for WebRTC
             processed_frame = self.microscope_instance._decode_frame_jpeg(frame_data)
@@ -212,15 +221,31 @@ class MicroscopeVideoTrack(MediaStreamTrack):
             time_base = fractions.Fraction(1, 90000)
             pts = int((current_time - self.start_time) * time_base.denominator)
 
+            # Create VideoFrame with embedded metadata
             new_video_frame = VideoFrame.from_ndarray(processed_frame, format="rgb24")
             new_video_frame.pts = pts
             new_video_frame.time_base = time_base
+            
+            # EMBED METADATA INTO WEBRTC FRAME
+            # Store metadata as JSON string in the frame's private_data attribute
+            if frame_metadata:
+                try:
+                    metadata_json = json.dumps(frame_metadata)
+                    # Store metadata in VideoFrame private data (this is a standard WebRTC feature)
+                    new_video_frame.private_data = metadata_json.encode('utf-8')
+                    logger.debug(f"Embedded metadata into WebRTC frame: {len(metadata_json)} bytes")
+                except Exception as e:
+                    logger.warning(f"Failed to embed metadata into WebRTC frame: {e}")
             
             if self.count % (self.fps * 5) == 0:  # Log every 5 seconds
                 duration = current_time - self.start_time
                 if duration > 0:
                     actual_fps = (self.count + 1) / duration
                     logger.info(f"MicroscopeVideoTrack: Sent frame {self.count}, actual FPS: {actual_fps:.2f}")
+                    if frame_metadata:
+                        stage_pos = frame_metadata.get('stage_position', {})
+                        logger.info(f"Frame metadata: stage=({stage_pos.get('x_mm'):.2f}, {stage_pos.get('y_mm'):.2f}, {stage_pos.get('z_mm'):.2f}), "
+                                   f"channel={frame_metadata.get('channel')}, intensity={frame_metadata.get('intensity')}")
                 else:
                     logger.info(f"MicroscopeVideoTrack: Sent frame {self.count}")
             
