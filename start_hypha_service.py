@@ -123,7 +123,7 @@ class VideoBuffer:
                     return cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
             elif frame_data['format'] == 'raw':
                 # Raw numpy data
-                return np.frombuffer(frame_data['data'], dtype=np.uint8).reshape((-1, 640, 3))
+                return np.frombuffer(frame_data['data'], dtype=np.uint8).reshape((-1, 750, 3))
         except Exception as e:
             logger.error(f"Error decoding frame: {e}")
         
@@ -315,11 +315,11 @@ class Microscope:
         self.last_parameters_update = 0
         self.parameters_update_interval = 1.0  # Update parameters every 1 second
         
-        # Adjustable frame size attributes - replaces hardcoded 640x640
-        self.buffer_frame_width = 640  # Current buffer frame width
-        self.buffer_frame_height = 640  # Current buffer frame height
-        self.default_frame_width = 640  # Default frame size
-        self.default_frame_height = 640
+        # Adjustable frame size attributes - replaces hardcoded 750x750
+        self.buffer_frame_width = 750  # Current buffer frame width
+        self.buffer_frame_height = 750  # Current buffer frame height
+        self.default_frame_width = 750  # Default frame size
+        self.default_frame_height = 750
         
         # Auto-stop video buffering attributes
         self.last_video_request_time = None
@@ -755,7 +755,7 @@ class Microscope:
                 await self.start_video_buffering()
 
     @schema_function(skip_self=True)
-    async def get_video_frame(self, frame_width: int=Field(640, description="Width of the video frame"), frame_height: int=Field(640, description="Height of the video frame"), context=None):
+    async def get_video_frame(self, frame_width: int=Field(750, description="Width of the video frame"), frame_height: int=Field(750, description="Height of the video frame"), context=None):
         """
         Get compressed frame data with metadata from the microscope using video buffering
         Returns: Compressed frame data (JPEG bytes) with associated metadata including stage position and timestamp
@@ -2327,7 +2327,7 @@ class Microscope:
                 
         logger.info("Background frame acquisition stopped")
         
-    def _process_raw_frame(self, raw_frame, frame_width=640, frame_height=640):
+    def _process_raw_frame(self, raw_frame, frame_width=750, frame_height=750):
         """Process raw frame for video streaming - OPTIMIZED"""
         try:
             # OPTIMIZATION 1: Resize FIRST to reduce data for all subsequent operations
@@ -2408,8 +2408,8 @@ class Microscope:
                     return cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
             elif frame_data['format'] == 'raw':
                 # Raw numpy data
-                height = frame_data.get('height', 640)
-                width = frame_data.get('width', 640)
+                height = frame_data.get('height', 750)
+                width = frame_data.get('width', 750)
                 return np.frombuffer(frame_data['data'], dtype=np.uint8).reshape((height, width, 3))
         except Exception as e:
             logger.error(f"Error decoding frame: {e}")
@@ -2519,7 +2519,7 @@ class Microscope:
             raise e
 
     @schema_function(skip_self=True)
-    def configure_video_buffer_frame_size(self, frame_width: int = Field(640, description="Width of the video buffer frames"), frame_height: int = Field(640, description="Height of the video buffer frames"), context=None):
+    def configure_video_buffer_frame_size(self, frame_width: int = Field(750, description="Width of the video buffer frames"), frame_height: int = Field(750, description="Height of the video buffer frames"), context=None):
         """Configure video buffer frame size for optimal streaming performance."""
         try:
             # Validate frame size parameters
