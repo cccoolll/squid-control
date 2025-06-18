@@ -1392,4 +1392,641 @@ async def test_service_cleanup(test_microscope_service):
     
     # Test that SquidController can be closed
     # (This will be handled by the fixture cleanup)
-    assert microscope.squidController is not None 
+    assert microscope.squidController is not None
+
+# Canvas chunk retrieval tests
+async def test_get_canvas_chunk_basic_functionality(test_microscope_service):
+    """Test basic get_canvas_chunk functionality."""
+    microscope, service = test_microscope_service
+    
+    print("Testing get_canvas_chunk basic functionality")
+    
+    try:
+        # Test 0: Get current location first
+        print("0. Getting current microscope location...")
+        status = await asyncio.wait_for(service.get_status(), timeout=10)
+        current_x = status.get('current_x', 30.0)  # Default to 30.0 if not available
+        current_y = status.get('current_y', 37.0)  # Default to 37.0 if not available
+        print(f"   Current location: x={current_x}mm, y={current_y}mm")
+        
+        # Test 1: Basic chunk retrieval using current location
+        print("1. Testing basic chunk retrieval...")
+        result = await asyncio.wait_for(
+            service.get_canvas_chunk(x_mm=current_x, y_mm=current_y, scale_level=1),
+            timeout=30
+        )
+        
+        print(f"   Result keys: {list(result.keys())}")
+        
+        # Verify return format
+        expected_keys = ["data", "format", "scale_level", "stage_location", "chunk_coordinates"]
+        for key in expected_keys:
+            assert key in result, f"Missing key: {key}"
+        
+        # Verify data types and values
+        assert isinstance(result["data"], str), "Data should be base64 string"
+        assert result["format"] == "png_base64", "Format should be png_base64"
+        assert result["scale_level"] == 1, "Scale level should match input"
+        
+        # Verify stage location
+        stage_loc = result["stage_location"]
+        assert isinstance(stage_loc, dict)
+        assert stage_loc["x_mm"] == current_x
+        assert stage_loc["y_mm"] == current_y
+        
+        # Verify chunk coordinates
+        chunk_coords = result["chunk_coordinates"]
+        assert isinstance(chunk_coords, dict)
+        assert "chunk_x" in chunk_coords
+        assert "chunk_y" in chunk_coords
+        assert isinstance(chunk_coords["chunk_x"], int)
+        assert isinstance(chunk_coords["chunk_y"], int)
+        
+        print(f"   Chunk coordinates: {chunk_coords}")
+        print(f"   Data length: {len(result['data'])} characters")
+        
+        # Test 2: Different scale levels using current location with small offset
+        print("2. Testing different scale levels...")
+        for scale in [0, 1, 2]:
+            print(f"   Testing scale level {scale}...")
+            # Use slight offset from current position
+            test_x = current_x + (scale * 0.5)  # Small offset based on scale
+            test_y = current_y + (scale * 0.5)
+            result = await asyncio.wait_for(
+                service.get_canvas_chunk(x_mm=test_x, y_mm=test_y, scale_level=scale),
+                timeout=30
+            )
+            
+            assert result["scale_level"] == scale
+            assert len(result["data"]) > 0, f"No data returned for scale {scale}"
+            print(f"      Scale {scale}: Data length {len(result['data'])}")
+        
+        # Test 3: Different coordinates near current position
+        print("3. Testing different coordinates...")
+        test_coords = [
+            (current_x - 1.0, current_y - 1.0), 
+            (current_x + 1.0, current_y + 1.0), 
+            (current_x - 0.5, current_y + 0.5), 
+            (current_x + 0.5, current_y - 0.5)
+        ]
+        
+        for x, y in test_coords:
+            print(f"   Testing coordinates ({x}, {y})...")
+            result = await asyncio.wait_for(
+                service.get_canvas_chunk(x_mm=x, y_mm=y, scale_level=1),
+                timeout=30
+            )
+            
+            assert result["stage_location"]["x_mm"] == x
+            assert result["stage_location"]["y_mm"] == y
+            assert len(result["data"]) > 0
+            print(f"      Coordinates ({x}, {y}): Chunk ({result['chunk_coordinates']['chunk_x']}, {result['chunk_coordinates']['chunk_y']})")
+        
+        print("✅ get_canvas_chunk basic functionality tests passed!")
+        
+    except Exception as e:
+        print(f"❌ get_canvas_chunk basic functionality test failed: {e}")
+        raise
+
+async def test_get_canvas_chunk_access_restrictions():
+    """Test get_canvas_chunk access restrictions for different modes."""
+    print("Testing get_canvas_chunk access restrictions")
+    
+    try:
+        # Test 1: Local mode restriction
+        print("1. Testing local mode restriction...")
+        local_microscope = Microscope(is_simulation=True, is_local=True)
+        
+        try:
+            # Test that function is restricted in local mode
+            token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+            if token:
+                async with connect_to_server({
+                    "server_url": TEST_SERVER_URL,
+                    "token": token,
+                    "workspace": TEST_WORKSPACE,
+                }) as server:
+                    test_id = f"test-local-restriction-{uuid.uuid4().hex[:8]}"
+                    local_microscope.service_id = test_id
+                    local_microscope.login_required = False
+                    local_microscope.datastore = SimpleTestDataStore()
+                    
+                    # Override setup method
+                    async def mock_setup():
+                        pass
+                    local_microscope.setup = mock_setup
+                    
+                    await local_microscope.start_hypha_service(server, test_id)
+                    local_service = await server.get_service(test_id)
+                    
+                    # This should return an error about local mode
+                    result = await local_service.get_canvas_chunk(x_mm=30.0, y_mm=37.0, scale_level=1)
+                    
+                    assert "success" in result
+                    assert result["success"] == False
+                    assert "local mode" in result["error"].lower()
+                    print(f"   Local mode correctly restricted: {result['error']}")
+                    
+        finally:
+            local_microscope.squidController.close()
+        
+        # Test 2: Non-simulation mode restriction  
+        print("2. Testing non-simulation mode restriction...")
+        if token:  # Only test if we have token
+            # Skip this test since we don't have real hardware available
+            print("   Skipping non-simulation test - no hardware controller available")
+            # For completeness, we can test that the error condition works by calling the method directly
+            temp_microscope = Microscope(is_simulation=True, is_local=False)
+            temp_microscope.is_simulation = False  # Override to non-simulation
+            result = await temp_microscope.get_canvas_chunk(x_mm=30.0, y_mm=37.0, scale_level=1)
+            
+            assert "success" in result
+            assert result["success"] == False
+            assert "simulation mode" in result["error"].lower()
+            print(f"   Non-simulation mode correctly restricted: {result['error']}")
+            temp_microscope.squidController.close()
+        
+        print("✅ get_canvas_chunk access restriction tests passed!")
+        
+    except Exception as e:
+        print(f"❌ get_canvas_chunk access restriction test failed: {e}")
+        # Don't fail the entire test suite if token is missing
+        if "AGENT_LENS_WORKSPACE_TOKEN not set" in str(e):
+            pytest.skip("Skipping access restriction tests due to missing token")
+        raise
+
+async def test_get_canvas_chunk_parameter_validation(test_microscope_service):
+    """Test get_canvas_chunk parameter validation and edge cases."""
+    microscope, service = test_microscope_service
+    
+    print("Testing get_canvas_chunk parameter validation")
+    
+    try:
+        # Test 1: Default parameter values
+        print("1. Testing default parameter values...")
+        result = await asyncio.wait_for(
+            service.get_canvas_chunk(x_mm=30.0, y_mm=37.0),  # scale_level should default to 1
+            timeout=30
+        )
+        
+        assert result["scale_level"] == 1, "Default scale_level should be 1"
+        print(f"   Default scale level: {result['scale_level']}")
+        
+        # Test 2: Edge case coordinates
+        print("2. Testing edge case coordinates...")
+        edge_coords = [
+            (0.0, 0.0),      # Origin
+            (100.0, 100.0),  # Large values
+            (0.1, 0.1),      # Small values
+            (50.5, 75.3),    # Decimal values
+        ]
+        
+        for x, y in edge_coords:
+            print(f"   Testing edge coordinates ({x}, {y})...")
+            try:
+                result = await asyncio.wait_for(
+                    service.get_canvas_chunk(x_mm=x, y_mm=y, scale_level=1),
+                    timeout=30
+                )
+                
+                # Should handle all coordinates gracefully
+                assert result["stage_location"]["x_mm"] == x
+                assert result["stage_location"]["y_mm"] == y
+                print(f"      Coordinates ({x}, {y}): Success")
+                
+            except Exception as coord_error:
+                print(f"      Coordinates ({x}, {y}): Error {coord_error}")
+                # Some coordinates might be out of bounds for the sample data
+                # This is acceptable behavior
+        
+        # Test 3: Invalid scale levels
+        print("3. Testing invalid scale levels...")
+        invalid_scales = [-1, 3, 10, 100]
+        
+        for scale in invalid_scales:
+            print(f"   Testing invalid scale level {scale}...")
+            try:
+                result = await asyncio.wait_for(
+                    service.get_canvas_chunk(x_mm=30.0, y_mm=37.0, scale_level=scale),
+                    timeout=30
+                )
+                
+                # Should either work (with fallback) or return error
+                if "success" in result and result["success"] == False:
+                    print(f"      Scale {scale}: Properly rejected - {result.get('error', 'Unknown error')}")
+                else:
+                    print(f"      Scale {scale}: Handled gracefully")
+                    
+            except Exception as scale_error:
+                print(f"      Scale {scale}: Exception - {scale_error}")
+                # Exceptions are also acceptable for invalid scales
+        
+        print("✅ get_canvas_chunk parameter validation tests passed!")
+        
+    except Exception as e:
+        print(f"❌ get_canvas_chunk parameter validation test failed: {e}")
+        raise
+
+async def test_get_canvas_chunk_data_format(test_microscope_service):
+    """Test get_canvas_chunk data format and base64 encoding."""
+    microscope, service = test_microscope_service
+    
+    print("Testing get_canvas_chunk data format")
+    
+    try:
+        # Test 1: Base64 data validation
+        print("1. Testing base64 data validation...")
+        result = await asyncio.wait_for(
+            service.get_canvas_chunk(x_mm=30.0, y_mm=37.0, scale_level=1),
+            timeout=30
+        )
+        
+        data = result["data"]
+        
+        # Verify it's valid base64
+        try:
+            import base64
+            decoded_data = base64.b64decode(data)
+            print(f"   Base64 data length: {len(data)} characters")
+            print(f"   Decoded data length: {len(decoded_data)} bytes")
+            assert len(decoded_data) > 0, "Decoded data should not be empty"
+        except Exception as b64_error:
+            pytest.fail(f"Invalid base64 data: {b64_error}")
+        
+        # Test 2: PNG format validation
+        print("2. Testing PNG format validation...")
+        
+        # Check PNG magic bytes
+        png_magic = decoded_data[:8]
+        expected_png_magic = b'\x89PNG\r\n\x1a\n'
+        assert png_magic == expected_png_magic, f"Invalid PNG magic bytes: {png_magic.hex()}"
+        print("   ✓ Valid PNG magic bytes")
+        
+        # Test 3: Image decoding validation
+        print("3. Testing image decoding validation...")
+        try:
+            from PIL import Image
+            import io
+            
+            image_buffer = io.BytesIO(decoded_data)
+            pil_image = Image.open(image_buffer)
+            
+            print(f"   Image size: {pil_image.size}")
+            print(f"   Image mode: {pil_image.mode}")
+            print(f"   Image format: {pil_image.format}")
+            
+            assert pil_image.format == 'PNG', "Image should be PNG format"
+            assert pil_image.size[0] > 0 and pil_image.size[1] > 0, "Image should have valid dimensions"
+            
+            # Convert to numpy array for further validation
+            import numpy as np
+            img_array = np.array(pil_image)
+            print(f"   Image array shape: {img_array.shape}")
+            print(f"   Image data type: {img_array.dtype}")
+            
+            assert len(img_array.shape) >= 2, "Image should be at least 2D"
+            assert img_array.dtype == np.uint8, "Image should be uint8"
+            
+        except Exception as img_error:
+            pytest.fail(f"Failed to decode PNG image: {img_error}")
+        
+        # Test 4: Consistency across multiple requests
+        print("4. Testing consistency across multiple requests...")
+        results = []
+        
+        for i in range(3):
+            result = await asyncio.wait_for(
+                service.get_canvas_chunk(x_mm=30.0, y_mm=37.0, scale_level=1),
+                timeout=30
+            )
+            results.append(result)
+        
+        # All results should have the same format and similar data
+        for i, result in enumerate(results):
+            assert result["format"] == "png_base64"
+            assert result["scale_level"] == 1
+            assert result["stage_location"]["x_mm"] == 30.0
+            assert result["stage_location"]["y_mm"] == 37.0
+            assert len(result["data"]) > 0
+            print(f"   Request {i+1}: Data length {len(result['data'])}")
+        
+        print("✅ get_canvas_chunk data format tests passed!")
+        
+    except Exception as e:
+        print(f"❌ get_canvas_chunk data format test failed: {e}")
+        raise
+
+async def test_get_canvas_chunk_integration(test_microscope_service):
+    """Test get_canvas_chunk integration with other service functions."""
+    microscope, service = test_microscope_service
+    
+    print("Testing get_canvas_chunk integration")
+    
+    try:
+        # Test 1: Integration with stage movement
+        print("1. Testing integration with stage movement...")
+        
+        # Move stage to specific position
+        await service.move_to_position(x=25.0, y=35.0, z=2.0)
+        
+        # Get status to confirm position
+        status = await service.get_status()
+        current_x = status['current_x']
+        current_y = status['current_y']
+        print(f"   Stage position: ({current_x:.3f}, {current_y:.3f})")
+        
+        # Get canvas chunk at current position
+        result = await asyncio.wait_for(
+            service.get_canvas_chunk(x_mm=current_x, y_mm=current_y, scale_level=1),
+            timeout=30
+        )
+        
+        assert result["stage_location"]["x_mm"] == current_x
+        assert result["stage_location"]["y_mm"] == current_y
+        print(f"   Canvas chunk retrieved at current position: chunk ({result['chunk_coordinates']['chunk_x']}, {result['chunk_coordinates']['chunk_y']})")
+        
+        # Test 2: Integration with well navigation
+        print("2. Testing integration with well navigation...")
+        
+        # Navigate to a well
+        await service.navigate_to_well(row='C', col=5, wellplate_type='96')
+        
+        # Get current position after well navigation
+        status = await service.get_status()
+        well_x = status['current_x']
+        well_y = status['current_y']
+        
+        # Get canvas chunk at well position
+        result = await asyncio.wait_for(
+            service.get_canvas_chunk(x_mm=well_x, y_mm=well_y, scale_level=1),
+            timeout=30
+        )
+        
+        assert abs(result["stage_location"]["x_mm"] - well_x) < 0.001
+        assert abs(result["stage_location"]["y_mm"] - well_y) < 0.001
+        print(f"   Canvas chunk retrieved at well C5: chunk ({result['chunk_coordinates']['chunk_x']}, {result['chunk_coordinates']['chunk_y']})")
+        
+        # Test 3: Integration with simulated sample data alias
+        print("3. Testing integration with simulated sample data...")
+        
+        # Get current sample alias
+        original_alias = await service.get_simulated_sample_data_alias()
+        print(f"   Current sample alias: {original_alias}")
+        
+        # Get chunk with original alias
+        result1 = await asyncio.wait_for(
+            service.get_canvas_chunk(x_mm=30.0, y_mm=37.0, scale_level=1),
+            timeout=30
+        )
+        
+        # Note: Setting a different alias might not work if the alias doesn't exist
+        # So we'll just verify the chunk retrieval works with the current alias
+        assert len(result1["data"]) > 0
+        print(f"   Canvas chunk retrieved with current sample data")
+        
+        # Test 4: Coordinate system consistency
+        print("4. Testing coordinate system consistency...")
+        
+        # Test multiple positions and verify chunk coordinates change appropriately
+        test_positions = [
+            (20.0, 30.0), (40.0, 50.0), (60.0, 70.0)
+        ]
+        
+        chunk_coords = []
+        for x, y in test_positions:
+            result = await asyncio.wait_for(
+                service.get_canvas_chunk(x_mm=x, y_mm=y, scale_level=1),
+                timeout=30
+            )
+            
+            chunk_x = result['chunk_coordinates']['chunk_x']
+            chunk_y = result['chunk_coordinates']['chunk_y']
+            chunk_coords.append((chunk_x, chunk_y))
+            print(f"   Position ({x}, {y}) -> Chunk ({chunk_x}, {chunk_y})")
+        
+        # Chunk coordinates should be different for different positions
+        unique_chunks = set(chunk_coords)
+        assert len(unique_chunks) > 1, "Different positions should map to different chunks"
+        print(f"   {len(unique_chunks)} unique chunks from {len(test_positions)} positions")
+        
+        print("✅ get_canvas_chunk integration tests passed!")
+        
+    except Exception as e:
+        print(f"❌ get_canvas_chunk integration test failed: {e}")
+        raise
+
+async def test_well_location_detection_service(test_microscope_service):
+    """Test the well location detection functionality through the service."""
+    microscope, service = test_microscope_service
+    
+    print("Testing Well Location Detection Service")
+    
+    try:
+        # Test 1: Navigate to a specific well and check location
+        print("1. Testing navigation to well C5 and location detection...")
+        await service.navigate_to_well(row='C', col=5, wellplate_type='96')
+        
+        # Get current well location
+        well_location = await service.get_current_well_location(wellplate_type='96')
+        
+        print(f"   Expected: C5, Got: {well_location}")
+        assert isinstance(well_location, dict)
+        assert well_location['row'] == 'C'
+        assert well_location['column'] == 5
+        assert well_location['well_id'] == 'C5'
+        assert well_location['plate_type'] == '96'
+        assert 'position_status' in well_location
+        assert 'distance_from_center' in well_location
+        assert 'is_inside_well' in well_location
+        
+        # Test 2: Test different plate types
+        print("2. Testing different plate types...")
+        
+        # Test 24-well plate
+        await service.navigate_to_well(row='B', col=3, wellplate_type='24')
+        well_location = await service.get_current_well_location(wellplate_type='24')
+        
+        print(f"   24-well: Expected B3, Got: {well_location['well_id']}")
+        assert well_location['row'] == 'B'
+        assert well_location['column'] == 3
+        assert well_location['well_id'] == 'B3'
+        assert well_location['plate_type'] == '24'
+        
+        # Test 384-well plate
+        await service.navigate_to_well(row='D', col=12, wellplate_type='384')
+        well_location = await service.get_current_well_location(wellplate_type='384')
+        
+        print(f"   384-well: Expected D12, Got: {well_location['well_id']}")
+        assert well_location['row'] == 'D'
+        assert well_location['column'] == 12
+        assert well_location['well_id'] == 'D12'
+        assert well_location['plate_type'] == '384'
+        
+        # Test 3: Check that get_status includes well location
+        print("3. Testing that get_status includes well location...")
+        status = await service.get_status()
+        
+        assert isinstance(status, dict)
+        assert 'current_well_location' in status
+        assert isinstance(status['current_well_location'], dict)
+        
+        well_info = status['current_well_location']
+        print(f"   Status well info: {well_info}")
+        assert 'well_id' in well_info
+        assert 'row' in well_info
+        assert 'column' in well_info
+        assert 'position_status' in well_info
+        assert 'plate_type' in well_info
+        
+        # Test 4: Test multiple wells in sequence
+        print("4. Testing multiple wells in sequence...")
+        test_wells = [
+            ('A', 1), ('A', 12), ('H', 1), ('H', 12)
+        ]
+        
+        for row, col in test_wells:
+            print(f"   Testing well {row}{col}...")
+            await service.navigate_to_well(row=row, col=col, wellplate_type='96')
+            
+            well_location = await service.get_current_well_location(wellplate_type='96')
+            expected_well_id = f"{row}{col}"
+            
+            print(f"      Expected: {expected_well_id}, Got: {well_location['well_id']}")
+            assert well_location['row'] == row
+            assert well_location['column'] == col
+            assert well_location['well_id'] == expected_well_id
+            
+            # Also verify through get_status
+            status = await service.get_status()
+            status_well_id = status['current_well_location']['well_id']
+            print(f"      Status confirms: {status_well_id}")
+            assert status_well_id == expected_well_id
+        
+        print("✅ Well location detection service tests passed!")
+        
+    except Exception as e:
+        print(f"❌ Well location detection test failed: {e}")
+        raise
+
+async def test_well_location_edge_cases_service(test_microscope_service):
+    """Test edge cases for well location detection through the service."""
+    microscope, service = test_microscope_service
+    
+    print("Testing Well Location Edge Cases")
+    
+    try:
+        # Test 1: Default plate type behavior
+        print("1. Testing default plate type...")
+        await service.navigate_to_well(row='E', col=7)  # Default should be 96-well
+        
+        # Get location without specifying plate type (should default to 96)
+        well_location = await service.get_current_well_location()
+        
+        print(f"   Default plate type result: {well_location}")
+        assert well_location['plate_type'] == '96'
+        assert well_location['well_id'] == 'E7'
+        
+        # Test 2: Verify consistency between navigation and location detection
+        print("2. Testing consistency between navigation and detection...")
+        test_positions = [
+            ('A', 1, '96'), ('B', 6, '24'), ('C', 8, '384'), ('A', 3, '6')
+        ]
+        
+        for row, col, plate_type in test_positions:
+            print(f"   Testing {row}{col} on {plate_type}-well plate...")
+            
+            # Navigate to position
+            await service.navigate_to_well(row=row, col=col, wellplate_type=plate_type)
+            
+            # Detect location
+            well_location = await service.get_current_well_location(wellplate_type=plate_type)
+            
+            # Verify consistency
+            assert well_location['row'] == row
+            assert well_location['column'] == col
+            assert well_location['well_id'] == f"{row}{col}"
+            assert well_location['plate_type'] == plate_type
+            
+            print(f"      ✓ {plate_type}-well {row}{col}: {well_location['position_status']}")
+        
+        # Test 3: Position accuracy metrics
+        print("3. Testing position accuracy metrics...")
+        await service.navigate_to_well(row='F', col=8, wellplate_type='96')
+        well_location = await service.get_current_well_location(wellplate_type='96')
+        
+        print(f"   Position metrics for F8:")
+        print(f"      Distance from center: {well_location['distance_from_center']:.4f}mm")
+        print(f"      Position status: {well_location['position_status']}")
+        print(f"      Inside well: {well_location['is_inside_well']}")
+        
+        # In simulation, should be very accurate
+        assert well_location['distance_from_center'] < 0.1
+        assert well_location['position_status'] in ['in_well', 'between_wells']
+        
+        print("✅ Well location edge cases tests passed!")
+        
+    except Exception as e:
+        print(f"❌ Well location edge cases test failed: {e}")
+        raise
+
+async def test_get_status_well_location_integration(test_microscope_service):
+    """Test that get_status properly integrates well location information."""
+    microscope, service = test_microscope_service
+    
+    print("Testing get_status well location integration")
+    
+    try:
+        # Test 1: Move to different wells and verify status updates
+        print("1. Testing status updates with well movement...")
+        
+        test_wells = [('B', 4), ('G', 11), ('A', 1), ('H', 12)]
+        
+        for row, col in test_wells:
+            print(f"   Moving to well {row}{col}...")
+            await service.navigate_to_well(row=row, col=col, wellplate_type='96')
+            
+            # Get full status
+            status = await service.get_status()
+            
+            # Verify well location is included and correct
+            assert 'current_well_location' in status
+            well_info = status['current_well_location']
+            
+            print(f"      Status well location: {well_info}")
+            assert well_info['row'] == row
+            assert well_info['column'] == col
+            assert well_info['well_id'] == f"{row}{col}"
+            assert well_info['plate_type'] == '96'  # Default plate type in status
+            
+            # Verify other status fields are still present
+            required_fields = [
+                'current_x', 'current_y', 'current_z', 'is_illumination_on',
+                'current_channel', 'video_fps', 'is_busy'
+            ]
+            
+            for field in required_fields:
+                assert field in status, f"Missing required field: {field}"
+        
+        # Test 2: Verify status coordinates match well location calculation
+        print("2. Testing coordinate consistency...")
+        await service.navigate_to_well(row='D', col=6, wellplate_type='96')
+        status = await service.get_status()
+        
+        # Extract coordinates from status
+        x_pos = status['current_x']
+        y_pos = status['current_y']
+        well_info = status['current_well_location']
+        
+        print(f"   Coordinates: ({x_pos:.3f}, {y_pos:.3f})")
+        print(f"   Well: {well_info['well_id']} at distance {well_info['distance_from_center']:.3f}mm")
+        
+        # The coordinates should match the well position
+        assert well_info['well_id'] == 'D6'
+        assert well_info['x_mm'] == x_pos
+        assert well_info['y_mm'] == y_pos
+        
+        print("✅ get_status well location integration tests passed!")
+        
+    except Exception as e:
+        print(f"❌ get_status integration test failed: {e}")
+        raise 

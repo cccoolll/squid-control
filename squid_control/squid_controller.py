@@ -518,7 +518,142 @@ class SquidController:
             self.microcontroller.move_y_to_usteps(y_usteps)
             while self.microcontroller.is_busy():
                 time.sleep(0.005)
- 
+
+    def get_well_from_position(self, wellplate_type='96', x_pos_mm=None, y_pos_mm=None):
+        """
+        Calculate which well position corresponds to the given X,Y coordinates.
+        
+        Args:
+            wellplate_type (str): Type of well plate ('6', '12', '24', '96', '384')
+            x_pos_mm (float, optional): X position in mm. If None, uses current position.
+            y_pos_mm (float, optional): Y position in mm. If None, uses current position.
+            
+        Returns:
+            dict: {
+                'row': str or None,  # Well row letter (e.g., 'A', 'B', 'C')
+                'column': int or None,  # Well column number (e.g., 1, 2, 3)
+                'well_id': str or None,  # Combined well ID (e.g., 'A1', 'C3')
+                'is_inside_well': bool,  # True if position is inside the well boundary
+                'distance_from_center': float,  # Distance from well center in mm
+                'position_status': str,  # 'in_well', 'between_wells', or 'outside_plate'
+                'x_mm': float,  # Actual X position used
+                'y_mm': float,  # Actual Y position used
+                'plate_type': str  # Well plate type used
+            }
+        """
+        # Get well plate format configuration
+        if wellplate_type == '6':
+            wellplate_format = WELLPLATE_FORMAT_6
+            max_rows = 2  # A-B
+            max_cols = 3  # 1-3
+        elif wellplate_type == '12':
+            wellplate_format = WELLPLATE_FORMAT_12
+            max_rows = 3  # A-C
+            max_cols = 4  # 1-4
+        elif wellplate_type == '24':
+            wellplate_format = WELLPLATE_FORMAT_24
+            max_rows = 4  # A-D
+            max_cols = 6  # 1-6
+        elif wellplate_type == '96':
+            wellplate_format = WELLPLATE_FORMAT_96
+            max_rows = 8  # A-H
+            max_cols = 12  # 1-12
+        elif wellplate_type == '384':
+            wellplate_format = WELLPLATE_FORMAT_384
+            max_rows = 16  # A-P
+            max_cols = 24  # 1-24
+        else:
+            # Default to 96-well plate if unsupported type is provided
+            wellplate_format = WELLPLATE_FORMAT_96
+            max_rows = 8
+            max_cols = 12
+            wellplate_type = '96'
+        
+        # Get current position if not provided
+        if x_pos_mm is None or y_pos_mm is None:
+            current_x, current_y, current_z, current_theta = self.navigationController.update_pos(
+                microcontroller=self.microcontroller
+            )
+            if x_pos_mm is None:
+                x_pos_mm = current_x
+            if y_pos_mm is None:
+                y_pos_mm = current_y
+        
+        # Apply well plate offset for hardware mode
+        if self.is_simulation:
+            x_offset = 0
+            y_offset = 0
+        else:
+            x_offset = CONFIG.WELLPLATE_OFFSET_X_MM
+            y_offset = CONFIG.WELLPLATE_OFFSET_Y_MM
+        
+        # Calculate which well this position corresponds to
+        # Reverse of the move_to_well calculation
+        x_relative = x_pos_mm - (wellplate_format.A1_X_MM + x_offset)
+        y_relative = y_pos_mm - (wellplate_format.A1_Y_MM + y_offset)
+        
+        # Calculate well indices (0-based initially)
+        col_index = round(x_relative / wellplate_format.WELL_SPACING_MM)
+        row_index = round(y_relative / wellplate_format.WELL_SPACING_MM)
+        
+        # Initialize result dictionary
+        result = {
+            'row': None,
+            'column': None,
+            'well_id': None,
+            'is_inside_well': False,
+            'distance_from_center': float('inf'),
+            'position_status': 'outside_plate',
+            'x_mm': x_pos_mm,
+            'y_mm': y_pos_mm,
+            'plate_type': wellplate_type
+        }
+        
+        # Check if the calculated well indices are valid
+        if 0 <= col_index < max_cols and 0 <= row_index < max_rows:
+            # Convert to 1-based column and letter-based row
+            column = col_index + 1
+            row = chr(ord('A') + row_index)
+            
+            result['row'] = row
+            result['column'] = column
+            result['well_id'] = f"{row}{column}"
+            
+            # Calculate the exact center position of this well
+            well_center_x = wellplate_format.A1_X_MM + x_offset + col_index * wellplate_format.WELL_SPACING_MM
+            well_center_y = wellplate_format.A1_Y_MM + y_offset + row_index * wellplate_format.WELL_SPACING_MM
+            
+            # Calculate distance from well center
+            dx = x_pos_mm - well_center_x
+            dy = y_pos_mm - well_center_y
+            distance_from_center = np.sqrt(dx**2 + dy**2)
+            result['distance_from_center'] = distance_from_center
+            
+            # Check if position is inside the well boundary
+            well_radius = wellplate_format.WELL_SIZE_MM / 2.0
+            if distance_from_center <= well_radius:
+                result['is_inside_well'] = True
+                result['position_status'] = 'in_well'
+            else:
+                result['is_inside_well'] = False
+                result['position_status'] = 'between_wells'
+        else:
+            # Position is outside the valid well range
+            result['position_status'] = 'outside_plate'
+            
+            # Find the closest valid well for reference
+            closest_col = max(0, min(max_cols - 1, col_index))
+            closest_row = max(0, min(max_rows - 1, row_index))
+            
+            closest_well_center_x = wellplate_format.A1_X_MM + x_offset + closest_col * wellplate_format.WELL_SPACING_MM
+            closest_well_center_y = wellplate_format.A1_Y_MM + y_offset + closest_row * wellplate_format.WELL_SPACING_MM
+            
+            dx = x_pos_mm - closest_well_center_x
+            dy = y_pos_mm - closest_well_center_y
+            result['distance_from_center'] = np.sqrt(dx**2 + dy**2)
+        
+        return result
+
     def move_x_to_limited(self, x):
         
         x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)

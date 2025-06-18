@@ -7,9 +7,13 @@ import tempfile
 from unittest.mock import patch
 from squid_control.squid_controller import SquidController
 from squid_control.control.config import CONFIG, SIMULATED_CAMERA, WELLPLATE_FORMAT_96, WELLPLATE_FORMAT_384 # Import necessary config
+import sys
 
 # Mark all tests in this module as asyncio
 pytestmark = pytest.mark.asyncio
+
+# Add squid_control to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 @pytest.fixture
 async def sim_controller_fixture():
@@ -773,3 +777,221 @@ async def test_close_controller(sim_controller_fixture):
         # Check camera state after close
         assert controller.camera.is_streaming == False
         break
+
+def test_get_well_from_position_96_well():
+    """Test the get_well_from_position function with 96-well plate format."""
+    print("Testing get_well_from_position with 96-well plate...")
+    
+    # Create a simulated SquidController
+    controller = SquidController(is_simulation=True)
+    
+    # Test 1: Move to well C3 and verify position calculation
+    print("1. Testing move to well C3 and position detection...")
+    controller.move_to_well('C', 3, '96')
+    
+    # Get well info for current position  
+    well_info = controller.get_well_from_position('96')
+    
+    print(f"   Expected: C3, Got: {well_info['well_id']}")
+    assert well_info['row'] == 'C'
+    assert well_info['column'] == 3
+    assert well_info['well_id'] == 'C3'
+    assert well_info['plate_type'] == '96'
+    assert well_info['position_status'] in ['in_well', 'between_wells']  # Allow some tolerance
+    
+    # Test 2: Move to well A1 (corner case)
+    print("2. Testing move to well A1 (corner case)...")
+    controller.move_to_well('A', 1, '96')
+    well_info = controller.get_well_from_position('96')
+    
+    print(f"   Expected: A1, Got: {well_info['well_id']}")
+    assert well_info['row'] == 'A'
+    assert well_info['column'] == 1
+    assert well_info['well_id'] == 'A1'
+    
+    # Test 3: Move to well H12 (opposite corner)
+    print("3. Testing move to well H12 (opposite corner)...")
+    controller.move_to_well('H', 12, '96')
+    well_info = controller.get_well_from_position('96')
+    
+    print(f"   Expected: H12, Got: {well_info['well_id']}")
+    assert well_info['row'] == 'H'
+    assert well_info['column'] == 12
+    assert well_info['well_id'] == 'H12'
+    
+    # Test 4: Test with explicit coordinates
+    print("4. Testing with explicit coordinates...")
+    # Test with some known coordinates
+    well_info = controller.get_well_from_position('96', x_pos_mm=14.3, y_pos_mm=11.36)  # Should be A1
+    print(f"   A1 coordinates test - Expected: A1, Got: {well_info['well_id']}")
+    assert well_info['well_id'] == 'A1'
+    
+    print("✅ 96-well plate tests passed!")
+
+def test_get_well_from_position_different_plates():
+    """Test the get_well_from_position function with different plate formats."""
+    print("Testing get_well_from_position with different plate formats...")
+    
+    controller = SquidController(is_simulation=True)
+    
+    # Test with 24-well plate
+    print("1. Testing 24-well plate...")
+    controller.move_to_well('B', 4, '24')
+    well_info = controller.get_well_from_position('24')
+    
+    print(f"   Expected: B4, Got: {well_info['well_id']}")
+    assert well_info['row'] == 'B'
+    assert well_info['column'] == 4
+    assert well_info['well_id'] == 'B4'
+    assert well_info['plate_type'] == '24'
+    
+    # Test with 384-well plate  
+    print("2. Testing 384-well plate...")
+    controller.move_to_well('D', 8, '384')
+    well_info = controller.get_well_from_position('384')
+    
+    print(f"   Expected: D8, Got: {well_info['well_id']}")
+    assert well_info['row'] == 'D'
+    assert well_info['column'] == 8
+    assert well_info['well_id'] == 'D8'
+    assert well_info['plate_type'] == '384'
+    
+    # Test with 6-well plate
+    print("3. Testing 6-well plate...")
+    controller.move_to_well('A', 2, '6')
+    well_info = controller.get_well_from_position('6')
+    
+    print(f"   Expected: A2, Got: {well_info['well_id']}")
+    assert well_info['row'] == 'A'
+    assert well_info['column'] == 2
+    assert well_info['well_id'] == 'A2'
+    assert well_info['plate_type'] == '6'
+    
+    print("✅ Different plate format tests passed!")
+
+def test_get_well_from_position_edge_cases():
+    """Test edge cases for get_well_from_position function."""
+    print("Testing get_well_from_position edge cases...")
+    
+    controller = SquidController(is_simulation=True)
+    
+    # Test 1: Position outside plate boundaries
+    print("1. Testing position outside plate boundaries...")
+    well_info = controller.get_well_from_position('96', x_pos_mm=0, y_pos_mm=0)  # Far from plate
+    
+    print(f"   Outside position status: {well_info['position_status']}")
+    assert well_info['position_status'] == 'outside_plate'
+    assert well_info['row'] is None
+    assert well_info['column'] is None
+    assert well_info['well_id'] is None
+    
+    # Test 2: Position between wells
+    print("2. Testing position between wells...")
+    # Position exactly between A1 and A2
+    from squid_control.control.config import WELLPLATE_FORMAT_96
+    between_x = WELLPLATE_FORMAT_96.A1_X_MM + WELLPLATE_FORMAT_96.WELL_SPACING_MM / 2
+    between_y = WELLPLATE_FORMAT_96.A1_Y_MM
+    
+    well_info = controller.get_well_from_position('96', x_pos_mm=between_x, y_pos_mm=between_y)
+    print(f"   Between wells position: {well_info['well_id']} ({well_info['position_status']})")
+    # Should still identify closest well but mark as between_wells if outside well boundary
+    assert well_info['well_id'] in ['A1', 'A2']  # Should be closest well
+    
+    # Test 3: Very far position
+    print("3. Testing very far position...")
+    well_info = controller.get_well_from_position('96', x_pos_mm=1000, y_pos_mm=1000)
+    assert well_info['position_status'] == 'outside_plate'
+    
+    print("✅ Edge case tests passed!")
+
+def test_well_location_accuracy():
+    """Test the accuracy of well location calculations."""
+    print("Testing well location calculation accuracy...")
+    
+    controller = SquidController(is_simulation=True)
+    
+    # Test multiple wells in sequence
+    test_wells = [
+        ('A', 1), ('A', 6), ('A', 12),
+        ('D', 1), ('D', 6), ('D', 12),
+        ('H', 1), ('H', 6), ('H', 12)
+    ]
+    
+    for row, col in test_wells:
+        print(f"   Testing well {row}{col}...")
+        
+        # Move to the well
+        controller.move_to_well(row, col, '96')
+        
+        # Get well position
+        well_info = controller.get_well_from_position('96')
+        
+        print(f"      Expected: {row}{col}, Got: {well_info['well_id']}, Distance: {well_info['distance_from_center']:.3f}mm")
+        
+        # Verify correct identification
+        assert well_info['row'] == row
+        assert well_info['column'] == col
+        assert well_info['well_id'] == f"{row}{col}"
+        
+        # Distance from center should be very small (perfect positioning in simulation)
+        assert well_info['distance_from_center'] < 0.1, f"Distance too large: {well_info['distance_from_center']}"
+        
+        # Should be identified as inside well or very close
+        assert well_info['position_status'] in ['in_well', 'between_wells']
+    
+    print("✅ Well location accuracy tests passed!")
+
+def test_well_boundary_detection():
+    """Test well boundary detection functionality."""
+    print("Testing well boundary detection...")
+    
+    controller = SquidController(is_simulation=True)
+    
+    # Move to a well center
+    controller.move_to_well('C', 5, '96')
+    
+    # Get the exact well center coordinates
+    current_x, current_y, current_z, current_theta = controller.navigationController.update_pos(
+        microcontroller=controller.microcontroller
+    )
+    
+    # Test at well center
+    well_info = controller.get_well_from_position('96', x_pos_mm=current_x, y_pos_mm=current_y)
+    print(f"   At center: {well_info['position_status']}, distance: {well_info['distance_from_center']:.3f}mm")
+    
+    # Move slightly away from center (but within well)
+    from squid_control.control.config import WELLPLATE_FORMAT_96
+    well_radius = WELLPLATE_FORMAT_96.WELL_SIZE_MM / 2.0
+    offset = well_radius * 0.8  # 80% of radius, should still be inside
+    
+    well_info = controller.get_well_from_position('96', 
+                                                x_pos_mm=current_x + offset, 
+                                                y_pos_mm=current_y)
+    print(f"   Near edge (inside): {well_info['position_status']}, distance: {well_info['distance_from_center']:.3f}mm")
+    assert well_info['well_id'] == 'C5'
+    
+    # Move outside well boundary
+    offset = well_radius * 1.2  # 120% of radius, should be outside
+    well_info = controller.get_well_from_position('96', 
+                                                x_pos_mm=current_x + offset, 
+                                                y_pos_mm=current_y)
+    print(f"   Outside well: {well_info['position_status']}, distance: {well_info['distance_from_center']:.3f}mm")
+    
+    print("✅ Well boundary detection tests passed!")
+
+if __name__ == "__main__":
+    print("Running Well Position Detection Tests...")
+    print("=" * 50)
+    
+    test_get_well_from_position_96_well()
+    print()
+    test_get_well_from_position_different_plates()
+    print()
+    test_get_well_from_position_edge_cases()
+    print()
+    test_well_location_accuracy()
+    print()
+    test_well_boundary_detection()
+    
+    print("=" * 50)
+    print("🎉 All well position detection tests passed!")
