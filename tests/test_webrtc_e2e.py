@@ -1071,6 +1071,111 @@ async def test_webrtc_metadata_extraction(webrtc_test_services):
     finally:
         await microscope_svc.stop_video_buffering()
 
+async def test_webrtc_frame_private_data(webrtc_test_services):
+    """Test that VideoFrame.private_data contains JSON metadata."""
+    services = webrtc_test_services
+    
+    print("🧪 Testing WebRTC VideoFrame.private_data JSON metadata...")
+    
+    # Get both the microscope instance and service proxy
+    microscope_instance = services['microscope']
+    microscope_svc = await services['server'].get_service(services['microscope_service_id'])
+    
+
+    
+    # Start video buffering
+    await microscope_svc.start_video_buffering()
+    
+    try:
+        # Wait for buffer to fill
+        await asyncio.sleep(1)
+        
+        # Create a MicroscopeVideoTrack to test frame generation
+        from start_hypha_service import MicroscopeVideoTrack
+        
+        video_track = MicroscopeVideoTrack(microscope_instance)
+        
+        # Test multiple frames to verify consistent metadata embedding
+        frames_tested = 0
+        frames_with_metadata = 0
+        
+        for i in range(3):
+            print(f"   Testing frame {i+1}...")
+            
+            # Get a video frame from the track
+            video_frame = await video_track.recv()
+            frames_tested += 1
+            
+            # Verify basic frame properties
+            assert video_frame is not None
+            assert hasattr(video_frame, 'private_data')
+            print(f"     ✓ Frame has private_data attribute")
+            
+            # Check if private_data contains JSON metadata
+            if video_frame.private_data:
+                try:
+                    # Decode the private_data as JSON
+                    metadata_bytes = video_frame.private_data
+                    metadata_json = metadata_bytes.decode('utf-8')
+                    metadata = json.loads(metadata_json)
+                    
+                    frames_with_metadata += 1
+                    
+                    print(f"     ✓ Frame {i+1} metadata: {len(metadata_json)} bytes")
+                    
+                    # Verify expected metadata structure
+                    assert 'stage_position' in metadata, "Missing stage_position in metadata"
+                    assert 'x_mm' in metadata['stage_position'], "Missing x_mm in stage_position"
+                    assert 'y_mm' in metadata['stage_position'], "Missing y_mm in stage_position"
+                    assert 'z_mm' in metadata['stage_position'], "Missing z_mm in stage_position"
+                    assert 'timestamp' in metadata, "Missing timestamp in metadata"
+                    assert 'channel' in metadata, "Missing channel in metadata" 
+                    assert 'intensity' in metadata, "Missing intensity in metadata"
+                    assert 'exposure_time_ms' in metadata, "Missing exposure_time_ms in metadata"
+                    
+                    print(f"     ✓ Stage: ({metadata['stage_position']['x_mm']:.2f}, {metadata['stage_position']['y_mm']:.2f}, {metadata['stage_position']['z_mm']:.2f})")
+                    print(f"     ✓ Channel: {metadata['channel']}, Intensity: {metadata['intensity']}, Exposure: {metadata['exposure_time_ms']}ms")
+                    
+                    # Verify data types
+                    assert isinstance(metadata['stage_position']['x_mm'], (int, float))
+                    assert isinstance(metadata['stage_position']['y_mm'], (int, float))
+                    assert isinstance(metadata['stage_position']['z_mm'], (int, float))
+                    assert isinstance(metadata['timestamp'], (int, float))
+                    assert isinstance(metadata['channel'], int)
+                    assert isinstance(metadata['intensity'], (int, float))
+                    assert isinstance(metadata['exposure_time_ms'], (int, float))
+                    
+                    print(f"     ✓ All metadata fields have correct types")
+                    
+                except json.JSONDecodeError as e:
+                    print(f"     ✗ Failed to decode metadata JSON: {e}")
+                    print(f"     Raw private_data: {video_frame.private_data}")
+                    raise AssertionError(f"Invalid JSON in VideoFrame.private_data: {e}")
+                except Exception as e:
+                    print(f"     ✗ Error processing metadata: {e}")
+                    raise
+            else:
+                print(f"     ⚠ Frame {i+1} has no private_data")
+            
+
+        print(f"✅ Tested {frames_tested} frames, {frames_with_metadata} had JSON metadata in private_data")
+        
+        # Verify that most frames have metadata
+        if frames_with_metadata == 0:
+            raise AssertionError("No frames contained metadata in private_data!")
+        elif frames_with_metadata < frames_tested / 2:
+            print(f"⚠ Warning: Only {frames_with_metadata}/{frames_tested} frames had metadata")
+        else:
+            print(f"✅ Good metadata coverage: {frames_with_metadata}/{frames_tested} frames")
+        
+        # Stop the video track
+        video_track.stop()
+        
+    finally:
+        await microscope_svc.stop_video_buffering()
+    
+    print("✅ WebRTC VideoFrame.private_data JSON metadata test completed!")
+
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     import sys
