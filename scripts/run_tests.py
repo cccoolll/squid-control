@@ -64,6 +64,11 @@ def main():
         action="store_true",
         help="Run simulation tests only"
     )
+    parser.add_argument(
+        "--webrtc-only",
+        action="store_true",
+        help="Run only WebRTC integration tests (requires network access and tokens)"
+    )
     
     args = parser.parse_args()
 
@@ -79,12 +84,20 @@ def main():
         cmd.append("tests/test_squid_controller.py")
         print("🧪 Running UNIT TESTS only")
     elif args.integration_only:
-        cmd.extend(["-m", "integration"])
+        cmd.extend(["-m", "integration", "--ignore=tests/test_webrtc_e2e.py"])
         cmd.append("tests/")
-        print("🌐 Running INTEGRATION TESTS only (requires network and tokens)")
+        print("🌐 Running INTEGRATION TESTS only (excluding WebRTC tests)")
+        print("📹 Use --webrtc-only to run WebRTC tests separately")
         # Check for required tokens
         if not os.environ.get("AGENT_LENS_WORKSPACE_TOKEN"):
             print("⚠️  WARNING: AGENT_LENS_WORKSPACE_TOKEN not set - integration tests may fail")
+            print("   Set the token with: export AGENT_LENS_WORKSPACE_TOKEN=your_token")
+    elif args.webrtc_only:
+        cmd.append("tests/test_webrtc_e2e.py")
+        print("📹 Running WEBRTC INTEGRATION TESTS only (requires network and tokens)")
+        # Check for required tokens
+        if not os.environ.get("AGENT_LENS_WORKSPACE_TOKEN"):
+            print("⚠️  WARNING: AGENT_LENS_WORKSPACE_TOKEN not set - WebRTC tests may fail")
             print("   Set the token with: export AGENT_LENS_WORKSPACE_TOKEN=your_token")
     elif args.skip_integration:
         cmd.extend(["-m", "not integration"]) 
