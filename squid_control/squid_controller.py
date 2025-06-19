@@ -397,9 +397,12 @@ class SquidController:
         if illumination_settings is None:
             # Default settings if none provided
             illumination_settings = [
-                {'channel': 'BF LED matrix full', 'intensity': 28.0, 'exposure_time': 20.0},
-                {'channel': 'Fluorescence 488 nm Ex', 'intensity': 27.0, 'exposure_time': 60.0},
-                {'channel': 'Fluorescence 561 nm Ex', 'intensity': 98.0, 'exposure_time': 100.0}
+                {'channel': 'BF LED matrix full', 'intensity': 18, 'exposure_time': 37},
+                {'channel': 'Fluorescence 405 nm Ex', 'intensity': 45, 'exposure_time': 30},
+                {'channel': 'Fluorescence 488 nm Ex', 'intensity': 30, 'exposure_time': 200},
+                {'channel': 'Fluorescence 561 nm Ex', 'intensity': 100, 'exposure_time': 200},
+                {'channel': 'Fluorescence 638 nm Ex', 'intensity': 100, 'exposure_time': 200},
+                {'channel': 'Fluorescence 730 nm Ex', 'intensity': 100, 'exposure_time': 200},
             ]
         
         # Update configurations with custom settings
