@@ -1300,8 +1300,8 @@ class Microscope:
             if illumination_settings is None:
                 logger.warning("No illumination settings provided, using default settings")
                 illumination_settings = [
-                    {'channel': 'BF LED matrix full', 'intensity': 18, 'exposure_time': 37},
-                    {'channel': 'Fluorescence 405 nm Ex', 'intensity': 41, 'exposure_time': 100},
+                    {'channel': 'BF LED matrix full', 'intensity': 18, 'exposure_time': 10},
+                    {'channel': 'Fluorescence 405 nm Ex', 'intensity': 31, 'exposure_time': 100},
                     {'channel': 'Fluorescence 488 nm Ex', 'intensity': 100, 'exposure_time': 200},
                     {'channel': 'Fluorescence 561 nm Ex', 'intensity': 100, 'exposure_time': 200},
                     {'channel': 'Fluorescence 638 nm Ex', 'intensity': 100, 'exposure_time': 200},
