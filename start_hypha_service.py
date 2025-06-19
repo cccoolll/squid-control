@@ -2283,15 +2283,12 @@ class Microscope:
                         # LATENCY MEASUREMENT: Start timing image processing
                         T_process_start = time.time()
                         
-                        processed_frame = self._process_raw_frame(
+                        processed_frame, gray_level_stats = self._process_raw_frame(
                             raw_frame, frame_width=self.buffer_frame_width, frame_height=self.buffer_frame_height
                         )
                         
                         # LATENCY MEASUREMENT: End timing image processing
                         T_process_complete = time.time()
-                        
-                        # Calculate gray level statistics on the original processed frame BEFORE compression
-                        gray_level_stats = self._calculate_gray_level_statistics(processed_frame)
                         
                         # LATENCY MEASUREMENT: Start timing JPEG compression
                         T_compress_start = time.time()
@@ -2402,6 +2399,9 @@ class Microscope:
             else:
                 processed_frame = raw_frame.copy()
             
+            # Calculate gray level statistics on original frame BEFORE min/max adjustments
+            gray_level_stats = self._calculate_gray_level_statistics(processed_frame)
+            
             # OPTIMIZATION 2: Robust contrast adjustment (fixed)
             min_val = self.video_contrast_min
             max_val = self.video_contrast_max
@@ -2440,11 +2440,13 @@ class Microscope:
             elif processed_frame.shape[2] == 1:
                 processed_frame = np.repeat(processed_frame, 3, axis=2)
             
-            return processed_frame
+            return processed_frame, gray_level_stats
             
         except Exception as e:
             logger.error(f"Error processing frame: {e}")
-            return self._create_placeholder_frame(frame_width, frame_height, f"Processing Error: {str(e)}")
+            placeholder_frame = self._create_placeholder_frame(frame_width, frame_height, f"Processing Error: {str(e)}")
+            placeholder_stats = self._calculate_gray_level_statistics(placeholder_frame)
+            return placeholder_frame, placeholder_stats
             
     def _create_placeholder_frame(self, width, height, message="No Frame Available"):
         """Create a placeholder frame with error message"""
