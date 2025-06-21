@@ -743,9 +743,8 @@ class Microscope:
         task_name = "one_new_frame"
         self.task_status[task_name] = "started"
         
-        # Stop video buffering temporarily to prevent camera overload
-        video_buffering_was_running = self.frame_acquisition_running
-        if video_buffering_was_running:
+        # Stop video buffering to prevent camera overload
+        if self.frame_acquisition_running:
             logger.info("Stopping video buffering for one_new_frame operation to prevent camera conflicts")
             await self.stop_video_buffering()
             # Wait a moment for the buffering to fully stop
@@ -781,12 +780,6 @@ class Microscope:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to get new frame: {e}")
             raise e
-        finally:
-            # Restart video buffering if it was running before
-            if video_buffering_was_running:
-                logger.info("Restarting video buffering after one_new_frame operation")
-                await asyncio.sleep(0.1)  # Brief pause before restarting
-                await self.start_video_buffering()
 
     @schema_function(skip_self=True)
     async def get_video_frame(self, frame_width: int=Field(750, description="Width of the video frame"), frame_height: int=Field(750, description="Height of the video frame"), context=None):
@@ -1207,9 +1200,8 @@ class Microscope:
         task_name = "snap"
         self.task_status[task_name] = "started"
         
-        # Stop video buffering temporarily to prevent camera overload
-        video_buffering_was_running = self.frame_acquisition_running
-        if video_buffering_was_running:
+        # Stop video buffering to prevent camera overload
+        if self.frame_acquisition_running:
             logger.info("Stopping video buffering for snap operation to prevent camera conflicts")
             await self.stop_video_buffering()
             # Wait a moment for the buffering to fully stop
@@ -1245,12 +1237,6 @@ class Microscope:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to snap image: {e}")
             raise e
-        finally:
-            # Restart video buffering if it was running before
-            if video_buffering_was_running:
-                logger.info("Restarting video buffering after snap operation")
-                await asyncio.sleep(0.1)  # Brief pause before restarting
-                await self.start_video_buffering()
 
     @schema_function(skip_self=True)
     def open_illumination(self, context=None):
