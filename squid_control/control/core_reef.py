@@ -3035,6 +3035,8 @@ class MultiPointController:
     def set_selected_configurations_with_settings(self, illumination_settings):
         """
         Set selected configurations with custom illumination settings.
+        Updates the original configurations directly so the custom settings 
+        will be saved in the experiment metadata.
         
         Args:
             illumination_settings (list): List of dictionaries containing:
@@ -3049,38 +3051,27 @@ class MultiPointController:
             intensity = setting['intensity']
             exposure_time = setting['exposure_time']
             
-            # Find the configuration by name
-            config = None
+            # Find the original configuration by name
+            original_config = None
             for cfg in self.configurationManager.configurations:
                 if cfg.name == channel_name:
-                    config = cfg
+                    original_config = cfg
                     break
             
-            if config is None:
+            if original_config is None:
                 print(f"Warning: Configuration '{channel_name}' not found, skipping...")
                 continue
             
-            # Update the configuration in memory with new settings
-            # Update intensity
-            self.configurationManager.update_configuration_without_writing(
-                config.id, 'IlluminationIntensity', intensity
-            )
-            # Update exposure time  
-            self.configurationManager.update_configuration_without_writing(
-                config.id, 'ExposureTime', exposure_time
-            )
+            # UPDATE the original configuration directly with new settings
+            # This ensures the custom values will be saved in the experiment metadata
+            original_config.illumination_intensity = float(intensity)
+            original_config.exposure_time = float(exposure_time)
             
-            # Update the config object itself for immediate use
-            config.illumination_intensity = float(intensity)
-            config.exposure_time = float(exposure_time)
-            
-            # Add to selected configurations
-            self.selected_configurations.append(config)
+            # Add the updated configuration to selected configurations
+            self.selected_configurations.append(original_config)
             
             print(f"Updated configuration '{channel_name}': intensity={intensity}, exposure_time={exposure_time}")
         
-        # Save the updated configurations to file
-        self.configurationManager.save_configurations()
         print(f"Selected {len(self.selected_configurations)} configurations with custom settings")
 
     def run_acquisition(self, location_list=None): 
