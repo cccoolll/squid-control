@@ -86,12 +86,13 @@ def load_multipoint_custom_script(startup_function_uri: str):
 class ObjectiveStore:
     def __init__(
         self,
-        objectives_dict=CONFIG.OBJECTIVES,
-        default_objective=CONFIG.DEFAULT_OBJECTIVE,
+        objectives_dict=None,
+        default_objective=None,
     ):
-        self.objectives_dict = objectives_dict
-        self.default_objective = default_objective
-        self.current_objective = default_objective
+        # Get current CONFIG values at runtime instead of at class definition time
+        self.objectives_dict = objectives_dict if objectives_dict is not None else CONFIG.OBJECTIVES
+        self.default_objective = default_objective if default_objective is not None else CONFIG.DEFAULT_OBJECTIVE
+        self.current_objective = self.default_objective
 
 
 class StreamHandler:
