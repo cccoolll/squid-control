@@ -979,6 +979,214 @@ def test_well_boundary_detection():
     
     print("✅ Well boundary detection tests passed!")
 
+# Test microscope configuration functionality
+def test_get_microscope_configuration_data():
+    """Test the get_microscope_configuration_data function from config.py."""
+    print("Testing get_microscope_configuration_data function...")
+    
+    from squid_control.control.config import get_microscope_configuration_data
+    
+    # Test 1: Get all configuration
+    print("1. Testing 'all' configuration...")
+    config_all = get_microscope_configuration_data(config_section="all", include_defaults=True, is_simulation=True, is_local=False)
+    
+    assert isinstance(config_all, dict)
+    assert "success" in config_all
+    assert config_all["success"] == True
+    assert "data" in config_all
+    assert "config_section" in config_all
+    assert config_all["config_section"] == "all"
+    
+    # Verify all expected sections are present
+    expected_sections = ["camera", "stage", "illumination", "acquisition", "limits", "hardware", "wellplate", "optics", "autofocus"]
+    config_data = config_all["data"]
+    
+    for section in expected_sections:
+        assert section in config_data, f"Missing section: {section}"
+        assert isinstance(config_data[section], dict)
+    
+    print(f"   Found {len(config_data)} configuration sections")
+    
+    # Test 2: Get specific sections
+    print("2. Testing specific configuration sections...")
+    test_sections = ["camera", "stage", "illumination", "wellplate"]
+    
+    for section in test_sections:
+        print(f"   Testing section: {section}")
+        config_section_data = get_microscope_configuration_data(config_section=section, include_defaults=True, is_simulation=True, is_local=False)
+        
+        assert isinstance(config_section_data, dict)
+        assert config_section_data["success"] == True
+        assert config_section_data["config_section"] == section
+        assert section in config_section_data["data"]
+        
+        section_data = config_section_data["data"][section]
+        assert isinstance(section_data, dict)
+        assert len(section_data) > 0
+        print(f"      Section '{section}' has {len(section_data)} parameters")
+    
+    # Test 3: Test with different parameters
+    print("3. Testing different parameter combinations...")
+    
+    # Test without defaults
+    config_no_defaults = get_microscope_configuration_data(config_section="camera", include_defaults=False, is_simulation=True, is_local=False)
+    assert config_no_defaults["success"] == True
+    assert config_no_defaults["include_defaults"] == False
+    
+    # Test non-simulation mode
+    config_non_sim = get_microscope_configuration_data(config_section="stage", include_defaults=True, is_simulation=False, is_local=False)
+    assert config_non_sim["success"] == True
+    assert config_non_sim["is_simulation"] == False
+    
+    # Test local mode
+    config_local = get_microscope_configuration_data(config_section="illumination", include_defaults=True, is_simulation=True, is_local=True)
+    assert config_local["success"] == True
+    assert config_local["is_local"] == True
+    
+    # Test 4: Test invalid section
+    print("4. Testing invalid configuration section...")
+    config_invalid = get_microscope_configuration_data(config_section="invalid_section", include_defaults=True, is_simulation=True, is_local=False)
+    
+    # Should still return success but with empty or minimal data
+    assert isinstance(config_invalid, dict)
+    assert "success" in config_invalid
+    # Invalid sections might still succeed but return limited data
+    
+    print("✅ get_microscope_configuration_data tests passed!")
+
+def test_configuration_data_content():
+    """Test the content and structure of configuration data."""
+    print("Testing configuration data content and structure...")
+    
+    from squid_control.control.config import get_microscope_configuration_data
+    
+    # Test 1: Camera configuration content
+    print("1. Testing camera configuration content...")
+    camera_config = get_microscope_configuration_data(config_section="camera", include_defaults=True, is_simulation=True, is_local=False)
+    camera_data = camera_config["data"]["camera"]
+    
+    # Check for expected camera parameters
+    expected_camera_params = ["sensor_format", "pixel_format", "image_acquisition", "frame_rate"]
+    for param in expected_camera_params:
+        if param in camera_data:
+            print(f"   Found camera parameter: {param}")
+            assert isinstance(camera_data[param], (dict, str, int, float, list))
+    
+    # Test 2: Stage configuration content
+    print("2. Testing stage configuration content...")
+    stage_config = get_microscope_configuration_data(config_section="stage", include_defaults=True, is_simulation=True, is_local=False)
+    stage_data = stage_config["data"]["stage"]
+    
+    # Check for expected stage parameters
+    expected_stage_params = ["movement", "positioning", "motors", "limits"]
+    for param in expected_stage_params:
+        if param in stage_data:
+            print(f"   Found stage parameter: {param}")
+            assert isinstance(stage_data[param], (dict, str, int, float, list))
+    
+    # Test 3: Illumination configuration content
+    print("3. Testing illumination configuration content...")
+    illumination_config = get_microscope_configuration_data(config_section="illumination", include_defaults=True, is_simulation=True, is_local=False)
+    illumination_data = illumination_config["data"]["illumination"]
+    
+    # Check for expected illumination parameters
+    expected_illumination_params = ["led_matrix", "channels", "intensity_control"]
+    for param in expected_illumination_params:
+        if param in illumination_data:
+            print(f"   Found illumination parameter: {param}")
+            assert isinstance(illumination_data[param], (dict, str, int, float, list))
+    
+    # Test 4: Well plate configuration content
+    print("4. Testing well plate configuration content...")
+    wellplate_config = get_microscope_configuration_data(config_section="wellplate", include_defaults=True, is_simulation=True, is_local=False)
+    wellplate_data = wellplate_config["data"]["wellplate"]
+    
+    # Check for expected well plate parameters
+    expected_wellplate_params = ["formats", "dimensions", "well_spacing"]
+    for param in expected_wellplate_params:
+        if param in wellplate_data:
+            print(f"   Found wellplate parameter: {param}")
+            assert isinstance(wellplate_data[param], (dict, str, int, float, list))
+    
+    # Test 5: Test metadata fields
+    print("5. Testing metadata fields...")
+    all_config = get_microscope_configuration_data(config_section="all", include_defaults=True, is_simulation=True, is_local=False)
+    
+    # Check for expected metadata
+    expected_metadata = ["success", "config_section", "include_defaults", "is_simulation", "is_local", "timestamp"]
+    for field in expected_metadata:
+        if field in all_config:
+            print(f"   Found metadata field: {field}")
+        # timestamp and some fields might be optional
+    
+    assert "success" in all_config
+    assert "config_section" in all_config
+    assert "data" in all_config
+    
+    print("✅ Configuration data content tests passed!")
+
+def test_configuration_json_serializable():
+    """Test that configuration data is JSON serializable."""
+    print("Testing configuration data JSON serialization...")
+    
+    from squid_control.control.config import get_microscope_configuration_data
+    import json
+    
+    # Test 1: Serialize all configuration
+    print("1. Testing full configuration JSON serialization...")
+    config_all = get_microscope_configuration_data(config_section="all", include_defaults=True, is_simulation=True, is_local=False)
+    
+    try:
+        json_str = json.dumps(config_all, indent=2)
+        assert len(json_str) > 100  # Should be substantial JSON
+        print(f"   JSON serialization successful, length: {len(json_str)} characters")
+        
+        # Test deserialization
+        deserialized = json.loads(json_str)
+        assert deserialized == config_all
+        print("   JSON deserialization successful")
+        
+    except (TypeError, ValueError) as e:
+        pytest.fail(f"Configuration data is not JSON serializable: {e}")
+    
+    # Test 2: Serialize individual sections
+    print("2. Testing individual section JSON serialization...")
+    test_sections = ["camera", "stage", "illumination"]
+    
+    for section in test_sections:
+        section_config = get_microscope_configuration_data(config_section=section, include_defaults=True, is_simulation=True, is_local=False)
+        
+        try:
+            json_str = json.dumps(section_config)
+            deserialized = json.loads(json_str)
+            assert deserialized == section_config
+            print(f"   Section '{section}' JSON serialization: ✓")
+            
+        except (TypeError, ValueError) as e:
+            pytest.fail(f"Section '{section}' data is not JSON serializable: {e}")
+    
+    # Test 3: Test with different parameter combinations
+    print("3. Testing JSON serialization with different parameters...")
+    parameter_combinations = [
+        {"config_section": "hardware", "include_defaults": False, "is_simulation": True, "is_local": False},
+        {"config_section": "optics", "include_defaults": True, "is_simulation": False, "is_local": True},
+        {"config_section": "autofocus", "include_defaults": False, "is_simulation": False, "is_local": False},
+    ]
+    
+    for params in parameter_combinations:
+        config_data = get_microscope_configuration_data(**params)
+        
+        try:
+            json_str = json.dumps(config_data)
+            deserialized = json.loads(json_str)
+            assert deserialized == config_data
+            print(f"   Parameters {params}: ✓")
+            
+        except (TypeError, ValueError) as e:
+            pytest.fail(f"Configuration with parameters {params} is not JSON serializable: {e}")
+    
+    print("✅ Configuration JSON serialization tests passed!")
+
 if __name__ == "__main__":
     print("Running Well Position Detection Tests...")
     print("=" * 50)
@@ -993,5 +1201,13 @@ if __name__ == "__main__":
     print()
     test_well_boundary_detection()
     
+    print("Running Microscope Configuration Tests...")
     print("=" * 50)
-    print("🎉 All well position detection tests passed!")
+    test_get_microscope_configuration_data()
+    print()
+    test_configuration_data_content()
+    print()
+    test_configuration_json_serializable()
+    
+    print("=" * 50)
+    print("🎉 All tests passed!")

@@ -1734,6 +1734,11 @@ class Microscope:
         """Get the current well location based on the stage position."""
         wellplate_type: str = Field('96', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')")
 
+    class GetMicroscopeConfigurationInput(BaseModel):
+        """Get microscope configuration information in JSON format."""
+        config_section: str = Field('all', description="Configuration section to retrieve ('all', 'camera', 'stage', 'illumination', 'acquisition', 'limits', 'hardware', 'wellplate', 'optics', 'autofocus')")
+        include_defaults: bool = Field(True, description="Whether to include default values from config.py")
+
     async def inspect_tool(self, images: List[dict], query: str, context_description: str) -> str:
         image_infos = [
             self.ImageInfo(url=image_dict['http_url'], title=image_dict.get('title'))
@@ -1819,6 +1824,10 @@ class Microscope:
         response = self.get_current_well_location(config.wellplate_type, context)
         return {"result": response}
 
+    def get_microscope_configuration_schema(self, config: GetMicroscopeConfigurationInput, context=None):
+        response = self.get_microscope_configuration(config.config_section, config.include_defaults, context)
+        return {"result": response}
+
     def get_schema(self, context=None):
         return {
             "move_by_distance": self.MoveByDistanceInput.model_json_schema(),
@@ -1838,6 +1847,7 @@ class Microscope:
             "find_similar_image_text": self.FindSimilarImageTextInput.model_json_schema(),
             "find_similar_image_image": self.FindSimilarImageImageInput.model_json_schema(),
             "get_current_well_location": self.GetCurrentWellLocationInput.model_json_schema(),
+            "get_microscope_configuration": self.GetMicroscopeConfigurationInput.model_json_schema(),
         }
 
     async def start_hypha_service(self, server, service_id, run_in_executor=None):
@@ -1893,6 +1903,7 @@ class Microscope:
                 "get_video_buffering_status": self.get_video_buffering_status,
                 "set_video_fps": self.set_video_fps,
                 "get_current_well_location": self.get_current_well_location,
+                "get_microscope_configuration": self.get_microscope_configuration,
                 "get_canvas_chunk": self.get_canvas_chunk,
             },
         )
@@ -1935,6 +1946,7 @@ class Microscope:
                 "find_similar_image_text": self.find_similar_image_text_schema,
                 "find_similar_image_image": self.find_similar_image_image_schema,
                 "get_current_well_location": self.get_current_well_location_schema,
+                "get_microscope_configuration": self.get_microscope_configuration_schema,
             }
         }
 
@@ -2694,6 +2706,36 @@ class Microscope:
             return {
                 "success": False,
                 "message": f"Failed to configure video buffer frame size: {str(e)}"
+            }
+
+    @schema_function(skip_self=True)
+    def get_microscope_configuration(self, config_section: str = Field("all", description="Configuration section to retrieve ('all', 'camera', 'stage', 'illumination', 'acquisition', 'limits', 'hardware', 'wellplate', 'optics', 'autofocus')"), include_defaults: bool = Field(True, description="Whether to include default values from config.py"), context=None):
+        """
+        Get microscope configuration information in JSON format.
+        Input: config_section: str = Field("all", description="Configuration section to retrieve ('all', 'camera', 'stage', 'illumination', 'acquisition', 'limits', 'hardware', 'wellplate', 'optics', 'autofocus')"), include_defaults: bool = Field(True, description="Whether to include default values from config.py")
+        Returns: Configuration data as a JSON object
+        """
+        try:
+            from squid_control.control.config import get_microscope_configuration_data
+            
+            # Call the configuration function from config.py
+            result = get_microscope_configuration_data(
+                config_section=config_section,
+                include_defaults=include_defaults,
+                is_simulation=self.is_simulation,
+                is_local=self.is_local
+            )
+            
+            logger.info(f"Retrieved microscope configuration for section: {config_section}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to get microscope configuration: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "section": config_section
             }
 
     @schema_function(skip_self=True)
