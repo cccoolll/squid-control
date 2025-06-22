@@ -850,7 +850,9 @@ class SquidController:
             print("Simulation mode: Skipping stage close operations")
             # Close only essential components that don't cause delays
             if hasattr(self, 'liveController'):
-                self.liveController.close()
+                # LiveController doesn't have close method, just stop live
+                if hasattr(self.liveController, 'stop_live'):
+                    self.liveController.stop_live()
             if hasattr(self, 'camera'):
                 self.camera.close()
             return
@@ -858,7 +860,9 @@ class SquidController:
         # Normal close operations for real hardware
         print("closing the system")
         if hasattr(self, 'liveController'):
-            self.liveController.close()
+            # LiveController doesn't have close method, just stop live
+            if hasattr(self.liveController, 'stop_live'):
+                self.liveController.stop_live()
         if hasattr(self, 'camera'):
             self.camera.close()
         
@@ -891,9 +895,19 @@ class SquidController:
         # Validate velocity ranges (microcontroller limit is 65535/100 = 655.35 mm/s)
         max_velocity_limit = 655.35
         if velocity_x_mm_per_s > max_velocity_limit or velocity_x_mm_per_s <= 0:
-            raise ValueError(f"X velocity must be between 0 and {max_velocity_limit} mm/s")
+            return {
+                "success": False,
+                "message": f"X velocity must be between 0 and {max_velocity_limit} mm/s (exclusive of 0)",
+                "velocity_x_mm_per_s": velocity_x_mm_per_s,
+                "velocity_y_mm_per_s": velocity_y_mm_per_s
+            }
         if velocity_y_mm_per_s > max_velocity_limit or velocity_y_mm_per_s <= 0:
-            raise ValueError(f"Y velocity must be between 0 and {max_velocity_limit} mm/s")
+            return {
+                "success": False,
+                "message": f"Y velocity must be between 0 and {max_velocity_limit} mm/s (exclusive of 0)",
+                "velocity_x_mm_per_s": velocity_x_mm_per_s,
+                "velocity_y_mm_per_s": velocity_y_mm_per_s
+            }
         
         try:
             # Set X axis velocity (keeping default acceleration)
@@ -909,7 +923,7 @@ class SquidController:
             self.microcontroller.wait_till_operation_is_completed()
             
             return {
-                "status": "success",
+                "success": True,
                 "message": "Stage velocity updated successfully",
                 "velocity_x_mm_per_s": velocity_x_mm_per_s,
                 "velocity_y_mm_per_s": velocity_y_mm_per_s,
@@ -919,7 +933,7 @@ class SquidController:
             
         except Exception as e:
             return {
-                "status": "error", 
+                "success": False, 
                 "message": f"Failed to set stage velocity: {str(e)}",
                 "velocity_x_mm_per_s": velocity_x_mm_per_s,
                 "velocity_y_mm_per_s": velocity_y_mm_per_s
