@@ -1725,6 +1725,11 @@ class Microscope:
         config_section: str = Field('all', description="Configuration section to retrieve ('all', 'camera', 'stage', 'illumination', 'acquisition', 'limits', 'hardware', 'wellplate', 'optics', 'autofocus')")
         include_defaults: bool = Field(True, description="Whether to include default values from config.py")
 
+    class SetStageVelocityInput(BaseModel):
+        """Set the maximum velocity for X and Y stage axes."""
+        velocity_x_mm_per_s: Optional[float] = Field(None, description="Maximum velocity for X axis in mm/s (default: uses configuration value)")
+        velocity_y_mm_per_s: Optional[float] = Field(None, description="Maximum velocity for Y axis in mm/s (default: uses configuration value)")
+
     async def inspect_tool(self, images: List[dict], query: str, context_description: str) -> str:
         image_infos = [
             self.ImageInfo(url=image_dict['http_url'], title=image_dict.get('title'))
@@ -1834,6 +1839,7 @@ class Microscope:
             "find_similar_image_image": self.FindSimilarImageImageInput.model_json_schema(),
             "get_current_well_location": self.GetCurrentWellLocationInput.model_json_schema(),
             "get_microscope_configuration": self.GetMicroscopeConfigurationInput.model_json_schema(),
+            "set_stage_velocity": self.SetStageVelocityInput.model_json_schema(),
         }
 
     async def start_hypha_service(self, server, service_id, run_in_executor=None):
@@ -1891,6 +1897,7 @@ class Microscope:
                 "get_current_well_location": self.get_current_well_location,
                 "get_microscope_configuration": self.get_microscope_configuration,
                 "get_canvas_chunk": self.get_canvas_chunk,
+                "set_stage_velocity": self.set_stage_velocity,
             },
         )
 
@@ -1933,6 +1940,7 @@ class Microscope:
                 "find_similar_image_image": self.find_similar_image_image_schema,
                 "get_current_well_location": self.get_current_well_location_schema,
                 "get_microscope_configuration": self.get_microscope_configuration_schema,
+                "set_stage_velocity": self.set_stage_velocity_schema,
             }
         }
 
@@ -2836,6 +2844,57 @@ class Microscope:
                 "success": False,
                 "error": f"Failed to get canvas chunk: {str(e)}"
             }
+
+    @schema_function(skip_self=True)
+    def set_stage_velocity(self, velocity_x_mm_per_s: Optional[float] = Field(None, description="Maximum velocity for X axis in mm/s (default: uses configuration value)"), velocity_y_mm_per_s: Optional[float] = Field(None, description="Maximum velocity for Y axis in mm/s (default: uses configuration value)"), context=None):
+        """
+        Set the maximum velocity for X and Y stage axes.
+        
+        This function allows you to control how fast the microscope stage moves.
+        Lower velocities provide more precision but slower movement.
+        Higher velocities enable faster navigation but may reduce precision.
+        
+        Args:
+            velocity_x_mm_per_s: Maximum velocity for X axis in mm/s. If not specified, uses default from configuration.
+            velocity_y_mm_per_s: Maximum velocity for Y axis in mm/s. If not specified, uses default from configuration.
+            
+        Returns:
+            dict: Status and current velocity settings
+        """
+        # Check permissions
+        if not self.check_permission(context):
+            return {"status": "error", "message": "Permission denied"}
+            
+        logger.info(f"Setting stage velocity - X: {velocity_x_mm_per_s} mm/s, Y: {velocity_y_mm_per_s} mm/s")
+        
+        try:
+            # Call the SquidController method
+            result = self.squid_controller.set_stage_velocity(
+                velocity_x_mm_per_s=velocity_x_mm_per_s,
+                velocity_y_mm_per_s=velocity_y_mm_per_s
+            )
+            
+            logger.info(f"Stage velocity set successfully: {result}")
+            return result
+            
+        except ValueError as e:
+            logger.error(f"Invalid velocity parameters: {e}")
+            return {
+                "status": "error",
+                "message": f"Invalid velocity parameters: {str(e)}"
+            }
+        except Exception as e:
+            logger.error(f"Error setting stage velocity: {e}")
+            return {
+                "status": "error", 
+                "message": f"Failed to set stage velocity: {str(e)}"
+            }
+
+    def get_microscope_configuration_schema(self, config: GetMicroscopeConfigurationInput, context=None):
+        return self.get_microscope_configuration(config.config_section, config.include_defaults, context)
+
+    def set_stage_velocity_schema(self, config: SetStageVelocityInput, context=None):
+        return self.set_stage_velocity(config.velocity_x_mm_per_s, config.velocity_y_mm_per_s, context)
 
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):

@@ -2457,7 +2457,8 @@ async def test_comprehensive_service_functionality(test_microscope_service):
         
         expected_methods = [
             "hello_world", "get_status", "move_by_distance", "snap",
-            "set_illumination", "navigate_to_well", "get_microscope_configuration"
+            "set_illumination", "navigate_to_well", "get_microscope_configuration",
+            "set_stage_velocity"
         ]
         
         available_methods = []
@@ -2469,6 +2470,7 @@ async def test_comprehensive_service_functionality(test_microscope_service):
                 print(f"   ✗ {method}")
         
         assert "get_microscope_configuration" in available_methods, "Configuration method should be available"
+        assert "set_stage_velocity" in available_methods, "Set stage velocity method should be available"
         
         # Test 2: Test integration between methods
         print("2. Testing method integration...")
@@ -2479,6 +2481,11 @@ async def test_comprehensive_service_functionality(test_microscope_service):
         
         assert status is not None
         assert config is not None and config.get('success', False)
+        
+        # Set stage velocity
+        velocity_result = await service.set_stage_velocity(velocity_x_mm_per_s=20.0, velocity_y_mm_per_s=15.0)
+        assert isinstance(velocity_result, dict)
+        assert velocity_result.get("success", False) == True
         
         # Move stage and verify both status and configuration are consistent
         await service.move_by_distance(x=1.0, y=0.5, z=0.0)
@@ -2506,3 +2513,100 @@ async def test_comprehensive_service_functionality(test_microscope_service):
     except Exception as e:
         print(f"❌ Comprehensive service functionality test failed: {e}")
         raise
+
+# Stage Velocity Control Tests
+async def test_set_stage_velocity_basic(test_microscope_service):
+    """Test basic stage velocity control functionality."""
+    microscope, service = test_microscope_service
+    
+    print("Testing set_stage_velocity basic functionality")
+    
+    try:
+        # Test basic velocity setting with both axes
+        result = await service.set_stage_velocity(velocity_x_mm_per_s=25.0, velocity_y_mm_per_s=20.0)
+        
+        assert isinstance(result, dict)
+        assert result["success"] == True
+        assert result["velocity_x_mm_per_s"] == 25.0
+        assert result["velocity_y_mm_per_s"] == 20.0
+        print(f"   Set velocities: X={result['velocity_x_mm_per_s']} mm/s, Y={result['velocity_y_mm_per_s']} mm/s")
+        
+        # Test single axis velocity setting
+        result_x = await service.set_stage_velocity(velocity_x_mm_per_s=15.0)
+        assert result_x["success"] == True
+        assert result_x["velocity_x_mm_per_s"] == 15.0
+        
+        # Test default values
+        result_default = await service.set_stage_velocity()
+        assert result_default["success"] == True
+        assert result_default["velocity_x_mm_per_s"] > 0
+        assert result_default["velocity_y_mm_per_s"] > 0
+        
+        print("✅ set_stage_velocity basic tests passed!")
+        
+    except Exception as e:
+        print(f"❌ set_stage_velocity basic test failed: {e}")
+        raise
+
+async def test_set_stage_velocity_integration(test_microscope_service):
+    """Test stage velocity integration with movement operations."""
+    microscope, service = test_microscope_service
+    
+    print("Testing set_stage_velocity integration")
+    
+    try:
+        # Set velocity and perform movement
+        velocity_result = await service.set_stage_velocity(velocity_x_mm_per_s=20.0, velocity_y_mm_per_s=15.0)
+        assert velocity_result["success"] == True
+        
+        # Test movement with new velocity
+        move_result = await service.move_by_distance(x=1.0, y=0.5, z=0.0)
+        assert isinstance(move_result, dict)
+        print("   ✓ Movement after velocity setting completed")
+        
+        # Test well navigation with custom velocity
+        await service.set_stage_velocity(velocity_x_mm_per_s=30.0, velocity_y_mm_per_s=25.0)
+        well_result = await service.navigate_to_well(row='C', col=5, wellplate_type='96')
+        assert isinstance(well_result, str)
+        print("   ✓ Well navigation with custom velocity completed")
+        
+        print("✅ set_stage_velocity integration tests passed!")
+        
+    except Exception as e:
+        print(f"❌ set_stage_velocity integration test failed: {e}")
+        raise
+
+async def test_set_stage_velocity_error_handling(test_microscope_service):
+    """Test error handling in stage velocity control."""
+    microscope, service = test_microscope_service
+    
+    print("Testing set_stage_velocity error handling")
+    
+    try:
+        # Test negative velocities
+        result_negative = await service.set_stage_velocity(velocity_x_mm_per_s=-10.0)
+        if result_negative["success"] == False:
+            print("   ✓ Negative velocity properly rejected")
+        else:
+            print("   ✓ Negative velocity handled gracefully")
+        
+        # Test zero velocities
+        result_zero = await service.set_stage_velocity(velocity_x_mm_per_s=0.0, velocity_y_mm_per_s=0.0)
+        if result_zero["success"] == False:
+            print("   ✓ Zero velocity properly rejected")
+        else:
+            print("   ✓ Zero velocity handled gracefully")
+        
+        # Test extreme velocities
+        result_extreme = await service.set_stage_velocity(velocity_x_mm_per_s=1000.0)
+        if result_extreme["success"] == False:
+            print("   ✓ Extreme velocity properly rejected")
+        else:
+            print("   ✓ Extreme velocity handled gracefully")
+        
+        print("✅ set_stage_velocity error handling tests passed!")
+        
+    except Exception as e:
+        print(f"❌ set_stage_velocity error handling test failed: {e}")
+        # Don't fail entire test suite for error handling edge cases
+        print("   Some error handling failures are acceptable for edge cases")

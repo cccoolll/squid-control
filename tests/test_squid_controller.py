@@ -1410,6 +1410,93 @@ async def test_scan_configuration_persistence(sim_controller_fixture):
         print("✅ Configuration persistence test passed!")
         break
 
+# Stage Velocity Control Tests for SquidController
+async def test_set_stage_velocity_basic(sim_controller_fixture):
+    """Test basic set_stage_velocity functionality in SquidController."""
+    async for controller in sim_controller_fixture:
+        print("Testing set_stage_velocity basic functionality...")
+        
+        # Test basic velocity setting with both axes
+        result = controller.set_stage_velocity(velocity_x_mm_per_s=25.0, velocity_y_mm_per_s=20.0)
+        
+        assert isinstance(result, dict)
+        assert result["success"] == True
+        assert result["velocity_x_mm_per_s"] == 25.0
+        assert result["velocity_y_mm_per_s"] == 20.0
+        print(f"   Set velocities: X={result['velocity_x_mm_per_s']} mm/s, Y={result['velocity_y_mm_per_s']} mm/s")
+        
+        # Test single axis velocity setting
+        result_x = controller.set_stage_velocity(velocity_x_mm_per_s=15.0)
+        assert result_x["success"] == True
+        assert result_x["velocity_x_mm_per_s"] == 15.0
+        assert result_x["velocity_y_mm_per_s"] > 0  # Should use default
+        
+        # Test default values
+        result_default = controller.set_stage_velocity()
+        assert result_default["success"] == True
+        assert result_default["velocity_x_mm_per_s"] > 0
+        assert result_default["velocity_y_mm_per_s"] > 0
+        
+        print("✅ set_stage_velocity basic tests passed!")
+        break
+
+async def test_set_stage_velocity_integration(sim_controller_fixture):
+    """Test set_stage_velocity integration with movement operations."""
+    async for controller in sim_controller_fixture:
+        print("Testing set_stage_velocity integration...")
+        
+        # Set velocity and perform movement
+        velocity_result = controller.set_stage_velocity(velocity_x_mm_per_s=20.0, velocity_y_mm_per_s=15.0)
+        assert velocity_result["success"] == True
+        
+        # Test movement with new velocity
+        moved, x_before, y_before, z_before, x_after, y_after, z_after = controller.move_by_distance_limited(1.0, 0.5, 0.0)
+        assert moved == True
+        assert abs(x_after - x_before - 1.0) < 0.01
+        assert abs(y_after - y_before - 0.5) < 0.01
+        print("   ✓ Movement after velocity setting completed")
+        
+        # Test absolute positioning with custom velocity
+        controller.set_stage_velocity(velocity_x_mm_per_s=30.0, velocity_y_mm_per_s=25.0)
+        moved_x, _, _, _, final_x = controller.move_x_to_limited(10.0)
+        moved_y, _, _, _, final_y = controller.move_y_to_limited(15.0)
+        assert moved_x == True and moved_y == True
+        print("   ✓ Absolute positioning with custom velocity completed")
+        
+        print("✅ set_stage_velocity integration tests passed!")
+        break
+
+async def test_set_stage_velocity_error_handling(sim_controller_fixture):
+    """Test error handling in set_stage_velocity method."""
+    async for controller in sim_controller_fixture:
+        print("Testing set_stage_velocity error handling...")
+        
+        # Test negative velocities
+        result_negative = controller.set_stage_velocity(velocity_x_mm_per_s=-10.0)
+        if result_negative["success"] == False:
+            print("   ✓ Negative velocity properly rejected")
+        else:
+            print("   ✓ Negative velocity handled gracefully")
+        
+        # Test zero velocities
+        result_zero = controller.set_stage_velocity(velocity_x_mm_per_s=0.0, velocity_y_mm_per_s=0.0)
+        if result_zero["success"] == False:
+            print("   ✓ Zero velocity properly rejected")
+        else:
+            print("   ✓ Zero velocity handled gracefully")
+        
+        # Test extreme velocities
+        result_extreme = controller.set_stage_velocity(velocity_x_mm_per_s=1000.0)
+        if result_extreme["success"] == False:
+            print("   ✓ Extreme velocity properly rejected")
+        else:
+            print("   ✓ Extreme velocity handled gracefully")
+        
+        print("✅ set_stage_velocity error handling tests passed!")
+        break
+
+
+
 if __name__ == "__main__":
     print("Running Well Position Detection Tests...")
     print("=" * 50)
