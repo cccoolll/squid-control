@@ -102,11 +102,12 @@ jobs:
         PYTHONPATH: "."
         AGENT_LENS_WORKSPACE_TOKEN: ${{ secrets.AGENT_LENS_WORKSPACE_TOKEN }}
       run: |
-        echo "🌐 Running INTEGRATION TESTS (Hypha RPC services)"
+        echo "🌐 Running INTEGRATION TESTS (Hypha RPC services, excluding WebRTC)"
         echo "🔗 Requires network access and workspace token"
+        echo "📹 WebRTC tests run separately in webrtc-integration-tests job"
         echo "💡 To run locally: python scripts/run_tests.py --integration-only"
         echo ""
-        python scripts/run_tests.py --integration-only --verbose
+        python -m pytest tests/ -m "integration" --ignore=tests/test_webrtc_e2e.py --verbose --junitxml=pytest-results.xml
 
     - name: Upload integration test results
       if: always()
@@ -115,6 +116,38 @@ jobs:
         name: integration-test-results-${{ matrix.python-version }}
         path: pytest-results.xml
         retention-days: 30
+
+    - name: Run WebRTC integration tests
+      shell: bash
+      env:
+        SQUID_SIMULATION_MODE: "true"
+        PYTHONPATH: "."
+        AGENT_LENS_WORKSPACE_TOKEN: ${{ secrets.AGENT_LENS_WORKSPACE_TOKEN }}
+      run: |
+        echo ""
+        echo "📹 Running WEBRTC INTEGRATION TESTS (Video streaming & metadata)"
+        echo "🔗 Requires network access and workspace token"
+        echo "🌐 Tests WebRTC video streaming and browser integration"
+        echo "💡 To run locally: python scripts/run_tests.py --webrtc-only"
+        echo ""
+        python scripts/run_tests.py --webrtc-only --verbose
+
+    - name: Upload WebRTC test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: webrtc-test-results-${{ matrix.python-version }}
+        path: pytest-results.xml
+        retention-days: 30
+
+    - name: Upload WebRTC test HTML artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: webrtc-test-html-${{ matrix.python-version }}
+        path: /tmp/webrtc_test*.html
+        retention-days: 7
+        if-no-files-found: ignore
 
   coverage-report:
     runs-on: ubuntu-latest

@@ -58,9 +58,6 @@ class SquidController:
     def __init__(self,is_simulation, *args, **kwargs):
         super().__init__(*args,**kwargs)
         self.data_channel = None
-        #load objects
-        self.objectiveStore = core.ObjectiveStore()
-        camera, camera_fc = get_camera(CONFIG.CAMERA_TYPE)
         self.is_simulation = is_simulation
         self.is_busy = False
         if is_simulation:
@@ -70,6 +67,11 @@ class SquidController:
 
         print(f"Loading configuration from: {config_path}")
         load_config(config_path, False)
+        
+        # Create objects after configuration is loaded to use updated CONFIG values
+        self.objectiveStore = core.ObjectiveStore()
+        print(f"ObjectiveStore initialized with default objective: {self.objectiveStore.current_objective}")
+        camera, camera_fc = get_camera(CONFIG.CAMERA_TYPE)
         # load objects
         if self.is_simulation:
             if CONFIG.ENABLE_SPINNING_DISK_CONFOCAL and SERIAL_PERIPHERALS_AVAILABLE:
@@ -345,6 +347,8 @@ class SquidController:
             objective = self.objectiveStore.objectives_dict[object_dict_key]
             magnification =  float(objective['magnification'])
             objective_tube_lens_mm = float(objective['tube_lens_f_mm'])
+            print(f"Using objective: {object_dict_key}")
+            print(f"CONFIG.DEFAULT_OBJECTIVE: {CONFIG.DEFAULT_OBJECTIVE}")
             print(f"Tube lens: {tube_lens_mm} mm, Objective tube lens: {objective_tube_lens_mm} mm, Pixel size: {pixel_size_um} µm, Magnification: {magnification}")
         except:
             raise ValueError("Missing required parameters for pixel size calculation.")
@@ -397,9 +401,12 @@ class SquidController:
         if illumination_settings is None:
             # Default settings if none provided
             illumination_settings = [
-                {'channel': 'BF LED matrix full', 'intensity': 28.0, 'exposure_time': 20.0},
-                {'channel': 'Fluorescence 488 nm Ex', 'intensity': 27.0, 'exposure_time': 60.0},
-                {'channel': 'Fluorescence 561 nm Ex', 'intensity': 98.0, 'exposure_time': 100.0}
+                {'channel': 'BF LED matrix full', 'intensity': 18, 'exposure_time': 37},
+                {'channel': 'Fluorescence 405 nm Ex', 'intensity': 45, 'exposure_time': 30},
+                {'channel': 'Fluorescence 488 nm Ex', 'intensity': 30, 'exposure_time': 100},
+                {'channel': 'Fluorescence 561 nm Ex', 'intensity': 100, 'exposure_time': 200},
+                {'channel': 'Fluorescence 638 nm Ex', 'intensity': 100, 'exposure_time': 200},
+                {'channel': 'Fluorescence 730 nm Ex', 'intensity': 100, 'exposure_time': 200},
             ]
         
         # Update configurations with custom settings
