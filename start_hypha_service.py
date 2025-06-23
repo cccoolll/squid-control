@@ -1850,56 +1850,63 @@ class Microscope:
         if run_in_executor is None:
             run_in_executor = "test" not in service_id.lower()
         
-        svc = await server.register_service(
-            {
-                "name": "Microscope Control Service",
-                "id": service_id,
-                "config": {
-                    "visibility": "public",
-                    "run_in_executor": run_in_executor
-                },
-                "type": "echo",
-                "hello_world": self.hello_world,
-                "is_service_healthy": self.is_service_healthy,
-                "move_by_distance": self.move_by_distance,
-                "snap": self.snap,
-                "one_new_frame": self.one_new_frame,
-                "get_video_frame": self.get_video_frame,
-                "off_illumination": self.close_illumination,
-                "on_illumination": self.open_illumination,
-                "set_illumination": self.set_illumination,
-                "set_camera_exposure": self.set_camera_exposure,
-                "scan_well_plate": self.scan_well_plate,
-                "scan_well_plate_simulated": self.scan_well_plate_simulated,
-                "stop_scan": self.stop_scan,
-                "home_stage": self.home_stage,
-                "return_stage": self.return_stage,
-                "navigate_to_well": self.navigate_to_well,
-                "move_to_position": self.move_to_position,
-                "move_to_loading_position": self.move_to_loading_position,
-                "set_simulated_sample_data_alias": self.set_simulated_sample_data_alias,
-                "get_simulated_sample_data_alias": self.get_simulated_sample_data_alias,
-                "auto_focus": self.auto_focus,
-                "do_laser_autofocus": self.do_laser_autofocus,
-                "set_laser_reference": self.set_laser_reference,
-                "get_status": self.get_status,
-                "update_parameters_from_client": self.update_parameters_from_client,
-                "get_chatbot_url": self.get_chatbot_url,
-                "get_task_status": self.get_task_status,
-                "get_all_task_status": self.get_all_task_status,
-                "reset_task_status": self.reset_task_status,
-                "reset_all_task_status": self.reset_all_task_status,
-                "adjust_video_frame": self.adjust_video_frame,
-                "start_video_buffering": self.start_video_buffering_api,
-                "stop_video_buffering": self.stop_video_buffering_api,
-                "get_video_buffering_status": self.get_video_buffering_status,
-                "set_video_fps": self.set_video_fps,
-                "get_current_well_location": self.get_current_well_location,
-                "get_microscope_configuration": self.get_microscope_configuration,
-                "get_canvas_chunk": self.get_canvas_chunk,
-                "set_stage_velocity": self.set_stage_velocity,
+        # Build the service configuration
+        service_config = {
+            "name": "Microscope Control Service",
+            "id": service_id,
+            "config": {
+                "visibility": "public",
+                "run_in_executor": run_in_executor
             },
-        )
+            "type": "echo",
+            "hello_world": self.hello_world,
+            "is_service_healthy": self.is_service_healthy,
+            "move_by_distance": self.move_by_distance,
+            "snap": self.snap,
+            "one_new_frame": self.one_new_frame,
+            "get_video_frame": self.get_video_frame,
+            "off_illumination": self.close_illumination,
+            "on_illumination": self.open_illumination,
+            "set_illumination": self.set_illumination,
+            "set_camera_exposure": self.set_camera_exposure,
+            "scan_well_plate": self.scan_well_plate,
+            "scan_well_plate_simulated": self.scan_well_plate_simulated,
+            "stop_scan": self.stop_scan,
+            "home_stage": self.home_stage,
+            "return_stage": self.return_stage,
+            "navigate_to_well": self.navigate_to_well,
+            "move_to_position": self.move_to_position,
+            "move_to_loading_position": self.move_to_loading_position,
+            "set_simulated_sample_data_alias": self.set_simulated_sample_data_alias,
+            "get_simulated_sample_data_alias": self.get_simulated_sample_data_alias,
+            "auto_focus": self.auto_focus,
+            "do_laser_autofocus": self.do_laser_autofocus,
+            "set_laser_reference": self.set_laser_reference,
+            "get_status": self.get_status,
+            "update_parameters_from_client": self.update_parameters_from_client,
+            "get_chatbot_url": self.get_chatbot_url,
+            "get_task_status": self.get_task_status,
+            "get_all_task_status": self.get_all_task_status,
+            "reset_task_status": self.reset_task_status,
+            "reset_all_task_status": self.reset_all_task_status,
+            "adjust_video_frame": self.adjust_video_frame,
+            "start_video_buffering": self.start_video_buffering_api,
+            "stop_video_buffering": self.stop_video_buffering_api,
+            "get_video_buffering_status": self.get_video_buffering_status,
+            "set_video_fps": self.set_video_fps,
+            "get_current_well_location": self.get_current_well_location,
+            "get_microscope_configuration": self.get_microscope_configuration,
+            "set_stage_velocity": self.set_stage_velocity,
+        }
+        
+        # Only register get_canvas_chunk when not in local mode
+        if not self.is_local:
+            service_config["get_canvas_chunk"] = self.get_canvas_chunk
+            logger.info("Registered get_canvas_chunk service (remote mode)")
+        else:
+            logger.info("Skipped get_canvas_chunk service registration (local mode)")
+
+        svc = await server.register_service(service_config)
 
         logger.info(
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
