@@ -2717,7 +2717,8 @@ class Microscope:
                 config_section=config_section,
                 include_defaults=include_defaults,
                 is_simulation=self.is_simulation,
-                is_local=self.is_local
+                is_local=self.is_local,
+                squid_controller=self.squidController
             )
             
             logger.info(f"Retrieved microscope configuration for section: {config_section}")

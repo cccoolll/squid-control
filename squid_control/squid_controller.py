@@ -350,8 +350,9 @@ class SquidController:
             print(f"Using objective: {object_dict_key}")
             print(f"CONFIG.DEFAULT_OBJECTIVE: {CONFIG.DEFAULT_OBJECTIVE}")
             print(f"Tube lens: {tube_lens_mm} mm, Objective tube lens: {objective_tube_lens_mm} mm, Pixel size: {pixel_size_um} µm, Magnification: {magnification}")
-        except:
-            raise ValueError("Missing required parameters for pixel size calculation.")
+        except Exception as e:
+            logging.error(f"Missing required parameters for pixel size calculation: {e}")
+            return
 
         self.pixel_size_xy = pixel_size_um / (magnification / (objective_tube_lens_mm / tube_lens_mm))
         self.pixel_size_xy = self.pixel_size_xy * self.pixel_size_adjument_factor

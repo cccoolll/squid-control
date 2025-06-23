@@ -749,7 +749,7 @@ class SIMULATED_CAMERA:
     MAGNIFICATION_FACTOR = 80
 
 
-def get_microscope_configuration_data(config_section="all", include_defaults=True, is_simulation=False, is_local=False):
+def get_microscope_configuration_data(config_section="all", include_defaults=True, is_simulation=False, is_local=False, squid_controller=None):
     """
     Get microscope configuration information in JSON format.
     
@@ -758,6 +758,7 @@ def get_microscope_configuration_data(config_section="all", include_defaults=Tru
         include_defaults (bool): Whether to include default values from config.py
         is_simulation (bool): Whether the microscope is in simulation mode
         is_local (bool): Whether the microscope is in local mode
+        squid_controller (object, optional): Instance of SquidController to get dynamic data. Defaults to None.
     
     Returns:
         dict: Configuration data as a dictionary
@@ -930,6 +931,13 @@ def get_microscope_configuration_data(config_section="all", include_defaults=Tru
             "default_objective": getattr(CONFIG, 'DEFAULT_OBJECTIVE', '20x'),
             "tube_lens_mm": getattr(CONFIG, 'TUBE_LENS_MM', 50),
         }
+        if squid_controller:
+            try:
+                squid_controller.get_pixel_size()
+                pixel_size_um = squid_controller.pixel_size_xy
+                config_data["optics"]["calculated_pixel_size_mm"] = pixel_size_um / 1000.0
+            except Exception as e:
+                config_data["optics"]["calculated_pixel_size_mm"] = f"Error: {e}"
     
     # Add autofocus configuration
     if config_section.lower() == "all" or config_section.lower() == "autofocus":
