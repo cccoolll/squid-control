@@ -867,9 +867,20 @@ class SquidController:
         if hasattr(self, 'camera'):
             self.camera.close()
         
-        # move to the loading position
-        if hasattr(self, 'slidePositionController'):
-            self.slidePositionController.move_to_slide_loading_position()
+        # Move to safe position synchronously (no threading)
+        if hasattr(self, 'navigationController') and hasattr(self, 'microcontroller'):
+            try:
+                self.navigationController.move_x_to(30)
+                while self.microcontroller.is_busy():
+                    time.sleep(0.005)
+                self.navigationController.move_y_to(30)
+                while self.microcontroller.is_busy():
+                    time.sleep(0.005)
+            except Exception as e:
+                print(f"Error moving to safe position during close: {e}")
+        
+        if hasattr(self, 'camera_focus'):
+            self.camera_focus.close()
         
         if hasattr(self, 'microcontroller'):
             self.microcontroller.close()
