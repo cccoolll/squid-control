@@ -2862,10 +2862,6 @@ class Microscope:
         Returns:
             dict: Status and current velocity settings
         """
-        # Check permissions
-        if not self.check_permission(context):
-            return {"status": "error", "message": "Permission denied"}
-            
         logger.info(f"Setting stage velocity - X: {velocity_x_mm_per_s} mm/s, Y: {velocity_y_mm_per_s} mm/s")
         
         try:
