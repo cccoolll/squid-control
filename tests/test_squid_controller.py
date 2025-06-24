@@ -1295,7 +1295,7 @@ async def test_plate_scan_with_custom_illumination_settings(sim_controller_fixtu
             assert config.illumination_intensity == expected['intensity'], f"Intensity mismatch for {config.name}: expected {expected['intensity']}, got {config.illumination_intensity}"
             assert config.exposure_time == expected['exposure_time'], f"Exposure time mismatch for {config.name}: expected {expected['exposure_time']}, got {config.exposure_time}"
         
-        # Test experiment creation and XML saving
+        # Test experiment creation and XML saving in a safe temp directory
         controller.multipointController.set_base_path(tempfile.gettempdir())
         controller.multipointController.start_new_experiment("test_custom_illumination")
         
@@ -1336,17 +1336,27 @@ async def test_plate_scan_with_custom_illumination_settings(sim_controller_fixtu
             assert saved_config['intensity'] == expected['intensity'], f"Intensity mismatch for {expected['channel']}: expected {expected['intensity']}, got {saved_config['intensity']}"
             assert saved_config['exposure'] == expected['exposure_time'], f"Exposure time mismatch for {expected['channel']}: expected {expected['exposure_time']}, got {saved_config['exposure']}"
         
-        # Test plate scan functionality (mock to avoid actual scanning)
+        # Clean up the first experiment folder before testing plate_scan
+        import shutil
+        shutil.rmtree(experiment_folder)
+        
+        # Test plate scan functionality - mock all file operations to avoid path issues
         original_run_acquisition = controller.multipointController.run_acquisition
         original_move_to_scanning = controller.move_to_scaning_position
+        original_start_new_experiment = controller.multipointController.start_new_experiment
         
         def mock_run_acquisition():
             pass
         def mock_move_to_scanning():
             pass
+        def mock_start_new_experiment(experiment_id):
+            # Just set the experiment ID without creating files
+            controller.multipointController.experiment_ID = f"{experiment_id}_mocked"
+            pass
             
         controller.multipointController.run_acquisition = mock_run_acquisition
         controller.move_to_scaning_position = mock_move_to_scanning
+        controller.multipointController.start_new_experiment = mock_start_new_experiment
         
         # Test plate scan with the custom settings
         controller.plate_scan(
@@ -1360,15 +1370,20 @@ async def test_plate_scan_with_custom_illumination_settings(sim_controller_fixtu
         # Restore original methods
         controller.multipointController.run_acquisition = original_run_acquisition
         controller.move_to_scaning_position = original_move_to_scanning
+        controller.multipointController.start_new_experiment = original_start_new_experiment
         
         # Verify scan parameters were set correctly
         assert controller.multipointController.NX == 2
         assert controller.multipointController.NY == 2
         assert not controller.is_busy
         
-        # Cleanup
-        import shutil
-        shutil.rmtree(experiment_folder)
+        # Verify configurations are still properly set after plate_scan
+        assert len(controller.multipointController.selected_configurations) == expected_count
+        for i, config in enumerate(controller.multipointController.selected_configurations):
+            expected = custom_settings[i]
+            assert config.illumination_intensity == expected['intensity']
+            assert config.exposure_time == expected['exposure_time']
+        
         print("✅ Custom illumination settings test passed - configurations saved correctly in XML!")
         break
 
