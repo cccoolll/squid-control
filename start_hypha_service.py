@@ -2873,7 +2873,7 @@ class Microscope:
         
         try:
             # Call the SquidController method
-            result = self.squid_controller.set_stage_velocity(
+            result = self.squidController.set_stage_velocity(
                 velocity_x_mm_per_s=velocity_x_mm_per_s,
                 velocity_y_mm_per_s=velocity_y_mm_per_s
             )
