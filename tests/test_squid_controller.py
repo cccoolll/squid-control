@@ -1236,23 +1236,36 @@ async def test_configuration_setup(sim_controller_fixture):
         print("✅ Configuration setup test passed!")
         break
 
+
+
 @pytest.mark.timeout(60)
-async def test_start_new_experiment(sim_controller_fixture):
-    """Test new experiment creation with configuration saving."""
+async def test_plate_scan_with_custom_illumination_settings(sim_controller_fixture):
+    """Test plate scanning with custom illumination settings and verify they are saved correctly."""
     async for controller in sim_controller_fixture:
-        # Set up illumination settings
-        settings = [
-            {'channel': 'BF LED matrix full', 'intensity': 30.0, 'exposure_time': 20.0},
-            {'channel': 'Fluorescence 488 nm Ex', 'intensity': 70.0, 'exposure_time': 120.0},
+        # Set up custom illumination settings
+        custom_settings = [
+            {'channel': 'BF LED matrix full', 'intensity': 25.0, 'exposure_time': 15.0},
+            {'channel': 'Fluorescence 405 nm Ex', 'intensity': 80.0, 'exposure_time': 120.0},
+            {'channel': 'Fluorescence 488 nm Ex', 'intensity': 60.0, 'exposure_time': 90.0},
+            {'channel': 'Fluorescence 561 nm Ex', 'intensity': 95.0, 'exposure_time': 180.0},
         ]
         
-        controller.multipointController.set_selected_configurations_with_settings(settings)
+        # Test setting configurations with custom settings
+        controller.multipointController.set_selected_configurations_with_settings(custom_settings)
+        
+        # Verify configurations were applied in memory
+        assert len(controller.multipointController.selected_configurations) == 4
+        for i, config in enumerate(controller.multipointController.selected_configurations):
+            expected = custom_settings[i]
+            assert config.name == expected['channel']
+            assert config.illumination_intensity == expected['intensity']
+            assert config.exposure_time == expected['exposure_time']
+        
+        # Test experiment creation and XML saving
         controller.multipointController.set_base_path(tempfile.gettempdir())
+        controller.multipointController.start_new_experiment("test_custom_illumination")
         
-        # Start experiment
-        controller.multipointController.start_new_experiment("test_experiment")
-        
-        # Verify files created
+        # Verify experiment folder and files were created
         experiment_folder = os.path.join(controller.multipointController.base_path, controller.multipointController.experiment_ID)
         config_file = os.path.join(experiment_folder, "configurations.xml")
         params_file = os.path.join(experiment_folder, "acquisition parameters.json")
@@ -1261,171 +1274,64 @@ async def test_start_new_experiment(sim_controller_fixture):
         assert os.path.exists(config_file)
         assert os.path.exists(params_file)
         
-        # Verify configurations saved correctly in XML
+        # Parse and validate the saved XML configuration
         import xml.etree.ElementTree as ET
         tree = ET.parse(config_file)
         root = tree.getroot()
         
-        saved_configs = []
-        for config_elem in root.findall('.//Configuration'):
-            selected_elem = config_elem.find('Selected')
-            if selected_elem is not None and selected_elem.text == '1':
-                name_elem = config_elem.find('Name')
-                intensity_elem = config_elem.find('IlluminationIntensity')
-                exposure_elem = config_elem.find('ExposureTime')
-                
-                if all(elem is not None for elem in [name_elem, intensity_elem, exposure_elem]):
-                    saved_configs.append({
-                        'name': name_elem.text,
-                        'intensity': float(intensity_elem.text),
-                        'exposure': float(exposure_elem.text)
-                    })
+        # Find all selected configurations in the XML (correct XML structure)
+        selected_modes = []
+        for mode in root.findall('.//mode[@Selected="1"]'):
+            selected_modes.append({
+                'name': mode.get('Name'),
+                'intensity': float(mode.get('IlluminationIntensity')),
+                'exposure': float(mode.get('ExposureTime'))
+            })
         
-        # Verify custom values were saved (check if any configurations were saved)
-        if len(saved_configs) >= 2:
-            bf_config = next((c for c in saved_configs if c['name'] == 'BF LED matrix full'), None)
-            fl_config = next((c for c in saved_configs if c['name'] == 'Fluorescence 488 nm Ex'), None)
-            
-            if bf_config:
-                assert bf_config['intensity'] == 30.0
-                assert bf_config['exposure'] == 20.0
-            if fl_config:
-                assert fl_config['intensity'] == 70.0
-                assert fl_config['exposure'] == 120.0
-        else:
-            # If no selected configs found, at least verify the configurations were applied in memory
-            assert len(controller.multipointController.selected_configurations) == 2
-            print("   Warning: XML may not have saved selected flags, but configurations applied in memory")
+        # Verify that custom settings were correctly saved in XML
+        assert len(selected_modes) >= 4, f"Expected at least 4 selected modes, found {len(selected_modes)}"
         
-        # Cleanup
-        import shutil
-        shutil.rmtree(experiment_folder)
-        print("✅ New experiment test passed!")
-        break
-
-@pytest.mark.timeout(60)
-async def test_plate_scan_functionality(sim_controller_fixture):
-    """Test plate scanning functionality with different illumination settings."""
-    async for controller in sim_controller_fixture:
-        # Test with multiple channels and different settings
-        scan_settings = [
-            {'channel': 'BF LED matrix full', 'intensity': 15.0, 'exposure_time': 10.0},
-            {'channel': 'Fluorescence 405 nm Ex', 'intensity': 50.0, 'exposure_time': 100.0},
-            {'channel': 'Fluorescence 488 nm Ex', 'intensity': 40.0, 'exposure_time': 80.0},
-            {'channel': 'Fluorescence 561 nm Ex', 'intensity': 75.0, 'exposure_time': 150.0},
-            {'channel': 'Fluorescence 638 nm Ex', 'intensity': 90.0, 'exposure_time': 200.0},
-            {'channel': 'Fluorescence 730 nm Ex', 'intensity': 40.0, 'exposure_time': 200.0},
-        ]
+        # Check each custom setting was saved correctly
+        for expected in custom_settings:
+            saved_config = next((mode for mode in selected_modes if mode['name'] == expected['channel']), None)
+            assert saved_config is not None, f"Configuration '{expected['channel']}' not found in saved XML"
+            assert saved_config['intensity'] == expected['intensity'], f"Intensity mismatch for {expected['channel']}: expected {expected['intensity']}, got {saved_config['intensity']}"
+            assert saved_config['exposure'] == expected['exposure_time'], f"Exposure time mismatch for {expected['channel']}: expected {expected['exposure_time']}, got {saved_config['exposure']}"
         
-        # Mock both acquisition and experiment creation to avoid file operations
+        # Test plate scan functionality (mock to avoid actual scanning)
         original_run_acquisition = controller.multipointController.run_acquisition
-        original_start_new_experiment = controller.multipointController.start_new_experiment
+        original_move_to_scanning = controller.move_to_scaning_position
         
         def mock_run_acquisition():
-            pass  # Do nothing
-        
-        def mock_start_new_experiment(experiment_id):
-            controller.multipointController.experiment_ID = experiment_id
-            # Don't create actual folders
             pass
-        
+        def mock_move_to_scanning():
+            pass
+            
         controller.multipointController.run_acquisition = mock_run_acquisition
-        controller.multipointController.start_new_experiment = mock_start_new_experiment
+        controller.move_to_scaning_position = mock_move_to_scanning
         
-        # Test plate scan with custom settings
+        # Test plate scan with the custom settings
         controller.plate_scan(
             well_plate_type='96',
-            illumination_settings=scan_settings,
+            illumination_settings=custom_settings,
             scanning_zone=[(0, 0), (1, 1)],  # A1 to B2
             Nx=2, Ny=2,
-            action_ID='test_scan'
+            action_ID='test_custom_scan'
         )
         
         # Restore original methods
         controller.multipointController.run_acquisition = original_run_acquisition
-        controller.multipointController.start_new_experiment = original_start_new_experiment
+        controller.move_to_scaning_position = original_move_to_scanning
         
-        # Verify configurations were applied correctly
-        assert len(controller.multipointController.selected_configurations) == 6
-        
-        for i, config in enumerate(controller.multipointController.selected_configurations):
-            expected = scan_settings[i]
-            assert config.name == expected['channel']
-            assert config.illumination_intensity == expected['intensity']
-            assert config.exposure_time == expected['exposure_time']
-        
-        # Verify scan parameters
+        # Verify scan parameters were set correctly
         assert controller.multipointController.NX == 2
         assert controller.multipointController.NY == 2
         assert not controller.is_busy
         
-        print("✅ Plate scan test passed!")
-        break
-
-@pytest.mark.timeout(60)
-async def test_scan_configuration_persistence(sim_controller_fixture):
-    """Test that scan configurations are saved correctly in experiment files."""
-    async for controller in sim_controller_fixture:
-        # Set up different illumination settings for testing
-        settings = [
-            {'channel': 'BF LED matrix full', 'intensity': 25.0, 'exposure_time': 15.0},
-            {'channel': 'Fluorescence 405 nm Ex', 'intensity': 85.0, 'exposure_time': 250.0},
-            {'channel': 'Fluorescence 561 nm Ex', 'intensity': 90.0, 'exposure_time': 300.0},
-        ]
-        
-        # Apply settings and create experiment
-        controller.multipointController.set_selected_configurations_with_settings(settings)
-        controller.multipointController.set_base_path(tempfile.gettempdir())
-        controller.multipointController.start_new_experiment("test_persistence")
-        
-        # Verify configurations persist after experiment creation
-        assert len(controller.multipointController.selected_configurations) == 3
-        
-        for i, config in enumerate(controller.multipointController.selected_configurations):
-            expected = settings[i]
-            assert config.name == expected['channel']
-            assert config.illumination_intensity == expected['intensity']
-            assert config.exposure_time == expected['exposure_time']
-        
-        # Verify configurations saved to XML file
-        experiment_folder = os.path.join(controller.multipointController.base_path, controller.multipointController.experiment_ID)
-        config_file = os.path.join(experiment_folder, "configurations.xml")
-        
-        import xml.etree.ElementTree as ET
-        tree = ET.parse(config_file)
-        root = tree.getroot()
-        
-        saved_configs = []
-        for config_elem in root.findall('.//Configuration'):
-            selected_elem = config_elem.find('Selected')
-            if selected_elem is not None and selected_elem.text == '1':
-                name_elem = config_elem.find('Name')
-                intensity_elem = config_elem.find('IlluminationIntensity')
-                exposure_elem = config_elem.find('ExposureTime')
-                
-                if all(elem is not None for elem in [name_elem, intensity_elem, exposure_elem]):
-                    saved_configs.append({
-                        'name': name_elem.text,
-                        'intensity': float(intensity_elem.text),
-                        'exposure': float(exposure_elem.text)
-                    })
-        
-        # Verify all settings were saved correctly (if any configurations were saved)
-        if len(saved_configs) >= 3:
-            for i, saved in enumerate(saved_configs):
-                expected = settings[i]
-                assert saved['name'] == expected['channel']
-                assert saved['intensity'] == expected['intensity']
-                assert saved['exposure'] == expected['exposure_time']
-        else:
-            # If no selected configs found, at least verify the configurations were applied in memory
-            assert len(controller.multipointController.selected_configurations) == 3
-            print("   Warning: XML may not have saved selected flags, but configurations applied in memory")
-        
         # Cleanup
         import shutil
         shutil.rmtree(experiment_folder)
-        print("✅ Configuration persistence test passed!")
+        print("✅ Custom illumination settings test passed - configurations saved correctly in XML!")
         break
 
 # Stage Velocity Control Tests for SquidController

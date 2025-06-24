@@ -3246,6 +3246,10 @@ class ConfigurationManager:
         for conf in self.configurations:
             self.update_configuration_without_writing(conf.id, "Selected", 0)
         for conf in selected_configurations:
+            # Update the actual configuration values from the selected configurations
+            # This ensures custom illumination settings are saved in the XML
+            self.update_configuration_without_writing(conf.id, "ExposureTime", conf.exposure_time)
+            self.update_configuration_without_writing(conf.id, "IlluminationIntensity", conf.illumination_intensity)
             self.update_configuration_without_writing(conf.id, "Selected", 1)
         self.write_configuration(filename)
         for conf in selected_configurations:

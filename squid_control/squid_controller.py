@@ -400,6 +400,7 @@ class SquidController:
             action_ID (str): Identifier for this scan
         """
         if illumination_settings is None:
+            logging.warning("No illumination settings provided, using default settings")
             # Default settings if none provided
             illumination_settings = [
                 {'channel': 'BF LED matrix full', 'intensity': 18, 'exposure_time': 37},
