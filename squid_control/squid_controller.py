@@ -1059,6 +1059,14 @@ class SquidController:
             
             logging.info('Normal scan with stitching completed')
             
+            # Save a preview image from the lowest resolution scale
+            try:
+                preview_path = self.zarr_canvas.save_preview(action_ID)
+                if preview_path:
+                    logging.info(f'Canvas preview saved at: {preview_path}')
+            except Exception as e:
+                logging.error(f'Failed to save canvas preview: {e}')
+            
         finally:
             self.is_busy = False
             # Stop the stitching task

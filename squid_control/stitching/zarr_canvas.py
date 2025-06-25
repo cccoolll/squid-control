@@ -9,6 +9,8 @@ from typing import Tuple, Optional, Dict, List
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
+from PIL import Image
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -325,4 +327,67 @@ class ZarrCanvas:
     def close(self):
         """Clean up resources."""
         self.executor.shutdown(wait=True)
-        logger.info("ZarrCanvas closed") 
+        logger.info("ZarrCanvas closed")
+    
+    def save_preview(self, action_ID: str = "canvas_preview"):
+        """Save a preview image of the entire canvas from the lowest resolution scale."""
+        if not hasattr(self, 'zarr_arrays') or not self.zarr_arrays:
+            logger.warning('No zarr arrays available for preview generation')
+            return None
+        
+        try:
+            # Use the highest scale level (lowest resolution)
+            scale_level = self.num_scales - 1
+            
+            logger.info(f'Generating preview image from scale{scale_level} for entire canvas')
+            
+            # Get the entire canvas at the lowest resolution
+            with self.zarr_lock:
+                zarr_array = self.zarr_arrays[scale_level]
+                # Get the entire array for the first channel (T=0, C=0, Z=0, all Y, all X)
+                preview_region = zarr_array[0, 0, 0, :, :]
+            
+            if preview_region.size == 0:
+                logger.warning('Preview region is empty, skipping preview generation')
+                return None
+            
+            # Convert to PIL Image
+            from PIL import Image
+            from datetime import datetime
+            
+            # Ensure data is uint8
+            if preview_region.dtype != np.uint8:
+                # Scale to 8-bit
+                if preview_region.max() > 0:
+                    preview_region = (preview_region / preview_region.max() * 255).astype(np.uint8)
+                else:
+                    preview_region = preview_region.astype(np.uint8)
+            
+            # Create PIL image
+            preview_img = Image.fromarray(preview_region)
+            
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            preview_filename = f'{action_ID}_preview_{timestamp}_scale{scale_level}.png'
+            
+            # Save in the same directory as the zarr canvas
+            preview_path = self.base_path / preview_filename
+            
+            # Save the image
+            preview_img.save(preview_path, 'PNG')
+            
+            # Calculate physical dimensions
+            scale_factor = 4 ** scale_level
+            pixel_size_at_scale = self.pixel_size_xy_um * scale_factor
+            width_mm = preview_region.shape[1] * pixel_size_at_scale / 1000
+            height_mm = preview_region.shape[0] * pixel_size_at_scale / 1000
+            
+            logger.info(f'Saved canvas preview image: {preview_path}')
+            logger.info(f'Preview image size: {preview_region.shape[1]}x{preview_region.shape[0]} pixels, '
+                        f'covering {width_mm:.1f}x{height_mm:.1f}mm canvas area')
+            
+            return str(preview_path)
+            
+        except Exception as e:
+            logger.error(f'Error generating canvas preview: {e}')
+            return None 
