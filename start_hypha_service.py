@@ -1897,6 +1897,10 @@ class Microscope:
             "get_current_well_location": self.get_current_well_location,
             "get_microscope_configuration": self.get_microscope_configuration,
             "set_stage_velocity": self.set_stage_velocity,
+            # Stitching functions
+            "normal_scan_with_stitching": self.normal_scan_with_stitching,
+            "get_stitched_region": self.get_stitched_region,
+            "reset_stitching_canvas": self.reset_stitching_canvas,
         }
         
         # Only register get_canvas_chunk when not in local mode
@@ -2899,6 +2903,213 @@ class Microscope:
 
     def set_stage_velocity_schema(self, config: SetStageVelocityInput, context=None):
         return self.set_stage_velocity(config.velocity_x_mm_per_s, config.velocity_y_mm_per_s, context)
+
+    @schema_function(skip_self=True)
+    async def normal_scan_with_stitching(self, start_x_mm: float = Field(20, description="Starting X position in millimeters"), 
+                                       start_y_mm: float = Field(20, description="Starting Y position in millimeters"),
+                                       Nx: int = Field(5, description="Number of positions in X direction"),
+                                       Ny: int = Field(5, description="Number of positions in Y direction"),
+                                       dx_mm: float = Field(0.9, description="Interval between positions in X (millimeters)"),
+                                       dy_mm: float = Field(0.9, description="Interval between positions in Y (millimeters)"),
+                                       illumination_settings: Optional[List[dict]] = Field(None, description="List of channel settings"),
+                                       do_contrast_autofocus: bool = Field(False, description="Whether to perform contrast-based autofocus"),
+                                       do_reflection_af: bool = Field(False, description="Whether to perform reflection-based autofocus"),
+                                       action_ID: str = Field('normal_scan_stitching', description="Identifier for this scan"),
+                                       context=None):
+        """
+        Perform a normal scan with live stitching to OME-Zarr canvas.
+        The images are saved to a zarr file that represents a spatial map of the scanned area.
+        
+        Args:
+            start_x_mm: Starting X position in millimeters
+            start_y_mm: Starting Y position in millimeters
+            Nx: Number of positions to scan in X direction
+            Ny: Number of positions to scan in Y direction
+            dx_mm: Distance between positions in X direction (millimeters)
+            dy_mm: Distance between positions in Y direction (millimeters)
+            illumination_settings: List of dictionaries with channel settings (optional)
+            do_contrast_autofocus: Enable contrast-based autofocus
+            do_reflection_af: Enable reflection-based autofocus
+            action_ID: Unique identifier for this scan
+            
+        Returns:
+            dict: Status of the scan
+        """
+        try:
+            # Set default illumination settings if not provided
+            if illumination_settings is None:
+                illumination_settings = [{'channel': 'BF LED matrix full', 'intensity': 50, 'exposure_time': 100}]
+            
+            logger.info(f"Starting normal scan with stitching: {Nx}x{Ny} positions from ({start_x_mm}, {start_y_mm})")
+            
+            # Ensure the squid controller has the new method
+            await self.squidController.normal_scan_with_stitching(
+                start_x_mm=start_x_mm,
+                start_y_mm=start_y_mm,
+                Nx=Nx,
+                Ny=Ny,
+                dx_mm=dx_mm,
+                dy_mm=dy_mm,
+                illumination_settings=illumination_settings,
+                do_contrast_autofocus=do_contrast_autofocus,
+                do_reflection_af=do_reflection_af,
+                action_ID=action_ID
+            )
+            
+            return {
+                "success": True,
+                "message": f"Normal scan with stitching completed successfully",
+                "scan_parameters": {
+                    "start_position": {"x_mm": start_x_mm, "y_mm": start_y_mm},
+                    "grid_size": {"nx": Nx, "ny": Ny},
+                    "step_size": {"dx_mm": dx_mm, "dy_mm": dy_mm},
+                    "total_area_mm2": (Nx * dx_mm) * (Ny * dy_mm)
+                }
+            }
+        except Exception as e:
+            logger.error(f"Failed to perform normal scan with stitching: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to perform normal scan: {str(e)}"
+            }
+    
+    @schema_function(skip_self=True)
+    def get_stitched_region(self, start_x_mm: float = Field(..., description="Starting X position in millimeters (top-left corner)"),
+                           start_y_mm: float = Field(..., description="Starting Y position in millimeters (top-left corner)"),
+                           width_mm: float = Field(5.0, description="Width of region in millimeters"),
+                           height_mm: float = Field(5.0, description="Height of region in millimeters"),
+                           scale_level: int = Field(0, description="Scale level (0=full resolution, 1=1/4, 2=1/16, etc)"),
+                           channel_name: str = Field('BF LED matrix full', description="Name of channel to retrieve"),
+                           output_format: str = Field('base64', description="Output format: 'base64' or 'array'"),
+                           context=None):
+        """
+        Get a region from the stitched canvas.
+        
+        This function retrieves a rectangular region from the stitched microscope image canvas.
+        The region is specified by its starting position (top-left corner) and dimensions in millimeters.
+        
+        Args:
+            start_x_mm: X coordinate of region starting position (top-left) in millimeters
+            start_y_mm: Y coordinate of region starting position (top-left) in millimeters
+            width_mm: Width of the region in millimeters
+            height_mm: Height of the region in millimeters
+            scale_level: Pyramid level to retrieve (0=highest resolution)
+            channel_name: Name of the channel to retrieve
+            output_format: Format for the output ('base64' for compressed image, 'array' for numpy array)
+            
+        Returns:
+            dict: Retrieved image data with metadata
+        """
+        try:
+            # Calculate center coordinates for the underlying function
+            center_x_mm = start_x_mm + width_mm / 2
+            center_y_mm = start_y_mm + height_mm / 2
+            
+            # Get the region from the zarr canvas
+            region = self.squidController.get_stitched_region(
+                center_x_mm=center_x_mm,
+                center_y_mm=center_y_mm,
+                width_mm=width_mm,
+                height_mm=height_mm,
+                scale_level=scale_level,
+                channel_name=channel_name
+            )
+            
+            if output_format == 'base64':
+                # Convert to base64 encoded PNG
+                import base64
+                from PIL import Image
+                import io
+                
+                # Ensure data is uint8
+                if region.dtype != np.uint8:
+                    region = (region / region.max() * 255).astype(np.uint8) if region.max() > 0 else region.astype(np.uint8)
+                
+                # Convert to PIL Image and encode
+                img = Image.fromarray(region)
+                buffer = io.BytesIO()
+                img.save(buffer, format='PNG')
+                img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                
+                return {
+                    "success": True,
+                    "data": img_base64,
+                    "format": "png_base64",
+                    "shape": region.shape,
+                    "dtype": str(region.dtype),
+                    "region": {
+                        "start_x_mm": start_x_mm,
+                        "start_y_mm": start_y_mm,
+                        "width_mm": width_mm,
+                        "height_mm": height_mm,
+                        "scale_level": scale_level,
+                        "channel": channel_name
+                    }
+                }
+            else:
+                # Return as array (will be serialized by Hypha)
+                return {
+                    "success": True,
+                    "data": region.tolist(),  # Convert to list for JSON serialization
+                    "format": "array",
+                    "shape": region.shape,
+                    "dtype": str(region.dtype),
+                    "region": {
+                        "start_x_mm": start_x_mm,
+                        "start_y_mm": start_y_mm,
+                        "width_mm": width_mm,
+                        "height_mm": height_mm,
+                        "scale_level": scale_level,
+                        "channel": channel_name
+                    }
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to get stitched region: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to retrieve stitched region: {str(e)}"
+            }
+    
+    @schema_function(skip_self=True)
+    def reset_stitching_canvas(self, context=None):
+        """
+        Reset the stitching canvas, clearing all stored images.
+        
+        This will delete the existing zarr canvas and prepare for a new scan.
+        
+        Returns:
+            dict: Status of the reset operation
+        """
+        try:
+            if hasattr(self.squidController, 'zarr_canvas') and self.squidController.zarr_canvas is not None:
+                # Close the existing canvas
+                self.squidController.zarr_canvas.close()
+                
+                # Delete the zarr directory
+                import shutil
+                if self.squidController.zarr_canvas.zarr_path.exists():
+                    shutil.rmtree(self.squidController.zarr_canvas.zarr_path)
+                
+                # Clear the reference
+                self.squidController.zarr_canvas = None
+                
+                logger.info("Stitching canvas reset successfully")
+                return {
+                    "success": True,
+                    "message": "Stitching canvas has been reset"
+                }
+            else:
+                return {
+                    "success": True,
+                    "message": "No stitching canvas to reset"
+                }
+        except Exception as e:
+            logger.error(f"Failed to reset stitching canvas: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to reset canvas: {str(e)}"
+            }
 
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):

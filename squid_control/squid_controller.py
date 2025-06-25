@@ -11,6 +11,8 @@ import matplotlib.path as mpath
 # Import serial_peripherals conditionally based on simulation mode
 import sys
 import numpy as np
+from squid_control.stitching.zarr_canvas import ZarrCanvas
+from pathlib import Path
 
 _is_simulation_mode = (
     "--simulation" in sys.argv or 
@@ -336,6 +338,8 @@ class SquidController:
         self.sample_data_alias = "agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38"
         self.get_pixel_size()
 
+        # Initialize empty zarr canvas for stitching
+        self._initialize_empty_canvas()
 
     def get_pixel_size(self):
         """Calculate pixel size based on imaging parameters."""
@@ -690,7 +694,7 @@ class SquidController:
             return True, x_pos_before, y_pos_before, z_pos_before, y
     
         return False, x_pos_before, y_pos_before, z_pos_before, y
-
+    
     def move_z_to_limited(self, z):
         x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
         self.navigationController.move_z_to_limited(z)
@@ -951,6 +955,253 @@ class SquidController:
                 "velocity_x_mm_per_s": velocity_x_mm_per_s,
                 "velocity_y_mm_per_s": velocity_y_mm_per_s
             }
+
+    async def normal_scan_with_stitching(self, start_x_mm, start_y_mm, Nx, Ny, dx_mm, dy_mm, 
+                                        illumination_settings=None, do_contrast_autofocus=False, 
+                                        do_reflection_af=False, action_ID='normal_scan_stitching'):
+        """
+        Normal scan with live stitching to OME-Zarr canvas.
+        
+        Args:
+            start_x_mm (float): Starting X position in mm
+            start_y_mm (float): Starting Y position in mm
+            Nx (int): Number of positions in X
+            Ny (int): Number of positions in Y
+            dx_mm (float): Interval between positions in X (mm)
+            dy_mm (float): Interval between positions in Y (mm)
+            illumination_settings (list): List of channel settings
+            do_contrast_autofocus (bool): Whether to perform contrast-based autofocus
+            do_reflection_af (bool): Whether to perform reflection-based autofocus
+            action_ID (str): Identifier for this scan
+        """
+        if illumination_settings is None:
+            illumination_settings = [
+                {'channel': 'BF LED matrix full', 'intensity': 50, 'exposure_time': 100}
+            ]
+        
+        # Initialize the Zarr canvas if not already done
+        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
+            await self._initialize_zarr_canvas(illumination_settings)
+        
+        # Start the background stitching task
+        await self.zarr_canvas.start_stitching()
+        
+        try:
+            self.is_busy = True
+            logging.info(f'Starting normal scan with stitching: {Nx}x{Ny} positions, dx={dx_mm}mm, dy={dy_mm}mm')
+            
+            # Map channel names to indices
+            channel_map = {
+                'BF LED matrix full': 0,
+                'Fluorescence 405 nm Ex': 11,
+                'Fluorescence 488 nm Ex': 12,
+                'Fluorescence 561 nm Ex': 14,
+                'Fluorescence 638 nm Ex': 13,
+                'Fluorescence 730 nm Ex': 15
+            }
+            
+            # Scan pattern: snake pattern for efficiency
+            for i in range(Ny):
+                for j in range(Nx):
+                    # Calculate position (snake pattern - reverse X on odd rows)
+                    if i % 2 == 0:
+                        x_idx = j
+                    else:
+                        x_idx = Nx - 1 - j
+                    
+                    x_mm = start_x_mm + x_idx * dx_mm
+                    y_mm = start_y_mm + i * dy_mm
+                    
+                    # Move to position
+                    self.navigationController.move_x_to(x_mm)
+                    self.navigationController.move_y_to(y_mm)
+                    while self.microcontroller.is_busy():
+                        await asyncio.sleep(0.005)
+                    
+                    # Let stage settle
+                    await asyncio.sleep(CONFIG.SCAN_STABILIZATION_TIME_MS_X / 1000)
+                    
+                    # Autofocus if requested (first position or periodically)
+                    if do_reflection_af and (i == 0 and j == 0):
+                        if hasattr(self, 'laserAutofocusController'):
+                            await self.do_laser_autofocus()
+                    elif do_contrast_autofocus and ((i * Nx + j) % CONFIG.Acquisition.NUMBER_OF_FOVS_PER_AF == 0):
+                        await self.do_autofocus()
+                    
+                    # Acquire images for each channel
+                    for idx, settings in enumerate(illumination_settings):
+                        channel_name = settings['channel']
+                        intensity = settings['intensity']
+                        exposure_time = settings['exposure_time']
+                        
+                        # Get channel index
+                        channel_idx = channel_map.get(channel_name, 0)
+                        
+                        # Snap image
+                        image = await self.snap_image(channel_idx, intensity, exposure_time)
+                        
+                        # Convert to 8-bit if needed
+                        if image.dtype != np.uint8:
+                            # Scale to 8-bit
+                            if image.dtype == np.uint16:
+                                image = (image / 256).astype(np.uint8)
+                            else:
+                                image = image.astype(np.uint8)
+                        
+                        # Add to stitching queue
+                        await self.zarr_canvas.add_image_async(
+                            image, x_mm, y_mm, 
+                            channel_idx=idx,  # Use the index in illumination_settings
+                            z_idx=0
+                        )
+                        
+                        logging.info(f'Added image at ({x_mm:.2f}, {y_mm:.2f}) for channel {channel_name}')
+            
+            logging.info('Normal scan with stitching completed')
+            
+        finally:
+            self.is_busy = False
+            # Stop the stitching task
+            await self.zarr_canvas.stop_stitching()
+    
+    async def _initialize_zarr_canvas(self, illumination_settings):
+        """Initialize the Zarr canvas for stitching."""
+        # Get channel names from illumination settings
+        channels = [settings['channel'] for settings in illumination_settings]
+        
+        # Check if we already have a canvas initialized
+        if hasattr(self, 'zarr_canvas') and self.zarr_canvas is not None:
+            # Check if the existing canvas has the same channels
+            if self.zarr_canvas.channels == channels:
+                logging.info('Using existing Zarr canvas with matching channels')
+                return
+            else:
+                # Close existing canvas and create new one with updated channels
+                logging.info('Closing existing canvas and creating new one with updated channels')
+                self.zarr_canvas.close()
+        
+        # Get the base path from environment variable
+        zarr_path = os.getenv('ZARR_PATH', '/tmp/zarr_canvas')
+        
+        # Define stage limits (from README)
+        stage_limits = {
+            'x_positive': 120,  # mm
+            'x_negative': 0,    # mm
+            'y_positive': 86,   # mm
+            'y_negative': 0,    # mm
+            'z_positive': 6     # mm
+        }
+        
+        # Create the canvas
+        self.zarr_canvas = ZarrCanvas(
+            base_path=zarr_path,
+            pixel_size_xy_um=self.pixel_size_xy,
+            stage_limits=stage_limits,
+            channels=channels
+        )
+        
+        # Initialize the OME-Zarr structure
+        self.zarr_canvas.initialize_canvas()
+        logging.info(f'Initialized Zarr canvas at {zarr_path} with channels: {channels}')
+    
+    def get_stitched_region(self, center_x_mm, center_y_mm, width_mm, height_mm, 
+                           scale_level=0, channel_name='BF LED matrix full'):
+        """
+        Get a region from the stitched canvas.
+        
+        Args:
+            center_x_mm (float): Center X position in mm
+            center_y_mm (float): Center Y position in mm
+            width_mm (float): Width of region in mm
+            height_mm (float): Height of region in mm
+            scale_level (int): Scale level (0=full res, 1=1/4, 2=1/16, etc)
+            channel_name (str): Name of channel to retrieve
+            
+        Returns:
+            np.ndarray: The requested region
+        """
+        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
+            raise RuntimeError("Zarr canvas not initialized. Run a scan first.")
+        
+        # Get channel index
+        try:
+            channel_idx = self.zarr_canvas.channels.index(channel_name)
+        except ValueError:
+            logging.warning(f"Channel {channel_name} not found, using first channel")
+            channel_idx = 0
+        
+        # Get the region
+        region = self.zarr_canvas.get_canvas_region(
+            center_x_mm, center_y_mm, width_mm, height_mm,
+            scale=scale_level, channel_idx=channel_idx
+        )
+        
+        return region
+
+    def _initialize_empty_canvas(self):
+        """Initialize an empty zarr canvas when the microscope starts up."""
+        try:
+            # Get the base path from environment variable
+            zarr_path = os.getenv('ZARR_PATH', '/tmp/zarr_canvas')
+            logging.info(f'ZARR_PATH environment variable: {os.getenv("ZARR_PATH", "not set (using default)")}')
+            logging.info(f'Initializing empty zarr canvas at: {zarr_path}')
+            
+            # Check if the directory is writable
+            zarr_dir = Path(zarr_path)
+            
+            # The actual zarr file will be at zarr_path/live_stitching.zarr
+            actual_zarr_path = zarr_dir / "live_stitching.zarr"
+            logging.info(f'Zarr file will be created at: {actual_zarr_path}')
+            
+            if not zarr_dir.exists():
+                logging.info(f'Creating zarr base directory: {zarr_dir}')
+                try:
+                    zarr_dir.mkdir(parents=True, exist_ok=True)
+                except PermissionError as e:
+                    raise RuntimeError(f"Cannot create zarr directory {zarr_dir}: Permission denied. Please check directory permissions or set ZARR_PATH to a writable location.")
+            
+            # Test write permissions
+            test_file = zarr_dir / 'test_write_permission.tmp'
+            try:
+                with open(test_file, 'w') as f:
+                    f.write('test')
+                test_file.unlink()  # Remove test file
+                logging.info(f'Write permission test successful for {zarr_dir}')
+            except (PermissionError, OSError) as e:
+                raise RuntimeError(f"No write permission for zarr directory {zarr_dir}: {e}. Please check directory permissions or set ZARR_PATH to a writable location.")
+            
+            # Define stage limits (from README)
+            stage_limits = {
+                'x_positive': 120,  # mm
+                'x_negative': 0,    # mm
+                'y_positive': 86,   # mm
+                'y_negative': 0,    # mm
+                'z_positive': 6     # mm
+            }
+            
+            # Default channels for initialization
+            default_channels = ['BF LED matrix full']
+            
+            # Create the canvas
+            self.zarr_canvas = ZarrCanvas(
+                base_path=zarr_path,
+                pixel_size_xy_um=self.pixel_size_xy,
+                stage_limits=stage_limits,
+                channels=default_channels
+            )
+            
+            # Initialize the OME-Zarr structure
+            self.zarr_canvas.initialize_canvas()
+            logging.info(f'Successfully initialized empty Zarr canvas at {actual_zarr_path} with pixel size {self.pixel_size_xy:.3f} µm')
+            
+        except Exception as e:
+            logging.error(f'Failed to initialize empty zarr canvas: {e}')
+            logging.info('Canvas will be initialized later when needed for scanning')
+            logging.info('To fix this, either:')
+            logging.info('  1. Set ZARR_PATH environment variable to a writable directory (e.g., export ZARR_PATH=/tmp/zarr_canvas)')
+            logging.info('  2. Create the directory and set proper permissions')
+            logging.info('  3. Run the application with appropriate permissions')
+            self.zarr_canvas = None
 
 async def try_microscope():
     squid_controller = SquidController(is_simulation=False)
