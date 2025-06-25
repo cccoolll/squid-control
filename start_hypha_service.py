@@ -1725,6 +1725,11 @@ class Microscope:
         config_section: str = Field('all', description="Configuration section to retrieve ('all', 'camera', 'stage', 'illumination', 'acquisition', 'limits', 'hardware', 'wellplate', 'optics', 'autofocus')")
         include_defaults: bool = Field(True, description="Whether to include default values from config.py")
 
+    class SetStageVelocityInput(BaseModel):
+        """Set the maximum velocity for X and Y stage axes."""
+        velocity_x_mm_per_s: Optional[float] = Field(None, description="Maximum velocity for X axis in mm/s (default: uses configuration value)")
+        velocity_y_mm_per_s: Optional[float] = Field(None, description="Maximum velocity for Y axis in mm/s (default: uses configuration value)")
+
     async def inspect_tool(self, images: List[dict], query: str, context_description: str) -> str:
         image_infos = [
             self.ImageInfo(url=image_dict['http_url'], title=image_dict.get('title'))
@@ -1834,6 +1839,7 @@ class Microscope:
             "find_similar_image_image": self.FindSimilarImageImageInput.model_json_schema(),
             "get_current_well_location": self.GetCurrentWellLocationInput.model_json_schema(),
             "get_microscope_configuration": self.GetMicroscopeConfigurationInput.model_json_schema(),
+            "set_stage_velocity": self.SetStageVelocityInput.model_json_schema(),
         }
 
     async def start_hypha_service(self, server, service_id, run_in_executor=None):
@@ -1844,55 +1850,63 @@ class Microscope:
         if run_in_executor is None:
             run_in_executor = "test" not in service_id.lower()
         
-        svc = await server.register_service(
-            {
-                "name": "Microscope Control Service",
-                "id": service_id,
-                "config": {
-                    "visibility": "public",
-                    "run_in_executor": run_in_executor
-                },
-                "type": "echo",
-                "hello_world": self.hello_world,
-                "is_service_healthy": self.is_service_healthy,
-                "move_by_distance": self.move_by_distance,
-                "snap": self.snap,
-                "one_new_frame": self.one_new_frame,
-                "get_video_frame": self.get_video_frame,
-                "off_illumination": self.close_illumination,
-                "on_illumination": self.open_illumination,
-                "set_illumination": self.set_illumination,
-                "set_camera_exposure": self.set_camera_exposure,
-                "scan_well_plate": self.scan_well_plate,
-                "scan_well_plate_simulated": self.scan_well_plate_simulated,
-                "stop_scan": self.stop_scan,
-                "home_stage": self.home_stage,
-                "return_stage": self.return_stage,
-                "navigate_to_well": self.navigate_to_well,
-                "move_to_position": self.move_to_position,
-                "move_to_loading_position": self.move_to_loading_position,
-                "set_simulated_sample_data_alias": self.set_simulated_sample_data_alias,
-                "get_simulated_sample_data_alias": self.get_simulated_sample_data_alias,
-                "auto_focus": self.auto_focus,
-                "do_laser_autofocus": self.do_laser_autofocus,
-                "set_laser_reference": self.set_laser_reference,
-                "get_status": self.get_status,
-                "update_parameters_from_client": self.update_parameters_from_client,
-                "get_chatbot_url": self.get_chatbot_url,
-                "get_task_status": self.get_task_status,
-                "get_all_task_status": self.get_all_task_status,
-                "reset_task_status": self.reset_task_status,
-                "reset_all_task_status": self.reset_all_task_status,
-                "adjust_video_frame": self.adjust_video_frame,
-                "start_video_buffering": self.start_video_buffering_api,
-                "stop_video_buffering": self.stop_video_buffering_api,
-                "get_video_buffering_status": self.get_video_buffering_status,
-                "set_video_fps": self.set_video_fps,
-                "get_current_well_location": self.get_current_well_location,
-                "get_microscope_configuration": self.get_microscope_configuration,
-                "get_canvas_chunk": self.get_canvas_chunk,
+        # Build the service configuration
+        service_config = {
+            "name": "Microscope Control Service",
+            "id": service_id,
+            "config": {
+                "visibility": "public",
+                "run_in_executor": run_in_executor
             },
-        )
+            "type": "echo",
+            "hello_world": self.hello_world,
+            "is_service_healthy": self.is_service_healthy,
+            "move_by_distance": self.move_by_distance,
+            "snap": self.snap,
+            "one_new_frame": self.one_new_frame,
+            "get_video_frame": self.get_video_frame,
+            "off_illumination": self.close_illumination,
+            "on_illumination": self.open_illumination,
+            "set_illumination": self.set_illumination,
+            "set_camera_exposure": self.set_camera_exposure,
+            "scan_well_plate": self.scan_well_plate,
+            "scan_well_plate_simulated": self.scan_well_plate_simulated,
+            "stop_scan": self.stop_scan,
+            "home_stage": self.home_stage,
+            "return_stage": self.return_stage,
+            "navigate_to_well": self.navigate_to_well,
+            "move_to_position": self.move_to_position,
+            "move_to_loading_position": self.move_to_loading_position,
+            "set_simulated_sample_data_alias": self.set_simulated_sample_data_alias,
+            "get_simulated_sample_data_alias": self.get_simulated_sample_data_alias,
+            "auto_focus": self.auto_focus,
+            "do_laser_autofocus": self.do_laser_autofocus,
+            "set_laser_reference": self.set_laser_reference,
+            "get_status": self.get_status,
+            "update_parameters_from_client": self.update_parameters_from_client,
+            "get_chatbot_url": self.get_chatbot_url,
+            "get_task_status": self.get_task_status,
+            "get_all_task_status": self.get_all_task_status,
+            "reset_task_status": self.reset_task_status,
+            "reset_all_task_status": self.reset_all_task_status,
+            "adjust_video_frame": self.adjust_video_frame,
+            "start_video_buffering": self.start_video_buffering_api,
+            "stop_video_buffering": self.stop_video_buffering_api,
+            "get_video_buffering_status": self.get_video_buffering_status,
+            "set_video_fps": self.set_video_fps,
+            "get_current_well_location": self.get_current_well_location,
+            "get_microscope_configuration": self.get_microscope_configuration,
+            "set_stage_velocity": self.set_stage_velocity,
+        }
+        
+        # Only register get_canvas_chunk when not in local mode
+        if not self.is_local:
+            service_config["get_canvas_chunk"] = self.get_canvas_chunk
+            logger.info("Registered get_canvas_chunk service (remote mode)")
+        else:
+            logger.info("Skipped get_canvas_chunk service registration (local mode)")
+
+        svc = await server.register_service(service_config)
 
         logger.info(
             f"Service (service_id={service_id}) started successfully, available at {self.server_url}{server.config.workspace}/services"
@@ -1933,6 +1947,7 @@ class Microscope:
                 "find_similar_image_image": self.find_similar_image_image_schema,
                 "get_current_well_location": self.get_current_well_location_schema,
                 "get_microscope_configuration": self.get_microscope_configuration_schema,
+                "set_stage_velocity": self.set_stage_velocity_schema,
             }
         }
 
@@ -2709,7 +2724,8 @@ class Microscope:
                 config_section=config_section,
                 include_defaults=include_defaults,
                 is_simulation=self.is_simulation,
-                is_local=self.is_local
+                is_local=self.is_local,
+                squid_controller=self.squidController
             )
             
             logger.info(f"Retrieved microscope configuration for section: {config_section}")
@@ -2836,6 +2852,53 @@ class Microscope:
                 "success": False,
                 "error": f"Failed to get canvas chunk: {str(e)}"
             }
+
+    @schema_function(skip_self=True)
+    def set_stage_velocity(self, velocity_x_mm_per_s: Optional[float] = Field(None, description="Maximum velocity for X axis in mm/s (default: uses configuration value)"), velocity_y_mm_per_s: Optional[float] = Field(None, description="Maximum velocity for Y axis in mm/s (default: uses configuration value)"), context=None):
+        """
+        Set the maximum velocity for X and Y stage axes.
+        
+        This function allows you to control how fast the microscope stage moves.
+        Lower velocities provide more precision but slower movement.
+        Higher velocities enable faster navigation but may reduce precision.
+        
+        Args:
+            velocity_x_mm_per_s: Maximum velocity for X axis in mm/s. If not specified, uses default from configuration.
+            velocity_y_mm_per_s: Maximum velocity for Y axis in mm/s. If not specified, uses default from configuration.
+            
+        Returns:
+            dict: Status and current velocity settings
+        """
+        logger.info(f"Setting stage velocity - X: {velocity_x_mm_per_s} mm/s, Y: {velocity_y_mm_per_s} mm/s")
+        
+        try:
+            # Call the SquidController method
+            result = self.squidController.set_stage_velocity(
+                velocity_x_mm_per_s=velocity_x_mm_per_s,
+                velocity_y_mm_per_s=velocity_y_mm_per_s
+            )
+            
+            logger.info(f"Stage velocity set successfully: {result}")
+            return result
+            
+        except ValueError as e:
+            logger.error(f"Invalid velocity parameters: {e}")
+            return {
+                "status": "error",
+                "message": f"Invalid velocity parameters: {str(e)}"
+            }
+        except Exception as e:
+            logger.error(f"Error setting stage velocity: {e}")
+            return {
+                "status": "error", 
+                "message": f"Failed to set stage velocity: {str(e)}"
+            }
+
+    def get_microscope_configuration_schema(self, config: GetMicroscopeConfigurationInput, context=None):
+        return self.get_microscope_configuration(config.config_section, config.include_defaults, context)
+
+    def set_stage_velocity_schema(self, config: SetStageVelocityInput, context=None):
+        return self.set_stage_velocity(config.velocity_x_mm_per_s, config.velocity_y_mm_per_s, context)
 
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):

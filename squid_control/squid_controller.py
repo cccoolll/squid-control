@@ -350,8 +350,9 @@ class SquidController:
             print(f"Using objective: {object_dict_key}")
             print(f"CONFIG.DEFAULT_OBJECTIVE: {CONFIG.DEFAULT_OBJECTIVE}")
             print(f"Tube lens: {tube_lens_mm} mm, Objective tube lens: {objective_tube_lens_mm} mm, Pixel size: {pixel_size_um} µm, Magnification: {magnification}")
-        except:
-            raise ValueError("Missing required parameters for pixel size calculation.")
+        except Exception as e:
+            logging.error(f"Missing required parameters for pixel size calculation: {e}")
+            return
 
         self.pixel_size_xy = pixel_size_um / (magnification / (objective_tube_lens_mm / tube_lens_mm))
         self.pixel_size_xy = self.pixel_size_xy * self.pixel_size_adjument_factor
@@ -399,6 +400,7 @@ class SquidController:
             action_ID (str): Identifier for this scan
         """
         if illumination_settings is None:
+            logging.warning("No illumination settings provided, using default settings")
             # Default settings if none provided
             illumination_settings = [
                 {'channel': 'BF LED matrix full', 'intensity': 18, 'exposure_time': 37},
@@ -846,29 +848,110 @@ class SquidController:
 
     def close(self):
         # In simulation mode, skip stage movements to avoid delays
-        if not self.is_simulation:
-            # move the objective to a defined position upon exit
-            self.navigationController.move_x(0.1) # temporary bug fix - move_x needs to be called before move_x_to if the stage has been moved by the joystick
-            while self.microcontroller.is_busy():
-                time.sleep(0.005)
-            self.navigationController.move_x_to(28)
-            while self.microcontroller.is_busy():
-                time.sleep(0.005)
-            self.navigationController.move_y(0.1) # temporary bug fix - move_y needs to be called before move_y_to if the stage has been moved by the joystick
-            while self.microcontroller.is_busy():
-                time.sleep(0.005)
-            self.navigationController.move_y_to(19)
-            while self.microcontroller.is_busy():
-                time.sleep(0.005)
-
-        self.liveController.stop_live()
-        self.camera.close()  # This now includes proper Hypha cleanup
-        #self.imageSaver.close()
-        if CONFIG.SUPPORT_LASER_AUTOFOCUS:
-            self.camera_focus.close()
-            #self.imageDisplayWindow_focus.close()
-        self.microcontroller.close()
+        if self.is_simulation:
+            print("Simulation mode: Skipping stage close operations")
+            # Close only essential components that don't cause delays
+            if hasattr(self, 'liveController'):
+                # LiveController doesn't have close method, just stop live
+                if hasattr(self.liveController, 'stop_live'):
+                    self.liveController.stop_live()
+            if hasattr(self, 'camera'):
+                self.camera.close()
+            return
         
+        # Normal close operations for real hardware
+        print("closing the system")
+        if hasattr(self, 'liveController'):
+            # LiveController doesn't have close method, just stop live
+            if hasattr(self.liveController, 'stop_live'):
+                self.liveController.stop_live()
+        if hasattr(self, 'camera'):
+            self.camera.close()
+        
+        # Move to safe position synchronously (no threading)
+        if hasattr(self, 'navigationController') and hasattr(self, 'microcontroller'):
+            try:
+                self.navigationController.move_x_to(30)
+                while self.microcontroller.is_busy():
+                    time.sleep(0.005)
+                self.navigationController.move_y_to(30)
+                while self.microcontroller.is_busy():
+                    time.sleep(0.005)
+            except Exception as e:
+                print(f"Error moving to safe position during close: {e}")
+        
+        if hasattr(self, 'camera_focus'):
+            self.camera_focus.close()
+        
+        if hasattr(self, 'microcontroller'):
+            self.microcontroller.close()
+
+    def set_stage_velocity(self, velocity_x_mm_per_s=None, velocity_y_mm_per_s=None):
+        """
+        Set the maximum velocity for X and Y stage axes.
+        
+        Args:
+            velocity_x_mm_per_s (float, optional): Maximum velocity for X axis in mm/s. 
+                                                 If None, uses default from configuration.
+            velocity_y_mm_per_s (float, optional): Maximum velocity for Y axis in mm/s.
+                                                 If None, uses default from configuration.
+        
+        Returns:
+            dict: Status and current velocity settings
+        """
+        # Use default values from configuration if not specified
+        if velocity_x_mm_per_s is None:
+            velocity_x_mm_per_s = CONFIG.MAX_VELOCITY_X_MM
+        if velocity_y_mm_per_s is None:
+            velocity_y_mm_per_s = CONFIG.MAX_VELOCITY_Y_MM
+            
+        # Validate velocity ranges (microcontroller limit is 65535/100 = 655.35 mm/s)
+        max_velocity_limit = 655.35
+        if velocity_x_mm_per_s > max_velocity_limit or velocity_x_mm_per_s <= 0:
+            return {
+                "success": False,
+                "message": f"X velocity must be between 0 and {max_velocity_limit} mm/s (exclusive of 0)",
+                "velocity_x_mm_per_s": velocity_x_mm_per_s,
+                "velocity_y_mm_per_s": velocity_y_mm_per_s
+            }
+        if velocity_y_mm_per_s > max_velocity_limit or velocity_y_mm_per_s <= 0:
+            return {
+                "success": False,
+                "message": f"Y velocity must be between 0 and {max_velocity_limit} mm/s (exclusive of 0)",
+                "velocity_x_mm_per_s": velocity_x_mm_per_s,
+                "velocity_y_mm_per_s": velocity_y_mm_per_s
+            }
+        
+        try:
+            # Set X axis velocity (keeping default acceleration)
+            self.microcontroller.set_max_velocity_acceleration(
+                microcontroller.AXIS.X, velocity_x_mm_per_s, CONFIG.MAX_ACCELERATION_X_MM
+            )
+            self.microcontroller.wait_till_operation_is_completed()
+            
+            # Set Y axis velocity (keeping default acceleration)  
+            self.microcontroller.set_max_velocity_acceleration(
+                microcontroller.AXIS.Y, velocity_y_mm_per_s, CONFIG.MAX_ACCELERATION_Y_MM
+            )
+            self.microcontroller.wait_till_operation_is_completed()
+            
+            return {
+                "success": True,
+                "message": "Stage velocity updated successfully",
+                "velocity_x_mm_per_s": velocity_x_mm_per_s,
+                "velocity_y_mm_per_s": velocity_y_mm_per_s,
+                "acceleration_x_mm_per_s2": CONFIG.MAX_ACCELERATION_X_MM,
+                "acceleration_y_mm_per_s2": CONFIG.MAX_ACCELERATION_Y_MM
+            }
+            
+        except Exception as e:
+            return {
+                "success": False, 
+                "message": f"Failed to set stage velocity: {str(e)}",
+                "velocity_x_mm_per_s": velocity_x_mm_per_s,
+                "velocity_y_mm_per_s": velocity_y_mm_per_s
+            }
+
 async def try_microscope():
     squid_controller = SquidController(is_simulation=False)
 
