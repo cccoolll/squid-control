@@ -362,6 +362,9 @@ class Microscope:
         self.webrtc_connected = False
         self.buffering_start_time = None
         self.min_buffering_duration = 1.0  # Minimum time to keep buffering active
+        
+        # Scanning control attributes
+        self.scanning_in_progress = False  # Flag to prevent video buffering during scans
 
         # Add task status tracking
         self.task_status = {
@@ -791,10 +794,12 @@ class Microscope:
             # Update last video request time for auto-stop functionality
             self.last_video_request_time = time.time()
             
-            # Start video buffering if not already running
-            if not self.frame_acquisition_running:
+            # Start video buffering if not already running and not scanning
+            if not self.frame_acquisition_running and not self.scanning_in_progress:
                 logger.info("Starting video buffering for remote video frame request")
                 await self.start_video_buffering()
+            elif self.scanning_in_progress:
+                logger.debug("Video buffering auto-start suppressed during scanning")
             
             # Start idle checking task if not running
             if self.video_idle_check_task is None or self.video_idle_check_task.done():
@@ -2942,6 +2947,15 @@ class Microscope:
             
             logger.info(f"Starting normal scan with stitching: {Nx}x{Ny} positions from ({start_x_mm}, {start_y_mm})")
             
+            # Check if video buffering is active and stop it during scanning
+            video_buffering_was_active = self.frame_acquisition_running
+            if video_buffering_was_active:
+                logger.info("Video buffering is active, stopping it temporarily during scanning")
+                await self.stop_video_buffering()
+            
+            # Set scanning flag to prevent automatic video buffering restart during scan
+            self.scanning_in_progress = True
+            
             # Ensure the squid controller has the new method
             await self.squidController.normal_scan_with_stitching(
                 start_x_mm=start_x_mm,
@@ -2972,6 +2986,10 @@ class Microscope:
                 "success": False,
                 "message": f"Failed to perform normal scan: {str(e)}"
             }
+        finally:
+            # Always reset the scanning flag, regardless of success or failure
+            self.scanning_in_progress = False
+            logger.info("Scanning completed, video buffering auto-start is now re-enabled")
     
     @schema_function(skip_self=True)
     def get_stitched_region(self, start_x_mm: float = Field(..., description="Starting X position in millimeters (top-left corner)"),
