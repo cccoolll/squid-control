@@ -256,8 +256,42 @@ class ZarrCanvas:
             logger.info("Started background stitching task")
     
     async def stop_stitching(self):
-        """Stop the background stitching task."""
+        """Stop the background stitching task and process all remaining images in queue."""
         self.is_stitching = False
+        
+        # Process any remaining images in the queue
+        logger.info("Processing remaining images in stitching queue before stopping...")
+        remaining_count = 0
+        
+        while not self.stitch_queue.empty():
+            try:
+                frame_data = await asyncio.wait_for(
+                    self.stitch_queue.get(), 
+                    timeout=0.1  # Short timeout to avoid hanging
+                )
+                
+                # Process in thread pool to avoid blocking
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    self.executor,
+                    self.add_image_sync,
+                    frame_data['image'],
+                    frame_data['x_mm'],
+                    frame_data['y_mm'],
+                    frame_data['channel_idx'],
+                    frame_data['z_idx']
+                )
+                remaining_count += 1
+                
+            except asyncio.TimeoutError:
+                break  # No more items in queue
+            except Exception as e:
+                logger.error(f"Error processing remaining image in queue: {e}")
+        
+        if remaining_count > 0:
+            logger.info(f"Processed {remaining_count} remaining images from stitching queue")
+        
+        # Wait for the stitching task to complete
         if self.stitching_task:
             await self.stitching_task
         logger.info("Stopped background stitching task")
@@ -288,6 +322,37 @@ class ZarrCanvas:
                 continue
             except Exception as e:
                 logger.error(f"Error in stitching loop: {e}")
+        
+        # Process any final images that might have been added during the last iteration
+        logger.debug("Stitching loop exited, checking for any final images in queue...")
+        final_count = 0
+        while not self.stitch_queue.empty():
+            try:
+                frame_data = await asyncio.wait_for(
+                    self.stitch_queue.get(), 
+                    timeout=0.1
+                )
+                
+                # Process in thread pool to avoid blocking
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    self.executor,
+                    self.add_image_sync,
+                    frame_data['image'],
+                    frame_data['x_mm'],
+                    frame_data['y_mm'],
+                    frame_data['channel_idx'],
+                    frame_data['z_idx']
+                )
+                final_count += 1
+                
+            except asyncio.TimeoutError:
+                break
+            except Exception as e:
+                logger.error(f"Error processing final image in stitching loop: {e}")
+        
+        if final_count > 0:
+            logger.info(f"Stitching loop processed {final_count} final images before exiting")
     
     def get_canvas_region(self, x_mm: float, y_mm: float, width_mm: float, height_mm: float,
                           scale: int = 0, channel_idx: int = 0) -> np.ndarray:

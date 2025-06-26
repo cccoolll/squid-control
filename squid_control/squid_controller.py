@@ -1059,6 +1059,10 @@ class SquidController:
             
             logging.info('Normal scan with stitching completed')
             
+            # Give the stitching queue a moment to process any final images
+            logging.info('Allowing time for final images to be queued for stitching...')
+            await asyncio.sleep(0.3)  # Wait 500ms to ensure all images are queued
+            
             # Save a preview image from the lowest resolution scale
             try:
                 preview_path = self.zarr_canvas.save_preview(action_ID)
@@ -1069,7 +1073,7 @@ class SquidController:
             
         finally:
             self.is_busy = False
-            # Stop the stitching task
+            # Stop the stitching task (this will now process all remaining images)
             await self.zarr_canvas.stop_stitching()
     
     async def _initialize_zarr_canvas(self, illumination_settings):
