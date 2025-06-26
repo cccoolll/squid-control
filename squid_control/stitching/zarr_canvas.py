@@ -368,7 +368,7 @@ class ZarrCanvas:
             
             # Generate filename with timestamp
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            preview_filename = f'{action_ID}_preview_{timestamp}_scale{scale_level}.png'
+            preview_filename = f'{action_ID}_preview.png'
             
             # Save in the same directory as the zarr canvas
             preview_path = self.base_path / preview_filename

@@ -357,11 +357,11 @@ class Microscope:
         
         # Auto-stop video buffering attributes
         self.last_video_request_time = None
-        self.video_idle_timeout = 5.0  # Increase to 5 seconds to prevent rapid cycling
+        self.video_idle_timeout = 1  # Increase to 1 seconds to prevent rapid cycling
         self.video_idle_check_task = None
         self.webrtc_connected = False
         self.buffering_start_time = None
-        self.min_buffering_duration = 2.0  # Minimum time to keep buffering active
+        self.min_buffering_duration = 1.0  # Minimum time to keep buffering active
 
         # Add task status tracking
         self.task_status = {
