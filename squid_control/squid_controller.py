@@ -1021,12 +1021,19 @@ class SquidController:
                     # Let stage settle
                     await asyncio.sleep(CONFIG.SCAN_STABILIZATION_TIME_MS_X / 1000)
                     
+                    # Update position from microcontroller to get actual stage position
+                    actual_x_mm, actual_y_mm, actual_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
+                    
                     # Autofocus if requested (first position or periodically)
                     if do_reflection_af and (i == 0 and j == 0):
                         if hasattr(self, 'laserAutofocusController'):
                             await self.do_laser_autofocus()
+                            # Update position again after autofocus
+                            actual_x_mm, actual_y_mm, actual_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
                     elif do_contrast_autofocus and ((i * Nx + j) % CONFIG.Acquisition.NUMBER_OF_FOVS_PER_AF == 0):
                         await self.do_autofocus()
+                        # Update position again after autofocus
+                        actual_x_mm, actual_y_mm, actual_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
                     
                     # Acquire images for each channel
                     for idx, settings in enumerate(illumination_settings):
@@ -1048,14 +1055,14 @@ class SquidController:
                             else:
                                 image = image.astype(np.uint8)
                         
-                        # Add to stitching queue
+                        # Add to stitching queue using actual stage position
                         await self.zarr_canvas.add_image_async(
-                            image, x_mm, y_mm, 
+                            image, actual_x_mm, actual_y_mm, 
                             channel_idx=idx,  # Use the index in illumination_settings
                             z_idx=0
                         )
                         
-                        logging.info(f'Added image at ({x_mm:.2f}, {y_mm:.2f}) for channel {channel_name}')
+                        logging.info(f'Added image at actual position ({actual_x_mm:.2f}, {actual_y_mm:.2f}) for channel {channel_name} (intended: {x_mm:.2f}, {y_mm:.2f})')
             
             logging.info('Normal scan with stitching completed')
             
