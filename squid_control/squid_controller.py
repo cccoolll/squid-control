@@ -183,9 +183,6 @@ class SquidController:
                 self.autofocusController,
             )
 
-
-        
-
         # retract the objective
         self.navigationController.home_z()
         # wait for the operation to finish
@@ -816,6 +813,13 @@ class SquidController:
             await asyncio.sleep(0.005)
 
         gray_img = self.camera.read_frame()
+        # corp
+        crop_height = CONFIG.CROP_HEIGHT
+        crop_width = CONFIG.CROP_WIDTH
+        height, width = gray_img.shape
+        start_x = width // 2 - crop_width // 2
+        start_y = height // 2 - crop_height // 2
+        cropped_img = gray_img[start_y:start_y+crop_height, start_x:start_x+crop_width]
         gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
         
         if not need_to_turn_illumination_back:

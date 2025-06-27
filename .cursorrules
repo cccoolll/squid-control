@@ -386,6 +386,28 @@ This serial communication system provides the foundation for precise, reliable, 
 - Support both absolute and relative config paths
 - Implement backward compatibility for config changes
 - Validate configuration parameters on load
+- Import CONFIG from `squid_control.control.config` for accessing configuration values
+- Configuration values are loaded from `configuration_HCS_v2.ini` into structured objects (e.g., `CONFIG.Acquisition.CROP_WIDTH`)
+
+### Image Processing Standards
+- **Always crop before resize**: Follow the pattern from `squid_controller.py` for consistent image processing
+- **Center Crop Logic**: Use configuration-based crop dimensions (CONFIG.Acquisition.CROP_HEIGHT/CROP_WIDTH)
+- **Crop Implementation Pattern**:
+  ```python
+  crop_height = CONFIG.Acquisition.CROP_HEIGHT
+  crop_width = CONFIG.Acquisition.CROP_WIDTH
+  height, width = image.shape[:2]
+  start_x = width // 2 - crop_width // 2
+  start_y = height // 2 - crop_height // 2
+  # Add bounds checking
+  start_x = max(0, start_x)
+  start_y = max(0, start_y)
+  end_x = min(width, start_x + crop_width)
+  end_y = min(height, start_y + crop_height)
+  cropped_img = image[start_y:end_y, start_x:end_x]
+  ```
+- **Preserve Bit Depth**: Maintain original image bit depth through processing pipeline
+- **Bounds Checking**: Always validate crop coordinates are within image boundaries
 
 ## File Structure Guidelines
 

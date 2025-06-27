@@ -18,6 +18,7 @@ from PIL import Image
 # Now you can import squid_control
 from squid_control.squid_controller import SquidController
 from squid_control.control.camera import TriggerModeSetting
+from squid_control.control.config import CONFIG
 from pydantic import Field, BaseModel
 from typing import List, Optional
 from collections import deque
@@ -770,14 +771,26 @@ class Microscope:
             # Get the raw image from the camera with original bit depth preserved
             raw_img = await self.squidController.snap_image(channel, intensity, exposure_time)
             
-            # Resize to 3000x3000 while preserving bit depth
-            resized_img = cv2.resize(raw_img, (3000, 3000))
+            # Crop the image before resizing, similar to squid_controller.py approach
+            crop_height = CONFIG.Acquisition.CROP_HEIGHT
+            crop_width = CONFIG.Acquisition.CROP_WIDTH
+            height, width = raw_img.shape[:2]  # Support both grayscale and color images
+            start_x = width // 2 - crop_width // 2
+            start_y = height // 2 - crop_height // 2
+            
+            # Ensure crop coordinates are within bounds
+            start_x = max(0, start_x)
+            start_y = max(0, start_y)
+            end_x = min(width, start_x + crop_width)
+            end_y = min(height, start_y + crop_height)
+            
+            cropped_img = raw_img[start_y:end_y, start_x:end_x]
             
             self.get_status()
             self.task_status[task_name] = "finished"
             
             # Return the numpy array directly with preserved bit depth
-            return resized_img
+            return cropped_img
             
         except Exception as e:
             self.task_status[task_name] = "failed"
@@ -2456,12 +2469,27 @@ class Microscope:
     def _process_raw_frame(self, raw_frame, frame_width=750, frame_height=750):
         """Process raw frame for video streaming - OPTIMIZED"""
         try:
-            # OPTIMIZATION 1: Resize FIRST to reduce data for all subsequent operations
-            if raw_frame.shape[:2] != (frame_height, frame_width):
+            # OPTIMIZATION 1: Crop FIRST, then resize to reduce data for all subsequent operations
+            crop_height = CONFIG.Acquisition.CROP_HEIGHT
+            crop_width = CONFIG.Acquisition.CROP_WIDTH
+            height, width = raw_frame.shape[:2]  # Support both grayscale and color images
+            start_x = width // 2 - crop_width // 2
+            start_y = height // 2 - crop_height // 2
+            
+            # Ensure crop coordinates are within bounds
+            start_x = max(0, start_x)
+            start_y = max(0, start_y)
+            end_x = min(width, start_x + crop_width)
+            end_y = min(height, start_y + crop_height)
+            
+            cropped_frame = raw_frame[start_y:end_y, start_x:end_x]
+            
+            # Now resize the cropped frame to target dimensions
+            if cropped_frame.shape[:2] != (frame_height, frame_width):
                 # Use INTER_AREA for downsampling (faster than INTER_LINEAR)
-                processed_frame = cv2.resize(raw_frame, (frame_width, frame_height), interpolation=cv2.INTER_AREA)
+                processed_frame = cv2.resize(cropped_frame, (frame_width, frame_height), interpolation=cv2.INTER_AREA)
             else:
-                processed_frame = raw_frame.copy()
+                processed_frame = cropped_frame.copy()
             
             # Calculate gray level statistics on original frame BEFORE min/max adjustments
             gray_level_stats = self._calculate_gray_level_statistics(processed_frame)
