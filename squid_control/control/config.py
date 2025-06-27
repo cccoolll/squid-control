@@ -348,6 +348,7 @@ class BaseConfig(BaseModel):
         "IMX571": 3.76,
         "PYTHON300": 4.8,
     }
+    PIXEL_SIZE_ADJUSTMENT_FACTOR: float = 0.936
     OBJECTIVES: dict = {
         "2x": {"magnification": 2, "NA": 0.10, "tube_lens_f_mm": 180},
         "4x": {"magnification": 4, "NA": 0.13, "tube_lens_f_mm": 180},
@@ -930,6 +931,7 @@ def get_microscope_configuration_data(config_section="all", include_defaults=Tru
             "objectives": getattr(CONFIG, 'OBJECTIVES', {}),
             "default_objective": getattr(CONFIG, 'DEFAULT_OBJECTIVE', '20x'),
             "tube_lens_mm": getattr(CONFIG, 'TUBE_LENS_MM', 50),
+            "pixel_size_adjustment_factor": getattr(CONFIG, 'PIXEL_SIZE_ADJUSTMENT_FACTOR', 0.936),
         }
         if squid_controller:
             try:

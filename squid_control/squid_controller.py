@@ -330,7 +330,6 @@ class SquidController:
         self.current_exposure_time = 100
         self.current_intensity = 100
         self.pixel_size_xy = 0.333
-        self.pixel_size_adjument_factor = 0.936
         # drift correction for image map
         self.drift_correction_x = -1.6
         self.drift_correction_y = -2.1
@@ -359,8 +358,8 @@ class SquidController:
             return
 
         self.pixel_size_xy = pixel_size_um / (magnification / (objective_tube_lens_mm / tube_lens_mm))
-        self.pixel_size_xy = self.pixel_size_xy * self.pixel_size_adjument_factor
-        print(f"Pixel size: {self.pixel_size_xy} µm")
+        self.pixel_size_xy = self.pixel_size_xy * CONFIG.PIXEL_SIZE_ADJUSTMENT_FACTOR
+        print(f"Pixel size: {self.pixel_size_xy} µm (adjustment factor: {CONFIG.PIXEL_SIZE_ADJUSTMENT_FACTOR})")
         
                 
     def move_to_scaning_position(self):
