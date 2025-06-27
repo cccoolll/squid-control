@@ -423,7 +423,7 @@ class SquidController:
         
         # Set up scan coordinates
         self.scanCoordinates.well_selector.set_selected_wells(scanning_zone[0], scanning_zone[1])
-        self.scanCoordinates.get_selected_wells_to_coordinates()
+        self.scanCoordinates.get_selected_wells_to_coordinates(wellplate_type=well_plate_type, is_simulation=self.is_simulation)
         
         # Configure multipoint controller
         self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)
@@ -1071,12 +1071,12 @@ class SquidController:
             await asyncio.sleep(0.3)  # Wait 500ms to ensure all images are queued
             
             # Save a preview image from the lowest resolution scale
-            try:
-                preview_path = self.zarr_canvas.save_preview(action_ID)
-                if preview_path:
-                    logging.info(f'Canvas preview saved at: {preview_path}')
-            except Exception as e:
-                logging.error(f'Failed to save canvas preview: {e}')
+            # try:
+            #     preview_path = self.zarr_canvas.save_preview(action_ID)
+            #     if preview_path:
+            #         logging.info(f'Canvas preview saved at: {preview_path}')
+            # except Exception as e:
+            #     logging.error(f'Failed to save canvas preview: {e}')
             
         finally:
             self.is_busy = False
