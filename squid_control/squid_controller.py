@@ -1115,7 +1115,8 @@ class SquidController:
             base_path=zarr_path,
             pixel_size_xy_um=self.pixel_size_xy,
             stage_limits=stage_limits,
-            channels=channels
+            channels=channels,
+            rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
         )
         
         # Initialize the OME-Zarr structure
@@ -1205,7 +1206,8 @@ class SquidController:
                 base_path=zarr_path,
                 pixel_size_xy_um=self.pixel_size_xy,
                 stage_limits=stage_limits,
-                channels=default_channels
+                channels=default_channels,
+                rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
             )
             
             # Initialize the OME-Zarr structure

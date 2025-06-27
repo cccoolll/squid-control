@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from PIL import Image
 from datetime import datetime
+import cv2
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ class ZarrCanvas:
     """
     
     def __init__(self, base_path: str, pixel_size_xy_um: float, stage_limits: Dict[str, float], 
-                 channels: List[str] = None, chunk_size: int = 256):
+                 channels: List[str] = None, chunk_size: int = 256, rotation_angle_deg: float = 0.0):
         """
         Initialize the Zarr canvas.
         
@@ -31,12 +32,14 @@ class ZarrCanvas:
             stage_limits: Dictionary with x_positive, x_negative, y_positive, y_negative in mm
             channels: List of channel names
             chunk_size: Size of chunks in pixels (default 256)
+            rotation_angle_deg: Rotation angle for stitching in degrees (positive=clockwise, negative=counterclockwise)
         """
         self.base_path = Path(base_path)
         self.pixel_size_xy_um = pixel_size_xy_um
         self.stage_limits = stage_limits
         self.channels = channels or ['BF_LED_matrix_full']
         self.chunk_size = chunk_size
+        self.rotation_angle_deg = rotation_angle_deg
         self.zarr_path = self.base_path / "live_stitching.zarr"
         
         # Calculate canvas dimensions in pixels based on stage limits
@@ -188,6 +191,46 @@ class ZarrCanvas:
         
         return x_px, y_px
     
+    def _rotate_and_crop_image(self, image: np.ndarray) -> np.ndarray:
+        """
+        Rotate an image by the configured angle and crop to 95% of the original size.
+        
+        Args:
+            image: Input image array (2D)
+            
+        Returns:
+            Rotated and cropped image array
+        """
+        if abs(self.rotation_angle_deg) < 0.001:  # No rotation needed
+            return image
+            
+        height, width = image.shape[:2]
+        
+        # Calculate rotation matrix
+        center = (width // 2, height // 2)
+        rotation_matrix = cv2.getRotationMatrix2D(center, self.rotation_angle_deg, 1.0)
+        
+        # Perform rotation, positive angle means counterclockwise rotation
+        rotated = cv2.warpAffine(image, rotation_matrix, (width, height), 
+                                flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        
+        # Crop to 95% of original size to remove black borders
+        crop_factor = 0.96
+        new_height = int(height * crop_factor)
+        new_width = int(width * crop_factor)
+        
+        # Calculate crop bounds (center crop)
+        y_start = (height - new_height) // 2
+        y_end = y_start + new_height
+        x_start = (width - new_width) // 2
+        x_end = x_start + new_width
+        
+        cropped = rotated[y_start:y_end, x_start:x_end]
+        
+        logger.debug(f"Rotated image by {self.rotation_angle_deg}° and cropped from {width}x{height} to {new_width}x{new_height}")
+        
+        return cropped
+    
     def add_image_sync(self, image: np.ndarray, x_mm: float, y_mm: float, 
                        channel_idx: int = 0, z_idx: int = 0):
         """
@@ -201,6 +244,9 @@ class ZarrCanvas:
             channel_idx: Channel index
             z_idx: Z-slice index (default 0)
         """
+        # Apply rotation and cropping first
+        processed_image = self._rotate_and_crop_image(image)
+        
         with self.zarr_lock:
             for scale in range(self.num_scales):
                 scale_factor = 4 ** scale
@@ -210,11 +256,10 @@ class ZarrCanvas:
                 
                 # Resize image if needed
                 if scale > 0:
-                    import cv2
-                    new_size = (image.shape[1] // scale_factor, image.shape[0] // scale_factor)
-                    scaled_image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
+                    new_size = (processed_image.shape[1] // scale_factor, processed_image.shape[0] // scale_factor)
+                    scaled_image = cv2.resize(processed_image, new_size, interpolation=cv2.INTER_AREA)
                 else:
-                    scaled_image = image
+                    scaled_image = processed_image
                 
                 # Get the zarr array for this scale
                 zarr_array = self.zarr_arrays[scale]
