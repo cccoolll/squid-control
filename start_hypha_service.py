@@ -791,15 +791,39 @@ class Microscope:
         Returns: Compressed frame data (JPEG bytes) with associated metadata including stage position and timestamp
         """
         try:
-            # Update last video request time for auto-stop functionality
+            # If scanning is in progress, return a scanning placeholder immediately
+            if self.scanning_in_progress:
+                logger.debug("Scanning in progress, returning scanning placeholder frame")
+                placeholder = self._create_placeholder_frame(frame_width, frame_height, "Scanning in Progress...")
+                placeholder_compressed = self._encode_frame_jpeg(placeholder, quality=85)
+                
+                # Create metadata for scanning placeholder frame
+                scanning_metadata = {
+                    'stage_position': {'x_mm': None, 'y_mm': None, 'z_mm': None},
+                    'timestamp': time.time(),
+                    'channel': None,
+                    'intensity': None,
+                    'exposure_time_ms': None,
+                    'scanning_status': 'in_progress'
+                }
+                
+                return {
+                    'format': placeholder_compressed['format'],
+                    'data': placeholder_compressed['data'],
+                    'width': frame_width,
+                    'height': frame_height,
+                    'size_bytes': placeholder_compressed['size_bytes'],
+                    'compression_ratio': placeholder_compressed.get('compression_ratio', 1.0),
+                    'metadata': scanning_metadata
+                }
+            
+            # Update last video request time for auto-stop functionality (only when not scanning)
             self.last_video_request_time = time.time()
             
             # Start video buffering if not already running and not scanning
-            if not self.frame_acquisition_running and not self.scanning_in_progress:
+            if not self.frame_acquisition_running:
                 logger.info("Starting video buffering for remote video frame request")
                 await self.start_video_buffering()
-            elif self.scanning_in_progress:
-                logger.debug("Video buffering auto-start suppressed during scanning")
             
             # Start idle checking task if not running
             if self.video_idle_check_task is None or self.video_idle_check_task.done():
@@ -1280,7 +1304,7 @@ class Microscope:
             raise e
 
     @schema_function(skip_self=True)
-    def scan_well_plate(self, well_plate_type: str=Field("96", description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), illumination_settings: List[dict]=Field(default_factory=lambda: [{'channel': 'BF LED matrix full', 'intensity': 28.0, 'exposure_time': 20.0}, {'channel': 'Fluorescence 488 nm Ex', 'intensity': 27.0, 'exposure_time': 60.0}, {'channel': 'Fluorescence 561 nm Ex', 'intensity': 98.0, 'exposure_time': 100.0}], description="Illumination settings with channel name, intensity (0-100), and exposure time (ms) for each channel"), do_contrast_autofocus: bool=Field(False, description="Whether to do contrast based autofocus"), do_reflection_af: bool=Field(True, description="Whether to do reflection based autofocus"), scanning_zone: List[tuple]=Field(default_factory=lambda: [(0,0),(0,0)], description="The scanning zone of the well plate, for 96 well plate, it should be[(0,0),(7,11)] "), Nx: int=Field(3, description="Number of columns to scan"), Ny: int=Field(3, description="Number of rows to scan"), action_ID: str=Field('testPlateScan', description="The ID of the action"), context=None):
+    async def scan_well_plate(self, well_plate_type: str=Field("96", description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), illumination_settings: List[dict]=Field(default_factory=lambda: [{'channel': 'BF LED matrix full', 'intensity': 28.0, 'exposure_time': 20.0}, {'channel': 'Fluorescence 488 nm Ex', 'intensity': 27.0, 'exposure_time': 60.0}, {'channel': 'Fluorescence 561 nm Ex', 'intensity': 98.0, 'exposure_time': 100.0}], description="Illumination settings with channel name, intensity (0-100), and exposure time (ms) for each channel"), do_contrast_autofocus: bool=Field(False, description="Whether to do contrast based autofocus"), do_reflection_af: bool=Field(True, description="Whether to do reflection based autofocus"), scanning_zone: List[tuple]=Field(default_factory=lambda: [(0,0),(0,0)], description="The scanning zone of the well plate, for 96 well plate, it should be[(0,0),(7,11)] "), Nx: int=Field(3, description="Number of columns to scan"), Ny: int=Field(3, description="Number of rows to scan"), action_ID: str=Field('testPlateScan', description="The ID of the action"), context=None):
         """
         Scan the well plate according to the pre-defined position list with custom illumination settings
         Returns: The message of the action
@@ -1298,6 +1322,16 @@ class Microscope:
                     {'channel': 'Fluorescence 638 nm Ex', 'intensity': 100, 'exposure_time': 200},
                     {'channel': 'Fluorescence 730 nm Ex', 'intensity': 100, 'exposure_time': 200},
                 ]
+            
+            # Check if video buffering is active and stop it during scanning
+            video_buffering_was_active = self.frame_acquisition_running
+            if video_buffering_was_active:
+                logger.info("Video buffering is active, stopping it temporarily during well plate scanning")
+                await self.stop_video_buffering()
+            
+            # Set scanning flag to prevent automatic video buffering restart during scan
+            self.scanning_in_progress = True
+            
             logger.info("Start scanning well plate with custom illumination settings")
             self.squidController.plate_scan(well_plate_type, illumination_settings, do_contrast_autofocus, do_reflection_af, scanning_zone, Nx, Ny, action_ID)
             logger.info("Well plate scanning completed")
@@ -1307,6 +1341,10 @@ class Microscope:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to scan well plate: {e}")
             raise e
+        finally:
+            # Always reset the scanning flag, regardless of success or failure
+            self.scanning_in_progress = False
+            logger.info("Well plate scanning completed, video buffering auto-start is now re-enabled")
     
     @schema_function(skip_self=True)
     def scan_well_plate_simulated(self, context=None):
@@ -2626,6 +2664,10 @@ class Microscope:
         while self.frame_acquisition_running:
             try:
                 await asyncio.sleep(1.0)  # Check every 1 second instead of 500ms
+                
+                # Don't stop video buffering during scanning
+                if self.scanning_in_progress:
+                    continue
                 
                 if self.last_video_request_time is None:
                     continue
