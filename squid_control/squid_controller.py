@@ -833,20 +833,20 @@ class SquidController:
 
         gray_img = self.camera.read_frame()
         # corp
-        crop_height = CONFIG.CROP_HEIGHT
-        crop_width = CONFIG.CROP_WIDTH
+        crop_height = 3036
+        crop_width = 3036
         height, width = gray_img.shape
         start_x = width // 2 - crop_width // 2
         start_y = height // 2 - crop_height // 2
-        cropped_img = gray_img[start_y:start_y+crop_height, start_x:start_x+crop_width]
         gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
-        
+        cropped_img = gray_img[start_y:start_y+crop_height, start_x:start_x+crop_width]
+
         if not need_to_turn_illumination_back:
             self.liveController.turn_off_illumination()
             while self.microcontroller.is_busy():
                 await asyncio.sleep(0.005)
 
-        return gray_img
+        return cropped_img
     
     async def get_camera_frame_simulation(self, channel=0, intensity=100, exposure_time=100):
         self.camera.set_exposure_time(exposure_time)
