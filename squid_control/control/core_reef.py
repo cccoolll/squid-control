@@ -86,12 +86,13 @@ def load_multipoint_custom_script(startup_function_uri: str):
 class ObjectiveStore:
     def __init__(
         self,
-        objectives_dict=CONFIG.OBJECTIVES,
-        default_objective=CONFIG.DEFAULT_OBJECTIVE,
+        objectives_dict=None,
+        default_objective=None,
     ):
-        self.objectives_dict = objectives_dict
-        self.default_objective = default_objective
-        self.current_objective = default_objective
+        # Get current CONFIG values at runtime instead of at class definition time
+        self.objectives_dict = objectives_dict if objectives_dict is not None else CONFIG.OBJECTIVES
+        self.default_objective = default_objective if default_objective is not None else CONFIG.DEFAULT_OBJECTIVE
+        self.current_objective = self.default_objective
 
 
 class StreamHandler:
@@ -3034,6 +3035,8 @@ class MultiPointController:
     def set_selected_configurations_with_settings(self, illumination_settings):
         """
         Set selected configurations with custom illumination settings.
+        Updates the original configurations directly so the custom settings 
+        will be saved in the experiment metadata.
         
         Args:
             illumination_settings (list): List of dictionaries containing:
@@ -3048,38 +3051,27 @@ class MultiPointController:
             intensity = setting['intensity']
             exposure_time = setting['exposure_time']
             
-            # Find the configuration by name
-            config = None
+            # Find the original configuration by name
+            original_config = None
             for cfg in self.configurationManager.configurations:
                 if cfg.name == channel_name:
-                    config = cfg
+                    original_config = cfg
                     break
             
-            if config is None:
+            if original_config is None:
                 print(f"Warning: Configuration '{channel_name}' not found, skipping...")
                 continue
             
-            # Update the configuration in memory with new settings
-            # Update intensity
-            self.configurationManager.update_configuration_without_writing(
-                config.id, 'IlluminationIntensity', intensity
-            )
-            # Update exposure time  
-            self.configurationManager.update_configuration_without_writing(
-                config.id, 'ExposureTime', exposure_time
-            )
+            # UPDATE the original configuration directly with new settings
+            # This ensures the custom values will be saved in the experiment metadata
+            original_config.illumination_intensity = float(intensity)
+            original_config.exposure_time = float(exposure_time)
             
-            # Update the config object itself for immediate use
-            config.illumination_intensity = float(intensity)
-            config.exposure_time = float(exposure_time)
-            
-            # Add to selected configurations
-            self.selected_configurations.append(config)
+            # Add the updated configuration to selected configurations
+            self.selected_configurations.append(original_config)
             
             print(f"Updated configuration '{channel_name}': intensity={intensity}, exposure_time={exposure_time}")
         
-        # Save the updated configurations to file
-        self.configurationManager.save_configurations()
         print(f"Selected {len(self.selected_configurations)} configurations with custom settings")
 
     def run_acquisition(self, location_list=None): 
@@ -3254,6 +3246,10 @@ class ConfigurationManager:
         for conf in self.configurations:
             self.update_configuration_without_writing(conf.id, "Selected", 0)
         for conf in selected_configurations:
+            # Update the actual configuration values from the selected configurations
+            # This ensures custom illumination settings are saved in the XML
+            self.update_configuration_without_writing(conf.id, "ExposureTime", conf.exposure_time)
+            self.update_configuration_without_writing(conf.id, "IlluminationIntensity", conf.illumination_intensity)
             self.update_configuration_without_writing(conf.id, "Selected", 1)
         self.write_configuration(filename)
         for conf in selected_configurations:
@@ -3477,7 +3473,35 @@ class ScanCoordinates:
     def add_well_selector(self, well_selector):
         self.well_selector = well_selector
 
-    def get_selected_wells_to_coordinates(self):
+    def get_selected_wells_to_coordinates(self, wellplate_type='96', is_simulation=False):
+        """
+        Convert selected wells to coordinates using the same logic as move_to_well function.
+        
+        Args:
+            wellplate_type (str): Type of well plate ('6', '12', '24', '96', '384')
+            is_simulation (bool): Whether in simulation mode (affects offset application)
+        """
+        # Import wellplate format classes
+        from squid_control.control.config import (
+            WELLPLATE_FORMAT_6, WELLPLATE_FORMAT_12, WELLPLATE_FORMAT_24,
+            WELLPLATE_FORMAT_96, WELLPLATE_FORMAT_384, CONFIG
+        )
+        
+        # Get well plate format configuration - same logic as move_to_well
+        if wellplate_type == '6':
+            wellplate_format = WELLPLATE_FORMAT_6
+        elif wellplate_type == '12':
+            wellplate_format = WELLPLATE_FORMAT_12
+        elif wellplate_type == '24':
+            wellplate_format = WELLPLATE_FORMAT_24
+        elif wellplate_type == '96':
+            wellplate_format = WELLPLATE_FORMAT_96
+        elif wellplate_type == '384':
+            wellplate_format = WELLPLATE_FORMAT_384
+        else:
+            # Default to 96-well plate if unsupported type is provided
+            wellplate_format = WELLPLATE_FORMAT_96
+        
         # get selected wells from the widget
         selected_wells = self.well_selector.get_selected_wells()
         selected_wells = np.array(selected_wells)
@@ -3494,30 +3518,14 @@ class ScanCoordinates:
             if _increasing == False:
                 columns = np.flip(columns)
             for column in columns:
-                x_mm = (
-                    CONFIG.X_MM_384_WELLPLATE_UPPERLEFT
-                    + CONFIG.WELL_SIZE_MM_384_WELLPLATE / 2
-                    - (
-                        CONFIG.A1_X_MM_384_WELLPLATE
-                        + CONFIG.WELL_SPACING_MM_384_WELLPLATE
-                        * CONFIG.NUMBER_OF_SKIP_384
-                    )
-                    + column * CONFIG.WELL_SPACING_MM
-                    + CONFIG.A1_X_MM
-                    + CONFIG.WELLPLATE_OFFSET_X_MM
-                )
-                y_mm = (
-                    CONFIG.Y_MM_384_WELLPLATE_UPPERLEFT
-                    + CONFIG.WELL_SIZE_MM_384_WELLPLATE / 2
-                    - (
-                        CONFIG.A1_Y_MM_384_WELLPLATE
-                        + CONFIG.WELL_SPACING_MM_384_WELLPLATE
-                        * CONFIG.NUMBER_OF_SKIP_384
-                    )
-                    + row * CONFIG.WELL_SPACING_MM
-                    + CONFIG.A1_Y_MM
-                    + CONFIG.WELLPLATE_OFFSET_Y_MM
-                )
+                # Use the same coordinate calculation as move_to_well function
+                if is_simulation:
+                    x_mm = wellplate_format.A1_X_MM + column * wellplate_format.WELL_SPACING_MM
+                    y_mm = wellplate_format.A1_Y_MM + row * wellplate_format.WELL_SPACING_MM
+                else:
+                    x_mm = wellplate_format.A1_X_MM + column * wellplate_format.WELL_SPACING_MM + CONFIG.WELLPLATE_OFFSET_X_MM
+                    y_mm = wellplate_format.A1_Y_MM + row * wellplate_format.WELL_SPACING_MM + CONFIG.WELLPLATE_OFFSET_Y_MM
+                
                 self.coordinates_mm.append((x_mm, y_mm))
                 self.name.append(chr(ord("A") + row) + str(column + 1))
             _increasing = not _increasing
