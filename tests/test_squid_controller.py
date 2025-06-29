@@ -179,8 +179,8 @@ async def test_configuration_and_pixel_size(sim_controller_fixture):
         assert controller.pixel_size_xy > 0
         
         # Test pixel size adjustment factor
-        assert hasattr(controller, 'pixel_size_adjument_factor')
-        assert controller.pixel_size_adjument_factor > 0
+        assert hasattr(controller, 'pixel_size_adjustment_factor')
+        assert controller.pixel_size_adjustment_factor > 0
         
         # Test drift correction parameters
         assert hasattr(controller, 'drift_correction_x')
