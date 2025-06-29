@@ -400,6 +400,85 @@ class ZarrCanvas:
                     except Exception as e:
                         logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}: {e}")
     
+    def add_image_sync_quick(self, image: np.ndarray, x_mm: float, y_mm: float, 
+                           channel_idx: int = 0, z_idx: int = 0):
+        """
+        Synchronously add an image to the canvas for quick scan mode.
+        Only updates scales 1-5 (skips scale 0 for performance).
+        The input image should already be at scale1 resolution.
+        
+        Args:
+            image: Image array (2D) - should be at scale1 resolution (1/4 of original)
+            x_mm: X position in millimeters
+            y_mm: Y position in millimeters
+            channel_idx: Local zarr channel index (0, 1, 2, etc.)
+            z_idx: Z-slice index (default 0)
+        """
+        # Validate channel index
+        if channel_idx >= len(self.channels):
+            logger.error(f"Channel index {channel_idx} out of bounds. Available channels: {len(self.channels)} (indices 0-{len(self.channels)-1})")
+            return
+        
+        if channel_idx < 0:
+            logger.error(f"Channel index {channel_idx} cannot be negative")
+            return
+        
+        # For quick scan, we skip rotation to reduce computation pressure
+        # The image should already be rotated and flipped by the caller
+        processed_image = image
+        
+        with self.zarr_lock:
+            # Only process scales 1-5 (skip scale 0 for performance)
+            for scale in range(1, min(self.num_scales, 6)):  # scales 1-5
+                scale_factor = 4 ** scale
+                
+                # Get pixel coordinates for this scale
+                x_px, y_px = self.stage_to_pixel_coords(x_mm, y_mm, scale)
+                
+                # Resize image - note that input image is already at scale1 resolution
+                # So for scale1: use image as-is
+                # For scale2: resize by 1/4, scale3: by 1/16, etc.
+                if scale == 1:
+                    scaled_image = processed_image  # Already at scale1 resolution
+                else:
+                    # Scale relative to scale1 (which the input image represents)
+                    relative_scale_factor = 4 ** (scale - 1)
+                    new_size = (processed_image.shape[1] // relative_scale_factor, 
+                               processed_image.shape[0] // relative_scale_factor)
+                    scaled_image = cv2.resize(processed_image, new_size, interpolation=cv2.INTER_AREA)
+                
+                # Get the zarr array for this scale
+                zarr_array = self.zarr_arrays[scale]
+                
+                # Double-check zarr array dimensions
+                if channel_idx >= zarr_array.shape[1]:
+                    logger.error(f"Channel index {channel_idx} exceeds zarr array channel dimension {zarr_array.shape[1]}")
+                    continue
+                
+                # Calculate bounds
+                y_start = max(0, y_px - scaled_image.shape[0] // 2)
+                y_end = min(zarr_array.shape[3], y_start + scaled_image.shape[0])
+                x_start = max(0, x_px - scaled_image.shape[1] // 2)
+                x_end = min(zarr_array.shape[4], x_start + scaled_image.shape[1])
+                
+                # Crop image if it extends beyond canvas
+                img_y_start = max(0, -y_px + scaled_image.shape[0] // 2)
+                img_y_end = img_y_start + (y_end - y_start)
+                img_x_start = max(0, -x_px + scaled_image.shape[1] // 2)
+                img_x_end = img_x_start + (x_end - x_start)
+                
+                # Write to zarr
+                if y_end > y_start and x_end > x_start:
+                    try:
+                        zarr_array[0, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
+                            scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
+                        logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx} (quick scan)")
+                    except IndexError as e:
+                        logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}: {e}")
+                        logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access channel {channel_idx}")
+                    except Exception as e:
+                        logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}: {e}")
+    
     async def add_image_async(self, image: np.ndarray, x_mm: float, y_mm: float,
                               channel_idx: int = 0, z_idx: int = 0):
         """Add image to the stitching queue for asynchronous processing."""
@@ -434,17 +513,31 @@ class ZarrCanvas:
                     timeout=0.1  # Short timeout to avoid hanging
                 )
                 
+                # Check if this is a quick scan
+                is_quick_scan = frame_data.get('quick_scan', False)
+                
                 # Process in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    self.executor,
-                    self.add_image_sync,
-                    frame_data['image'],
-                    frame_data['x_mm'],
-                    frame_data['y_mm'],
-                    frame_data['channel_idx'],
-                    frame_data['z_idx']
-                )
+                if is_quick_scan:
+                    await loop.run_in_executor(
+                        self.executor,
+                        self.add_image_sync_quick,
+                        frame_data['image'],
+                        frame_data['x_mm'],
+                        frame_data['y_mm'],
+                        frame_data['channel_idx'],
+                        frame_data['z_idx']
+                    )
+                else:
+                    await loop.run_in_executor(
+                        self.executor,
+                        self.add_image_sync,
+                        frame_data['image'],
+                        frame_data['x_mm'],
+                        frame_data['y_mm'],
+                        frame_data['channel_idx'],
+                        frame_data['z_idx']
+                    )
                 remaining_count += 1
                 
             except asyncio.TimeoutError:
@@ -470,17 +563,33 @@ class ZarrCanvas:
                     timeout=1.0
                 )
                 
+                # Check if this is a quick scan (only updates scales 1-5)
+                is_quick_scan = frame_data.get('quick_scan', False)
+                
                 # Process in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    self.executor,
-                    self.add_image_sync,
-                    frame_data['image'],
-                    frame_data['x_mm'],
-                    frame_data['y_mm'],
-                    frame_data['channel_idx'],
-                    frame_data['z_idx']
-                )
+                if is_quick_scan:
+                    # Use quick scan method that only updates scales 1-5
+                    await loop.run_in_executor(
+                        self.executor,
+                        self.add_image_sync_quick,
+                        frame_data['image'],
+                        frame_data['x_mm'],
+                        frame_data['y_mm'],
+                        frame_data['channel_idx'],
+                        frame_data['z_idx']
+                    )
+                else:
+                    # Use normal method that updates all scales
+                    await loop.run_in_executor(
+                        self.executor,
+                        self.add_image_sync,
+                        frame_data['image'],
+                        frame_data['x_mm'],
+                        frame_data['y_mm'],
+                        frame_data['channel_idx'],
+                        frame_data['z_idx']
+                    )
                 
             except asyncio.TimeoutError:
                 continue
@@ -497,17 +606,31 @@ class ZarrCanvas:
                     timeout=0.1
                 )
                 
+                # Check if this is a quick scan
+                is_quick_scan = frame_data.get('quick_scan', False)
+                
                 # Process in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    self.executor,
-                    self.add_image_sync,
-                    frame_data['image'],
-                    frame_data['x_mm'],
-                    frame_data['y_mm'],
-                    frame_data['channel_idx'],
-                    frame_data['z_idx']
-                )
+                if is_quick_scan:
+                    await loop.run_in_executor(
+                        self.executor,
+                        self.add_image_sync_quick,
+                        frame_data['image'],
+                        frame_data['x_mm'],
+                        frame_data['y_mm'],
+                        frame_data['channel_idx'],
+                        frame_data['z_idx']
+                    )
+                else:
+                    await loop.run_in_executor(
+                        self.executor,
+                        self.add_image_sync,
+                        frame_data['image'],
+                        frame_data['x_mm'],
+                        frame_data['y_mm'],
+                        frame_data['channel_idx'],
+                        frame_data['z_idx']
+                    )
                 final_count += 1
                 
             except asyncio.TimeoutError:

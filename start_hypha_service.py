@@ -1952,6 +1952,7 @@ class Microscope:
             "set_stage_velocity": self.set_stage_velocity,
             # Stitching functions
             "normal_scan_with_stitching": self.normal_scan_with_stitching,
+            "quick_scan_with_stitching": self.quick_scan_with_stitching,
             "get_stitched_region": self.get_stitched_region,
             "reset_stitching_canvas": self.reset_stitching_canvas,
         }
@@ -3198,6 +3199,120 @@ class Microscope:
                 "success": False,
                 "message": f"Failed to reset canvas: {str(e)}"
             }
+
+    @schema_function(skip_self=True)
+    async def quick_scan_with_stitching(self, wellplate_type: str = Field('96', description="Well plate type ('6', '12', '24', '96', '384')"),
+                                      exposure_time: float = Field(5, description="Camera exposure time in milliseconds (max 30ms)"),
+                                      intensity: float = Field(70, description="Brightfield LED intensity (0-100)"),
+                                      velocity_mm_per_s: float = Field(10, description="Stage velocity in mm/s for scanning"),
+                                      fps_target: int = Field(20, description="Target frame rate for acquisition"),
+                                      action_ID: str = Field('quick_scan_stitching', description="Identifier for this scan"),
+                                      context=None):
+        """
+        Perform a quick scan with live stitching to OME-Zarr canvas - brightfield only.
+        Uses continuous movement with high-speed frame acquisition for rapid well plate scanning.
+        Only supports brightfield channel with exposure time ≤ 30ms.
+        
+        Args:
+            wellplate_type: Well plate format ('6', '12', '24', '96', '384')
+            exposure_time: Camera exposure time in milliseconds (must be ≤ 30ms)
+            intensity: Brightfield LED intensity (0-100)
+            velocity_mm_per_s: Stage velocity in mm/s for scanning (default 20mm/s)
+            fps_target: Target frame rate for acquisition (default 20fps)
+            action_ID: Unique identifier for this scan
+            
+        Returns:
+            dict: Status of the scan with performance metrics
+        """
+        try:
+            # Validate exposure time early
+            if exposure_time > 30:
+                return {
+                    "success": False,
+                    "message": f"Quick scan exposure time must not exceed 30ms (got {exposure_time}ms)"
+                }
+            
+            logger.info(f"Starting quick scan with stitching: {wellplate_type} well plate, velocity={velocity_mm_per_s}mm/s, fps={fps_target}")
+            
+            # Check if video buffering is active and stop it during scanning
+            video_buffering_was_active = self.frame_acquisition_running
+            if video_buffering_was_active:
+                logger.info("Video buffering is active, stopping it temporarily during quick scanning")
+                await self.stop_video_buffering()
+                # Wait for camera to settle after stopping video buffering
+                logger.info("Waiting for camera to settle after stopping video buffering...")
+                await asyncio.sleep(0.5)
+            
+            # Set scanning flag to prevent automatic video buffering restart during scan
+            self.scanning_in_progress = True
+            
+            # Record start time for performance metrics
+            start_time = time.time()
+            
+            # Perform the quick scan
+            await self.squidController.quick_scan_with_stitching(
+                wellplate_type=wellplate_type,
+                exposure_time=exposure_time,
+                intensity=intensity,
+                velocity_mm_per_s=velocity_mm_per_s,
+                fps_target=fps_target,
+                action_ID=action_ID
+            )
+            
+            # Calculate performance metrics
+            scan_duration = time.time() - start_time
+            
+            # Calculate well plate dimensions for area estimation
+            wellplate_configs = {
+                '6': {'rows': 2, 'cols': 3},
+                '12': {'rows': 3, 'cols': 4},
+                '24': {'rows': 4, 'cols': 6},
+                '96': {'rows': 8, 'cols': 12},
+                '384': {'rows': 16, 'cols': 24}
+            }
+            
+            config = wellplate_configs.get(wellplate_type, wellplate_configs['96'])
+            
+            return {
+                "success": True,
+                "message": f"Quick scan with stitching completed successfully",
+                "scan_parameters": {
+                    "wellplate_type": wellplate_type,
+                    "rows_scanned": config['rows'],
+                    "columns_per_row": config['cols'],
+                    "exposure_time_ms": exposure_time,
+                    "intensity": intensity,
+                    "velocity_mm_per_s": velocity_mm_per_s,
+                    "target_fps": fps_target
+                },
+                "performance_metrics": {
+                    "total_scan_time_seconds": round(scan_duration, 2),
+                    "scan_time_per_row_seconds": round(scan_duration / config['rows'], 2),
+                    "estimated_frames_acquired": int(scan_duration * fps_target)
+                },
+                "stitching_info": {
+                    "zarr_scales_updated": "1-5 (scale 0 skipped for performance)",
+                    "channel": "BF LED matrix full",
+                    "action_id": action_ID
+                }
+            }
+            
+        except ValueError as e:
+            logger.error(f"Validation error in quick scan: {e}")
+            return {
+                "success": False,
+                "message": str(e)
+            }
+        except Exception as e:
+            logger.error(f"Failed to perform quick scan with stitching: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to perform quick scan: {str(e)}"
+            }
+        finally:
+            # Always reset the scanning flag, regardless of success or failure
+            self.scanning_in_progress = False
+            logger.info("Quick scanning completed, video buffering auto-start is now re-enabled")
 
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):
