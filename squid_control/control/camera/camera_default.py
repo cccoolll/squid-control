@@ -33,6 +33,7 @@ from squid_control.control.camera import TriggerModeSetting
 from scipy.ndimage import gaussian_filter
 import zarr
 from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager, ZarrImageManager
+from squid_control.control.config import ChannelMapper
 script_dir = os.path.dirname(__file__)
 
 def get_sn_by_model(model_name):
@@ -552,13 +553,7 @@ class Camera_Simulation(object):
         # simulated camera values
         self.simulated_focus = 4
         self.channels = [0, 11, 12, 14, 13]
-        self.image_paths = {
-            0: 'BF_LED_matrix_full.bmp',
-            11: 'Fluorescence_405_nm_Ex.bmp',
-            12: 'Fluorescence_488_nm_Ex.bmp',
-            14: 'Fluorescence_561_nm_Ex.bmp',
-            13: 'Fluorescence_638_nm_Ex.bmp',
-        }
+        self.image_paths = ChannelMapper.get_id_to_example_image_map()
         # Configuration for ZarrImageManager
         self.SERVER_URL = "https://hypha.aicell.io"
         self.DEFAULT_TIMESTAMP = "20250506-scan-time-lapse-2025-05-06_17-56-38"  # Default timestamp for the dataset
@@ -818,14 +813,11 @@ class Camera_Simulation(object):
         self.frame_ID += 1
         self.timestamp = time.time()
 
-        channel_map = {
-            0: 'BF_LED_matrix_full',
-            11: 'Fluorescence_405_nm_Ex',
-            12: 'Fluorescence_488_nm_Ex',
-            14: 'Fluorescence_561_nm_Ex',
-            13: 'Fluorescence_638_nm_Ex'
-        }
-        channel_name = channel_map.get(channel, None)
+        # Use centralized channel mapping
+        try:
+            channel_name = ChannelMapper.id_to_zarr_name(channel)
+        except ValueError:
+            channel_name = None
 
         if channel_name is None:
             self.image = np.array(Image.open(os.path.join(script_dir, f"example-data/{self.image_paths[channel]}")))
@@ -939,16 +931,10 @@ class Camera_Simulation(object):
         self.frame_ID += 1
         self.timestamp = time.time()
 
-        channel_map = {
-            0: 'BF_LED_matrix_full',
-            11: 'Fluorescence_405_nm_Ex',
-            12: 'Fluorescence_488_nm_Ex',
-            14: 'Fluorescence_561_nm_Ex',
-            13: 'Fluorescence_638_nm_Ex'
-        }
-        channel_name = channel_map.get(channel, None)
-
-        if channel_name is None:
+        # Use centralized channel mapping
+        try:
+            channel_name = ChannelMapper.id_to_zarr_name(channel)
+        except ValueError:
             raise ValueError(f"Invalid channel {channel}, no mapping available")
 
         # Load Zarr data directly - no fallback to example images

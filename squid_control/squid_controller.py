@@ -5,6 +5,7 @@ import squid_control.control.microcontroller as microcontroller
 from squid_control.control.config import *
 from squid_control.control.camera import get_camera
 from squid_control.control.utils import rotate_and_flip_image
+from squid_control.control.config import ChannelMapper
 import cv2
 import logging
 import matplotlib.path as mpath
@@ -53,6 +54,24 @@ if os.path.exists(cache_file_path):
     except:
         pass
 
+def setup_logging(log_file="squid_controller.log", max_bytes=100000, backup_count=3):
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+
+    # Rotating file handler
+    file_handler = logging.handlers.RotatingFileHandler(log_file, maxBytes=max_bytes, backupCount=backup_count)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    return logger
+
+logger = setup_logging()
 
 class SquidController:
     fps_software_trigger= 10
@@ -982,9 +1001,18 @@ class SquidController:
                 {'channel': 'BF LED matrix full', 'intensity': 50, 'exposure_time': 100}
             ]
         
-        # Initialize the Zarr canvas if not already done
+        # Initialize the Zarr canvas if not already done (with ALL channels)
         if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
-            await self._initialize_zarr_canvas(illumination_settings)
+            await self._initialize_zarr_canvas()
+        
+        # Validate that all requested channels are available in the zarr canvas
+        channel_map = ChannelMapper.get_human_to_id_map()
+        for settings in illumination_settings:
+            channel_name = settings['channel']
+            if channel_name not in self.zarr_canvas.channel_to_zarr_index:
+                logging.error(f"Requested channel '{channel_name}' not found in zarr canvas!")
+                logging.error(f"Available channels: {list(self.zarr_canvas.channel_to_zarr_index.keys())}")
+                raise ValueError(f"Channel '{channel_name}' not available in zarr canvas")
         
         # Start the background stitching task
         await self.zarr_canvas.start_stitching()
@@ -994,14 +1022,7 @@ class SquidController:
             logging.info(f'Starting normal scan with stitching: {Nx}x{Ny} positions, dx={dx_mm}mm, dy={dy_mm}mm')
             
             # Map channel names to indices
-            channel_map = {
-                'BF LED matrix full': 0,
-                'Fluorescence 405 nm Ex': 11,
-                'Fluorescence 488 nm Ex': 12,
-                'Fluorescence 561 nm Ex': 14,
-                'Fluorescence 638 nm Ex': 13,
-                'Fluorescence 730 nm Ex': 15
-            }
+            channel_map = ChannelMapper.get_human_to_id_map()
             
             # Scan pattern: snake pattern for efficiency
             for i in range(Ny):
@@ -1044,11 +1065,18 @@ class SquidController:
                         intensity = settings['intensity']
                         exposure_time = settings['exposure_time']
                         
-                        # Get channel index
-                        channel_idx = channel_map.get(channel_name, 0)
+                        # Get global channel index for snap_image (uses global channel IDs)
+                        global_channel_idx = channel_map.get(channel_name, 0)
                         
-                        # Snap image
-                        image = await self.snap_image(channel_idx, intensity, exposure_time)
+                        # Get local zarr channel index (0, 1, 2, etc.)
+                        try:
+                            zarr_channel_idx = self.zarr_canvas.get_zarr_channel_index(channel_name)
+                        except ValueError as e:
+                            logging.error(f"Channel mapping error: {e}")
+                            continue
+                        
+                        # Snap image using global channel ID
+                        image = await self.snap_image(global_channel_idx, intensity, exposure_time)
                         
                         # Convert to 8-bit if needed
                         if image.dtype != np.uint8:
@@ -1058,14 +1086,14 @@ class SquidController:
                             else:
                                 image = image.astype(np.uint8)
                         
-                        # Add to stitching queue using actual stage position
+                        # Add to stitching queue using actual stage position and local zarr index
                         await self.zarr_canvas.add_image_async(
                             image, actual_x_mm, actual_y_mm, 
-                            channel_idx=idx,  # Use the index in illumination_settings
+                            channel_idx=zarr_channel_idx,  # Use local zarr index
                             z_idx=0
                         )
                         
-                        logging.info(f'Added image at actual position ({actual_x_mm:.2f}, {actual_y_mm:.2f}) for channel {channel_name} (intended: {x_mm:.2f}, {y_mm:.2f})')
+                        logging.info(f'Added image at actual position ({actual_x_mm:.2f}, {actual_y_mm:.2f}) for channel {channel_name} (global_id: {global_channel_idx}, zarr_idx: {zarr_channel_idx}) (intended: {x_mm:.2f}, {y_mm:.2f})')
             
             logging.info('Normal scan with stitching completed')
             
@@ -1086,26 +1114,26 @@ class SquidController:
             # Stop the stitching task (this will now process all remaining images)
             await self.zarr_canvas.stop_stitching()
     
-    async def _initialize_zarr_canvas(self, illumination_settings):
-        """Initialize the Zarr canvas for stitching."""
-        # Get channel names from illumination settings
-        channels = [settings['channel'] for settings in illumination_settings]
+    async def _initialize_zarr_canvas(self):
+        """Initialize the Zarr canvas for stitching with all available channels."""
+        # Get ALL channel names from ChannelMapper (not just from current illumination_settings)
+        all_channels = ChannelMapper.get_all_human_names()
         
-        # Check if we already have a canvas initialized
+        # Check if we already have a canvas initialized with all channels
         if hasattr(self, 'zarr_canvas') and self.zarr_canvas is not None:
-            # Check if the existing canvas has the same channels
-            if self.zarr_canvas.channels == channels:
-                logging.info('Using existing Zarr canvas with matching channels')
+            # Check if the existing canvas has all channels
+            if set(self.zarr_canvas.channels) == set(all_channels):
+                logging.info('Using existing Zarr canvas with all channels')
                 return
             else:
-                # Close existing canvas and create new one with updated channels
-                logging.info('Closing existing canvas and creating new one with updated channels')
+                # Close existing canvas and create new one with all channels
+                logging.info('Closing existing canvas and creating new one with all channels')
                 self.zarr_canvas.close()
         
         # Get the base path from environment variable
         zarr_path = os.getenv('ZARR_PATH', '/tmp/zarr_canvas')
         
-        # Define stage limits (from README)
+        # Define stage limits (from CONFIG)
         stage_limits = {
             'x_positive': 120,  # mm
             'x_negative': 0,    # mm
@@ -1114,18 +1142,20 @@ class SquidController:
             'z_positive': 6     # mm
         }
         
-        # Create the canvas
+        # Create the canvas with ALL available channels
         self.zarr_canvas = ZarrCanvas(
             base_path=zarr_path,
             pixel_size_xy_um=self.pixel_size_xy,
             stage_limits=stage_limits,
-            channels=channels,
+            channels=all_channels,  # Use all channels from ChannelMapper
             rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
         )
         
         # Initialize the OME-Zarr structure
         self.zarr_canvas.initialize_canvas()
-        logging.info(f'Initialized Zarr canvas at {zarr_path} with channels: {channels}')
+        logging.info(f'Initialized Zarr canvas at {zarr_path} with ALL channels: {len(all_channels)} channels')
+        logging.info(f'Available channels: {all_channels}')
+        logging.info(f'Channel to zarr index mapping: {self.zarr_canvas.channel_to_zarr_index}')
     
     def get_stitched_region(self, center_x_mm, center_y_mm, width_mm, height_mm, 
                            scale_level=0, channel_name='BF LED matrix full'):
@@ -1146,20 +1176,27 @@ class SquidController:
         if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
             raise RuntimeError("Zarr canvas not initialized. Run a scan first.")
         
-        # Get channel index
-        try:
-            channel_idx = self.zarr_canvas.channels.index(channel_name)
-        except ValueError:
-            logging.warning(f"Channel {channel_name} not found, using first channel")
-            channel_idx = 0
-        
-        # Get the region
-        region = self.zarr_canvas.get_canvas_region(
+        # Get the region using the new channel name method
+        region = self.zarr_canvas.get_canvas_region_by_channel_name(
             center_x_mm, center_y_mm, width_mm, height_mm,
-            scale=scale_level, channel_idx=channel_idx
+            channel_name, scale=scale_level
         )
         
+        if region is None:
+            logging.warning(f"Failed to get region for channel {channel_name}")
+            return None
+        
         return region
+    
+    async def initialize_zarr_canvas_if_needed(self):
+        """
+        Initialize the zarr canvas with all channels if not already initialized.
+        This can be called early in the service lifecycle to ensure the canvas is ready.
+        """
+        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
+            # Initialize with all channels from ChannelMapper
+            await self._initialize_zarr_canvas()
+            logging.info("Zarr canvas pre-initialized with all available channels")
 
     def _initialize_empty_canvas(self):
         """Initialize an empty zarr canvas when the microscope starts up."""
@@ -1202,8 +1239,9 @@ class SquidController:
                 'z_positive': 6     # mm
             }
             
-            # Default channels for initialization
-            default_channels = ['BF LED matrix full']
+            # Use ALL available channels from ChannelMapper for initialization
+            default_channels = ChannelMapper.get_all_human_names()
+            logging.info(f'Initializing zarr canvas with channels from ChannelMapper: {len(default_channels)} channels')
             
             # Create the canvas
             self.zarr_canvas = ZarrCanvas(
@@ -1216,10 +1254,12 @@ class SquidController:
             
             # Initialize the OME-Zarr structure
             self.zarr_canvas.initialize_canvas()
-            logging.info(f'Successfully initialized empty Zarr canvas at {actual_zarr_path} with pixel size {self.pixel_size_xy:.3f} µm')
+            logging.info(f'Successfully initialized Zarr canvas at {actual_zarr_path} with ALL channels: {len(default_channels)} channels')
+            logging.info(f'Available channels: {default_channels}')
+            logging.info(f'Pixel size: {self.pixel_size_xy:.3f} µm')
             
         except Exception as e:
-            logging.error(f'Failed to initialize empty zarr canvas: {e}')
+            logging.error(f'Failed to initialize zarr canvas with all channels: {e}')
             logging.info('Canvas will be initialized later when needed for scanning')
             logging.info('To fix this, either:')
             logging.info('  1. Set ZARR_PATH environment variable to a writable directory (e.g., export ZARR_PATH=/tmp/zarr_canvas)')

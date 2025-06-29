@@ -19,6 +19,7 @@ from PIL import Image
 from squid_control.squid_controller import SquidController
 from squid_control.control.camera import TriggerModeSetting
 from squid_control.control.config import CONFIG
+from squid_control.control.config import ChannelMapper
 from pydantic import Field, BaseModel
 from typing import List, Optional
 from collections import deque
@@ -301,14 +302,7 @@ class Microscope:
         self.F561_intensity_exposure = [50, 100]
         self.F638_intensity_exposure = [50, 100]
         self.F730_intensity_exposure = [50, 100]
-        self.channel_param_map = {
-            0: 'BF_intensity_exposure',
-            11: 'F405_intensity_exposure',
-            12: 'F488_intensity_exposure',
-            13: 'F638_intensity_exposure',
-            14: 'F561_intensity_exposure',
-            15: 'F730_intensity_exposure',
-        }
+        self.channel_param_map = ChannelMapper.get_id_to_param_map()
         self.parameters = {
             'current_x': self.current_x,
             'current_y': self.current_y,
@@ -1341,6 +1335,9 @@ class Microscope:
             if video_buffering_was_active:
                 logger.info("Video buffering is active, stopping it temporarily during well plate scanning")
                 await self.stop_video_buffering()
+                # Wait additional time to ensure camera fully settles after stopping video buffering
+                logger.info("Waiting for camera to settle after stopping video buffering...")
+                await asyncio.sleep(0.5)
             
             # Set scanning flag to prevent automatic video buffering restart during scan
             self.scanning_in_progress = True
@@ -3022,6 +3019,9 @@ class Microscope:
             if video_buffering_was_active:
                 logger.info("Video buffering is active, stopping it temporarily during scanning")
                 await self.stop_video_buffering()
+                # Wait additional time to ensure camera fully settles after stopping video buffering
+                logger.info("Waiting for camera to settle after stopping video buffering...")
+                await asyncio.sleep(0.5)
             
             # Set scanning flag to prevent automatic video buffering restart during scan
             self.scanning_in_progress = True

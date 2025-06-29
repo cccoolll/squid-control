@@ -30,7 +30,7 @@ class ZarrCanvas:
             base_path: Base directory for zarr storage (from ZARR_PATH env variable)
             pixel_size_xy_um: Pixel size in micrometers
             stage_limits: Dictionary with x_positive, x_negative, y_positive, y_negative in mm
-            channels: List of channel names
+            channels: List of channel names (human-readable names)
             chunk_size: Size of chunks in pixels (default 256)
             rotation_angle_deg: Rotation angle for stitching in degrees (positive=clockwise, negative=counterclockwise)
         """
@@ -41,6 +41,12 @@ class ZarrCanvas:
         self.chunk_size = chunk_size
         self.rotation_angle_deg = rotation_angle_deg
         self.zarr_path = self.base_path / "live_stitching.zarr"
+        
+        # Create channel mapping: channel_name -> local_zarr_index
+        self.channel_to_zarr_index = {channel_name: idx for idx, channel_name in enumerate(self.channels)}
+        self.zarr_index_to_channel = {idx: channel_name for idx, channel_name in enumerate(self.channels)}
+        
+        logger.info(f"Channel mapping: {self.channel_to_zarr_index}")
         
         # Calculate canvas dimensions in pixels based on stage limits
         self.stage_width_mm = stage_limits['x_positive'] - stage_limits['x_negative']
@@ -85,6 +91,40 @@ class ZarrCanvas:
             
         return min(num_scales, 6)  # Cap at 6 levels
     
+    def get_zarr_channel_index(self, channel_name: str) -> int:
+        """
+        Get the local zarr array index for a channel name.
+        
+        Args:
+            channel_name: Human-readable channel name
+            
+        Returns:
+            int: Local index in the zarr array (0, 1, 2, etc.)
+            
+        Raises:
+            ValueError: If channel name is not found
+        """
+        if channel_name not in self.channel_to_zarr_index:
+            raise ValueError(f"Channel '{channel_name}' not found in zarr canvas. Available channels: {list(self.channel_to_zarr_index.keys())}")
+        return self.channel_to_zarr_index[channel_name]
+    
+    def get_channel_name_by_zarr_index(self, zarr_index: int) -> str:
+        """
+        Get the channel name for a local zarr array index.
+        
+        Args:
+            zarr_index: Local index in the zarr array
+            
+        Returns:
+            str: Human-readable channel name
+            
+        Raises:
+            ValueError: If zarr index is not found
+        """
+        if zarr_index not in self.zarr_index_to_channel:
+            raise ValueError(f"Zarr index {zarr_index} not found. Available indices: {list(self.zarr_index_to_channel.keys())}")
+        return self.zarr_index_to_channel[zarr_index]
+    
     def initialize_canvas(self):
         """Initialize the OME-Zarr structure with proper metadata."""
         logger.info(f"Initializing OME-Zarr canvas at {self.zarr_path}")
@@ -103,6 +143,49 @@ class ZarrCanvas:
             store = zarr.DirectoryStore(str(self.zarr_path))
             root = zarr.open_group(store=store, mode='w')
             
+            # Import ChannelMapper for better metadata
+            from squid_control.control.config import ChannelMapper
+            
+            # Create enhanced channel metadata with proper colors and info
+            omero_channels = []
+            for ch in self.channels:
+                try:
+                    channel_info = ChannelMapper.get_channel_by_human_name(ch)
+                    # Assign colors based on channel type
+                    if channel_info.channel_id == 0:  # BF
+                        color = "FFFFFF"  # White
+                    elif channel_info.channel_id == 11:  # 405nm
+                        color = "8000FF"  # Blue-violet
+                    elif channel_info.channel_id == 12:  # 488nm
+                        color = "00FF00"  # Green
+                    elif channel_info.channel_id == 13:  # 638nm
+                        color = "FF0000"  # Red
+                    elif channel_info.channel_id == 14:  # 561nm
+                        color = "FFFF00"  # Yellow
+                    elif channel_info.channel_id == 15:  # 730nm
+                        color = "FF00FF"  # Magenta
+                    else:
+                        color = "FFFFFF"  # Default white
+                        
+                    omero_channels.append({
+                        "label": ch,
+                        "color": color,
+                        "active": True,
+                        "window": {"start": 0, "end": 255},
+                        "family": "linear",
+                        "coefficient": 1.0
+                    })
+                except ValueError:
+                    # Fallback for unknown channels
+                    omero_channels.append({
+                        "label": ch,
+                        "color": "FFFFFF",
+                        "active": True,
+                        "window": {"start": 0, "end": 255},
+                        "family": "linear",
+                        "coefficient": 1.0
+                    })
+            
             # Create OME-Zarr metadata
             multiscales_metadata = {
                 "multiscales": [{
@@ -118,7 +201,22 @@ class ZarrCanvas:
                     "version": "0.4"
                 }],
                 "omero": {
-                    "channels": [{"label": ch, "color": "FFFFFF"} for ch in self.channels]
+                    "id": 1,
+                    "name": "Squid Microscope Live Stitching",
+                    "channels": omero_channels,
+                    "rdefs": {
+                        "defaultT": 0,
+                        "defaultZ": 0,
+                        "model": "color"
+                    }
+                },
+                "squid_canvas": {
+                    "channel_mapping": self.channel_to_zarr_index,
+                    "zarr_index_mapping": self.zarr_index_to_channel,
+                    "rotation_angle_deg": self.rotation_angle_deg,
+                    "pixel_size_xy_um": self.pixel_size_xy_um,
+                    "stage_limits": self.stage_limits,
+                    "version": "1.0"
                 }
             }
             
@@ -241,9 +339,18 @@ class ZarrCanvas:
             image: Image array (2D)
             x_mm: X position in millimeters
             y_mm: Y position in millimeters
-            channel_idx: Channel index
+            channel_idx: Local zarr channel index (0, 1, 2, etc.)
             z_idx: Z-slice index (default 0)
         """
+        # Validate channel index
+        if channel_idx >= len(self.channels):
+            logger.error(f"Channel index {channel_idx} out of bounds. Available channels: {len(self.channels)} (indices 0-{len(self.channels)-1})")
+            return
+        
+        if channel_idx < 0:
+            logger.error(f"Channel index {channel_idx} cannot be negative")
+            return
+        
         # Apply rotation and cropping first
         processed_image = self._rotate_and_crop_image(image)
         
@@ -264,6 +371,11 @@ class ZarrCanvas:
                 # Get the zarr array for this scale
                 zarr_array = self.zarr_arrays[scale]
                 
+                # Double-check zarr array dimensions
+                if channel_idx >= zarr_array.shape[1]:
+                    logger.error(f"Channel index {channel_idx} exceeds zarr array channel dimension {zarr_array.shape[1]}")
+                    continue
+                
                 # Calculate bounds
                 y_start = max(0, y_px - scaled_image.shape[0] // 2)
                 y_end = min(zarr_array.shape[3], y_start + scaled_image.shape[0])
@@ -278,8 +390,15 @@ class ZarrCanvas:
                 
                 # Write to zarr
                 if y_end > y_start and x_end > x_start:
-                    zarr_array[0, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
-                        scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
+                    try:
+                        zarr_array[0, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
+                            scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
+                        logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx}")
+                    except IndexError as e:
+                        logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}: {e}")
+                        logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access channel {channel_idx}")
+                    except Exception as e:
+                        logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}: {e}")
     
     async def add_image_async(self, image: np.ndarray, x_mm: float, y_mm: float,
                               channel_idx: int = 0, z_idx: int = 0):
@@ -402,7 +521,7 @@ class ZarrCanvas:
     def get_canvas_region(self, x_mm: float, y_mm: float, width_mm: float, height_mm: float,
                           scale: int = 0, channel_idx: int = 0) -> np.ndarray:
         """
-        Get a region from the canvas.
+        Get a region from the canvas by zarr channel index.
         
         Args:
             x_mm: Center X position in millimeters
@@ -410,12 +529,29 @@ class ZarrCanvas:
             width_mm: Width in millimeters
             height_mm: Height in millimeters
             scale: Scale level to retrieve from
-            channel_idx: Channel index
+            channel_idx: Local zarr channel index (0, 1, 2, etc.)
             
         Returns:
             Retrieved image region as numpy array
         """
+        # Validate channel index
+        if channel_idx >= len(self.channels) or channel_idx < 0:
+            logger.error(f"Channel index {channel_idx} out of bounds. Available channels: {len(self.channels)} (indices 0-{len(self.channels)-1})")
+            return None
+        
         with self.zarr_lock:
+            # Validate zarr arrays exist
+            if not hasattr(self, 'zarr_arrays') or scale not in self.zarr_arrays:
+                logger.error(f"Zarr arrays not initialized or scale {scale} not available")
+                return None
+                
+            zarr_array = self.zarr_arrays[scale]
+            
+            # Double-check zarr array dimensions
+            if channel_idx >= zarr_array.shape[1]:
+                logger.error(f"Channel index {channel_idx} exceeds zarr array channel dimension {zarr_array.shape[1]}")
+                return None
+            
             # Convert to pixel coordinates
             center_x_px, center_y_px = self.stage_to_pixel_coords(x_mm, y_mm, scale)
             
@@ -425,14 +561,47 @@ class ZarrCanvas:
             
             # Calculate bounds
             x_start = max(0, center_x_px - width_px // 2)
-            x_end = min(self.zarr_arrays[scale].shape[4], x_start + width_px)
+            x_end = min(zarr_array.shape[4], x_start + width_px)
             y_start = max(0, center_y_px - height_px // 2)
-            y_end = min(self.zarr_arrays[scale].shape[3], y_start + height_px)
+            y_end = min(zarr_array.shape[3], y_start + height_px)
             
             # Read from zarr
-            region = self.zarr_arrays[scale][0, channel_idx, 0, y_start:y_end, x_start:x_end]
+            try:
+                region = zarr_array[0, channel_idx, 0, y_start:y_end, x_start:x_end]
+                logger.debug(f"Successfully retrieved region from zarr at scale {scale}, channel {channel_idx}")
+                return region
+            except IndexError as e:
+                logger.error(f"IndexError reading from zarr array at scale {scale}, channel {channel_idx}: {e}")
+                logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access channel {channel_idx}")
+                return None
+            except Exception as e:
+                logger.error(f"Error reading from zarr array at scale {scale}, channel {channel_idx}: {e}")
+                return None
+    
+    def get_canvas_region_by_channel_name(self, x_mm: float, y_mm: float, width_mm: float, height_mm: float,
+                                         channel_name: str, scale: int = 0) -> np.ndarray:
+        """
+        Get a region from the canvas by channel name.
+        
+        Args:
+            x_mm: Center X position in millimeters
+            y_mm: Center Y position in millimeters
+            width_mm: Width in millimeters
+            height_mm: Height in millimeters
+            channel_name: Human-readable channel name
+            scale: Scale level to retrieve from
             
-            return region
+        Returns:
+            Retrieved image region as numpy array
+        """
+        # Get the local zarr index for this channel
+        try:
+            channel_idx = self.get_zarr_channel_index(channel_name)
+        except ValueError as e:
+            logger.error(f"Channel not found: {e}")
+            return None
+            
+        return self.get_canvas_region(x_mm, y_mm, width_mm, height_mm, scale, channel_idx)
     
     def close(self):
         """Clean up resources."""
