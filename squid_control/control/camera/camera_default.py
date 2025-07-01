@@ -220,13 +220,13 @@ class Camera(object):
         else:
             # set the camera exposure time such that the active exposure time (illumination on time) is the desired value
             self.exposure_time = exposure_time
-            # add an additional 100 us so that the illumination can fully turn off before rows start to end exposure
+            # add an additional 500 us so that the illumination can fully turn off before rows start to end exposure
             camera_exposure_time = (
                 self.exposure_delay_us
                 + self.exposure_time * 1000
                 + self.row_period_us * self.pixel_size_byte * (self.row_numbers - 1)
-                + 100
-            )  # add an additional 100 us so that the illumination can fully turn off before rows start to end exposure
+                + 500
+            )  # add an additional 500 us so that the illumination can fully turn off before rows start to end exposure
             self.camera.ExposureTime.set(camera_exposure_time)
 
     def update_camera_exposure_time(self):
