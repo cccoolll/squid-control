@@ -435,13 +435,6 @@ class Microscope:
             if datastore_svc is None:
                 raise RuntimeError("Datastore service not found")
             
-            except asyncio.TimeoutError:
-                logger.error("Zarr access health check timed out.")
-                raise RuntimeError("Zarr access health check timed out after 50 seconds.")
-            except Exception as artifact_error:
-                logger.error(f"Zarr access health check failed: {str(artifact_error)}")
-                raise RuntimeError(f"Zarr access health check failed: {str(artifact_error)}")
-            
             chatbot_id = f"squid-chatbot-{'simu' if self.is_simulation else 'real'}-{self.service_id}"
             
             chatbot_server_url = "https://chat.bioimage.io"
