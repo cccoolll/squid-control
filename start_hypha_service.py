@@ -2936,9 +2936,7 @@ class Microscope:
             
         Returns:
             dict: Status and current velocity settings
-        """
-        self.check_permission(context["user"])
-        
+        """        
         try:
             return self.squidController.set_stage_velocity(
                 velocity_x_mm_per_s=velocity_x_mm_per_s,
@@ -2956,7 +2954,6 @@ class Microscope:
         Returns:
             dict: Information about canvas size, export feasibility, and gallery status
         """
-        #self.check_permission(context["user"])
         
         try:
             # Check if zarr canvas exists
@@ -3013,7 +3010,6 @@ class Microscope:
         Returns:
             dict: Information about name availability and suggestions
         """
-        #self.check_permission(context["user"])
         
         try:
             # Check if zarr artifact manager is available
@@ -3054,7 +3050,6 @@ class Microscope:
         Returns:
             dict: Upload result information
         """
-        #self.check_permission(context["user"])
         
         try:
             # Check if zarr canvas exists
@@ -3120,7 +3115,6 @@ class Microscope:
         Returns:
             list: List of datasets in the microscope's gallery
         """
-        #self.check_permission(context["user"])
         
         try:
             # Check if zarr artifact manager is available
