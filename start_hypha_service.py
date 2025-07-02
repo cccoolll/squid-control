@@ -1916,6 +1916,7 @@ class Microscope:
             # Stitching functions
             "normal_scan_with_stitching": self.normal_scan_with_stitching,
             "quick_scan_with_stitching": self.quick_scan_with_stitching,
+            "stop_scan_and_stitching": self.stop_scan_and_stitching,
             "get_stitched_region": self.get_stitched_region,
             "reset_stitching_canvas": self.reset_stitching_canvas,
         }
@@ -3276,6 +3277,39 @@ class Microscope:
             # Always reset the scanning flag, regardless of success or failure
             self.scanning_in_progress = False
             logger.info("Quick scanning completed, video buffering auto-start is now re-enabled")
+
+    @schema_function(skip_self=True)
+    def stop_scan_and_stitching(self, context=None):
+        """
+        Stop any ongoing scanning and stitching processes.
+        This will interrupt normal_scan_with_stitching and quick_scan_with_stitching if they are running.
+        
+        Returns:
+            dict: Status of the stop request
+        """
+        try:
+            logger.info("Stop scan and stitching requested")
+            
+            # Call the controller's stop method
+            result = self.squidController.stop_scan_and_stitching()
+            
+            # Also reset the scanning flag at service level
+            if hasattr(self, 'scanning_in_progress'):
+                self.scanning_in_progress = False
+                logger.info("Service scanning flag reset")
+            
+            return {
+                "success": True,
+                "message": "Scan stop requested - ongoing scans will be interrupted",
+                "controller_response": result
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to stop scan and stitching: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to stop scan: {str(e)}"
+            }
 
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):

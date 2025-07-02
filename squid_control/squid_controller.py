@@ -82,6 +82,7 @@ class SquidController:
         self.data_channel = None
         self.is_simulation = is_simulation
         self.is_busy = False
+        self.scan_stop_requested = False  # Flag to stop ongoing scans
         if is_simulation:
             config_path = os.path.join(os.path.dirname(path), 'configuration_HCS_v2_example.ini')
         else:
@@ -1051,6 +1052,7 @@ class SquidController:
         
         try:
             self.is_busy = True
+            self.scan_stop_requested = False  # Reset stop flag at start of scan
             logging.info(f'Starting normal scan with stitching: {Nx}x{Ny} positions, dx={dx_mm}mm, dy={dy_mm}mm')
             
             # Map channel names to indices
@@ -1058,7 +1060,16 @@ class SquidController:
             
             # Scan pattern: snake pattern for efficiency
             for i in range(Ny):
+                # Check for stop request before each row
+                if self.scan_stop_requested:
+                    logging.info("Scan stopped by user request")
+                    break
+                    
                 for j in range(Nx):
+                    # Check for stop request before each position
+                    if self.scan_stop_requested:
+                        logging.info("Scan stopped by user request")
+                        break
                     # Calculate position (snake pattern - reverse X on odd rows)
                     if i % 2 == 0:
                         x_idx = j
@@ -1370,6 +1381,7 @@ class SquidController:
         
         try:
             self.is_busy = True
+            self.scan_stop_requested = False  # Reset stop flag at start of scan
             logging.info(f'Starting quick scan with stitching: {wellplate_type} well plate, velocity={velocity_mm_per_s}mm/s, fps={fps_target}')
             
             # Set high-speed velocity for scanning
@@ -1397,6 +1409,10 @@ class SquidController:
             
             # Scan each row using snake pattern (S-pattern)
             for row_idx in range(max_rows):
+                # Check for stop request before each row
+                if self.scan_stop_requested:
+                    logging.info("Quick scan stopped by user request")
+                    break
                 row_letter = chr(ord('A') + row_idx)
                 
                 # Calculate Y position for this row
@@ -1445,6 +1461,11 @@ class SquidController:
                 frames_acquired = 0
                 
                 while self.microcontroller.is_busy():
+                    # Check for stop request during movement
+                    if self.scan_stop_requested:
+                        logging.info("Quick scan stopped during row movement")
+                        break
+                        
                     current_time = time.time()
                     
                     # Check if it's time for next frame
@@ -1522,6 +1543,15 @@ class SquidController:
             
             # Stop the stitching task
             await self.zarr_canvas.stop_stitching()
+    
+    def stop_scan_and_stitching(self):
+        """
+        Stop any ongoing scanning and stitching processes.
+        This will interrupt normal_scan_with_stitching and quick_scan_with_stitching.
+        """
+        self.scan_stop_requested = True
+        logging.info("Scan stop requested - ongoing scans will be interrupted")
+        return {"success": True, "message": "Scan stop requested"}
     
     async def _add_image_to_zarr_quick(self, image: np.ndarray, x_mm: float, y_mm: float,
                                      channel_idx: int = 0, z_idx: int = 0):
