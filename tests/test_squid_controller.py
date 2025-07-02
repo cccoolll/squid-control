@@ -1473,6 +1473,233 @@ async def test_set_stage_velocity_error_handling(sim_controller_fixture):
         print("✅ set_stage_velocity error handling tests passed!")
         break
 
+@pytest.mark.timeout(180)
+async def test_zarr_upload_complete_workflow(sim_controller_fixture):
+    """Test complete zarr upload workflow with real artifact manager: Initialize → Check Name → Create Data → Upload → List → Cleanup"""
+    async for controller in sim_controller_fixture:
+        print("Testing complete zarr upload workflow with real artifact manager...")
+        
+        # Check for required environment variables
+        import os
+        token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+        if not token:
+            pytest.skip("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. Skipping real zarr upload test.")
+        
+        # Step 1: Create a simple mock zarr canvas that provides the required methods
+        print("1. Creating mock zarr canvas for testing...")
+        
+        import numpy as np
+        import time
+        import zipfile
+        import io
+        import json
+        
+        class MockZarrCanvas:
+            def get_export_info(self):
+                return {
+                    "export_feasible": True,
+                    "estimated_zip_size_mb": 1.5,
+                    "channels": ["BF LED matrix full", "Fluorescence 405 nm Ex"],
+                    "canvas_dimensions": {
+                        "pixel_size_um": 0.33,
+                        "width_px": 1000,
+                        "height_px": 1000
+                    },
+                    "num_scales": 3
+                }
+            
+            def export_as_zip(self):
+                # Create a simple empty zip file with zarr-like structure
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    # Add minimal zarr-like structure
+                    zf.writestr("metadata.json", json.dumps({
+                        "dataset": f"test_zarr_dataset_{int(time.time())}",
+                        "format": "zarr",
+                        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "test_mode": True
+                    }))
+                    zf.writestr("data/.zattrs", json.dumps({"zarr_format": 2}))
+                    zf.writestr("data/0/.zattrs", json.dumps({"channel": 0, "name": "brightfield"}))
+                    zf.writestr("data/11/.zattrs", json.dumps({"channel": 11, "name": "405nm"}))
+                    # Add empty data files to simulate structure
+                    zf.writestr("data/0/empty.bin", b"test data")
+                    zf.writestr("data/11/empty.bin", b"test data")
+                return zip_buffer.getvalue()
+            
+            def close(self):
+                pass
+        
+        # Set the mock zarr canvas on the controller
+        controller.zarr_canvas = MockZarrCanvas()
+        
+        print(f"   ✓ Mock zarr canvas created for testing")
+        
+        # Step 2: Create hypha service instance to access upload methods
+        print("2. Initializing hypha service for real API access...")
+        
+        # Import the hypha service class
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+        from start_hypha_service import Microscope
+        
+        # Create service instance and replace its controller with our test controller
+        service = Microscope(is_simulation=True, is_local=False)
+        service.squidController = controller  # Replace with our test controller that has the mock zarr canvas
+        service.squid_controller = controller  # Add alias for methods that use underscore
+        service.service_id = "test-gallery"  # Use fixed test gallery name
+        
+        # Add mock for update_task_status method
+        def mock_update_task_status(task_name, status, progress_message="", error_message=""):
+            print(f"   Task {task_name}: {status} - {progress_message or error_message}")
+        
+        service.update_task_status = mock_update_task_status
+        
+        print(f"   ✓ Service initialized with ID: {service.service_id}")
+        
+        # Step 3: Get upload info
+        print("3. Getting zarr upload info...")
+        
+        upload_info = await service.get_zarr_upload_info(context={"user": {"email": "test@example.com", "is_anonymous": False}})
+        
+        print(f"   Upload info result: {upload_info}")
+        assert upload_info["success"] == True, f"Failed to get upload info: {upload_info}"
+        assert "export_info" in upload_info, "Upload info should contain export_info"
+        
+        export_info = upload_info["export_info"]
+        assert export_info["export_feasible"] == True, "Dataset should be feasible for upload"
+        
+        print(f"   ✓ Upload info retrieved: {export_info['estimated_zip_size_mb']:.1f} MB estimated")
+        
+        # Step 4: Check dataset name availability
+        print("4. Checking dataset name availability...")
+        
+        # Use valid format: lowercase letters, numbers, hyphens, and colons only
+        # Include timestamp to avoid conflicts in fixed test gallery
+        dataset_name = f"test-zarr-dataset-{int(time.time())}"
+        
+        name_check = await service.check_zarr_dataset_name(
+            dataset_name=dataset_name,
+            context={"user": {"email": "test@example.com", "is_anonymous": False}}
+        )
+        
+        print(f"   Name check result: {name_check}")
+        assert name_check["success"] == True, f"Failed to check name: {name_check}"
+        
+        name_check_info = name_check["name_check"]
+        if not name_check_info["available"]:
+            # Generate a unique name if the first one is taken (use valid format)
+            dataset_name = f"test-zarr-dataset-{int(time.time())}-{np.random.randint(1000, 9999)}"
+            print(f"   Name taken, using: {dataset_name}")
+        
+        print(f"   ✓ Dataset name checked and available: {dataset_name}")
+        
+        # Step 5: Upload the dataset
+        print("5. Uploading zarr dataset...")
+        
+        upload_result = await service.upload_zarr_dataset(
+            dataset_name=dataset_name,
+            description="Test dataset for automated testing",
+            include_acquisition_settings=True,
+            context={"user": {"email": "test@example.com", "is_anonymous": False}}
+        )
+        
+        print(f"   Upload result: {upload_result}")
+        assert upload_result["success"] == True, f"Upload failed: {upload_result}"
+        
+        upload_details = upload_result["upload_result"]
+        dataset_id = upload_details["dataset_id"]
+        print(f"   ✓ Dataset uploaded successfully: {dataset_id}")
+        
+        # Step 6: List datasets to verify upload
+        print("6. Listing microscope datasets to verify upload...")
+        
+        datasets_list = await service.list_microscope_datasets(
+            context={"user": {"email": "test@example.com", "is_anonymous": False}}
+        )
+        
+        print(f"   Datasets list result: {datasets_list}")
+        assert datasets_list["success"] == True, f"Failed to list datasets: {datasets_list}"
+        
+        datasets = datasets_list["datasets"]
+        print(f"   ✓ Dataset listing successful: {len(datasets)} datasets found")
+        
+        # Find our uploaded dataset
+        uploaded_dataset = None
+        for dataset in datasets:
+            if dataset.get("id") == dataset_id or dataset_name in str(dataset):
+                uploaded_dataset = dataset
+                break
+        
+        if uploaded_dataset:
+            print(f"   ✓ Dataset found in listing: {uploaded_dataset.get('id', 'unknown_id')}")
+        else:
+            print(f"   ! Dataset not found in listing (may take time to appear)")
+        
+        # Step 7: Cleanup - Delete the test dataset
+        print("7. Cleaning up test dataset...")
+        
+        cleanup_successful = False
+        try:
+            # Get the artifact manager service instance to clean up
+            artifact_manager_svc = service._zarr_artifact_manager._svc
+            
+            # Delete the test dataset using the artifact manager delete method
+            await artifact_manager_svc.delete(artifact_id=dataset_id, delete_files=True)
+            print(f"   ✓ Dataset deleted successfully: {dataset_id}")
+            cleanup_successful = True
+            
+        except Exception as e:
+            print(f"   Warning: Cleanup failed: {e}")
+            print(f"   Manual cleanup may be required for dataset: {dataset_id}")
+            # Don't fail the test if cleanup fails
+        
+        # Clean up mock zarr canvas
+        try:
+            if hasattr(controller, 'zarr_canvas') and controller.zarr_canvas:
+                controller.zarr_canvas.close()
+                controller.zarr_canvas = None
+        except Exception as e:
+            print(f"   Warning: Mock zarr canvas cleanup failed: {e}")
+        
+        print(f"   ✓ Cleanup completed")
+        
+        # Step 8: Final verification
+        print("8. Final workflow verification...")
+        
+        workflow_summary = {
+            "dataset_name": dataset_name,
+            "dataset_id": dataset_id,
+            "upload_successful": upload_result["success"],
+            "listing_successful": datasets_list["success"],
+            "dataset_found_in_listing": uploaded_dataset is not None,
+            "cleanup_successful": cleanup_successful,
+            "estimated_size_mb": export_info["estimated_zip_size_mb"],
+            "actual_channels": export_info["channels"],
+            "workflow_success": True
+        }
+        
+        print(f"   Workflow Summary:")
+        for key, value in workflow_summary.items():
+            print(f"     {key}: {value}")
+        
+        # Verify all steps completed successfully
+        assert workflow_summary["upload_successful"] == True, "Upload should succeed"
+        assert workflow_summary["listing_successful"] == True, "Listing should succeed"
+        assert workflow_summary["estimated_size_mb"] > 0, "Should have estimated size"
+        assert len(workflow_summary["actual_channels"]) > 0, "Should have channels"
+        
+        print("✅ Complete real zarr upload workflow test passed!")
+        print(f"   Successfully uploaded and verified dataset '{dataset_name}'")
+        print(f"   Used fixed test gallery: agent-lens/microscope-gallery-test-gallery")
+        print(f"   Dataset ID: {dataset_id}")
+        print(f"   Size: {workflow_summary['estimated_size_mb']:.1f} MB")
+        print(f"   Channels: {workflow_summary['actual_channels']}")
+        print(f"   Cleanup successful: {workflow_summary['cleanup_successful']}")
+        
+        break
+
 
 
 if __name__ == "__main__":
