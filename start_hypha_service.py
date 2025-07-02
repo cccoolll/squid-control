@@ -18,6 +18,8 @@ from PIL import Image
 # Now you can import squid_control
 from squid_control.squid_controller import SquidController
 from squid_control.control.camera import TriggerModeSetting
+from squid_control.control.config import CONFIG
+from squid_control.control.config import ChannelMapper
 from pydantic import Field, BaseModel
 from typing import List, Optional
 from collections import deque
@@ -300,14 +302,7 @@ class Microscope:
         self.F561_intensity_exposure = [50, 100]
         self.F638_intensity_exposure = [50, 100]
         self.F730_intensity_exposure = [50, 100]
-        self.channel_param_map = {
-            0: 'BF_intensity_exposure',
-            11: 'F405_intensity_exposure',
-            12: 'F488_intensity_exposure',
-            13: 'F638_intensity_exposure',
-            14: 'F561_intensity_exposure',
-            15: 'F730_intensity_exposure',
-        }
+        self.channel_param_map = ChannelMapper.get_id_to_param_map()
         self.parameters = {
             'current_x': self.current_x,
             'current_y': self.current_y,
@@ -357,11 +352,14 @@ class Microscope:
         
         # Auto-stop video buffering attributes
         self.last_video_request_time = None
-        self.video_idle_timeout = 5.0  # Increase to 5 seconds to prevent rapid cycling
+        self.video_idle_timeout = 1  # Increase to 1 seconds to prevent rapid cycling
         self.video_idle_check_task = None
         self.webrtc_connected = False
         self.buffering_start_time = None
-        self.min_buffering_duration = 2.0  # Minimum time to keep buffering active
+        self.min_buffering_duration = 1.0  # Minimum time to keep buffering active
+        
+        # Scanning control attributes
+        self.scanning_in_progress = False  # Flag to prevent video buffering during scans
 
         # Add task status tracking
         self.task_status = {
@@ -436,52 +434,6 @@ class Microscope:
             datastore_svc = await self.server.get_service(datastore_id)
             if datastore_svc is None:
                 raise RuntimeError("Datastore service not found")
-            
-            try:
-                if not self.is_simulation:
-                    logger.info("Skipping Zarr access check in non-simulation mode.")
-                else:
-                    if not hasattr(self.squidController.camera, 'zarr_image_manager') or self.squidController.camera.zarr_image_manager is None:
-                        logger.info("ZarrImageManager not initialized yet, initializing it for health check")
-                        
-                        try:
-                            await asyncio.wait_for(
-                                self.initialize_zarr_manager(self.squidController.camera),
-                                timeout=30
-                            )
-                        except asyncio.TimeoutError:
-                            logger.error("ZarrImageManager initialization timed out")
-                            raise RuntimeError("ZarrImageManager initialization timed out")
-                    
-                    logger.info("Testing existing ZarrImageManager instance from simulated camera.")
-                    
-                    test_result = await asyncio.wait_for(
-                        self.squidController.camera.zarr_image_manager.test_zarr_access(
-                            dataset_id="agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38",
-                            channel="BF_LED_matrix_full",
-                            bypass_cache=True
-                        ), 
-                        50
-                    ) 
-                    
-                    if not test_result.get("success", False):
-                        error_msg = test_result.get("message", "Unknown error")
-                        raise RuntimeError(f"Zarr access test failed for existing instance: {error_msg}")
-                    else:
-                        stats = test_result.get("chunk_stats", {})
-                        non_zero = stats.get("non_zero_count", 0)
-                        total = stats.get("total_size", 1)
-                        if total > 0:
-                            logger.info(f"Existing Zarr access test succeeded. Non-zero values: {non_zero}/{total} ({(non_zero/total)*100:.1f}%)")
-                        else:
-                            logger.info("Existing Zarr access test succeeded, but chunk size was zero.")
-
-            except asyncio.TimeoutError:
-                logger.error("Zarr access health check timed out.")
-                raise RuntimeError("Zarr access health check timed out after 50 seconds.")
-            except Exception as artifact_error:
-                logger.error(f"Zarr access health check failed: {str(artifact_error)}")
-                raise RuntimeError(f"Zarr access health check failed: {str(artifact_error)}")
             
             chatbot_id = f"squid-chatbot-{'simu' if self.is_simulation else 'real'}-{self.service_id}"
             
@@ -764,17 +716,38 @@ class Microscope:
             else:
                 logger.warning(f"Unknown channel {channel} in one_new_frame. Using default intensity/exposure.")
             
-            # Get the raw image from the camera with original bit depth preserved
-            raw_img = await self.squidController.snap_image(channel, intensity, exposure_time)
+            # Get the raw image from the camera with original bit depth preserved and full frame
+            raw_img = await self.squidController.snap_image(channel, intensity, exposure_time, full_frame=True)
             
-            # Resize to 3000x3000 while preserving bit depth
-            resized_img = cv2.resize(raw_img, (3000, 3000))
+            # In simulation mode, resize small images to expected camera resolution
+            if self.squidController.is_simulation:
+                height, width = raw_img.shape[:2]
+                # If image is too small, resize it to expected camera dimensions
+                expected_width = 3000  # Expected camera width
+                expected_height = 3000  # Expected camera height
+                if width < expected_width or height < expected_height:
+                    raw_img = cv2.resize(raw_img, (expected_width, expected_height), interpolation=cv2.INTER_LINEAR)
+            
+            # Crop the image before resizing, similar to squid_controller.py approach
+            crop_height = CONFIG.Acquisition.CROP_HEIGHT
+            crop_width = CONFIG.Acquisition.CROP_WIDTH
+            height, width = raw_img.shape[:2]  # Support both grayscale and color images
+            start_x = width // 2 - crop_width // 2
+            start_y = height // 2 - crop_height // 2
+            
+            # Ensure crop coordinates are within bounds
+            start_x = max(0, start_x)
+            start_y = max(0, start_y)
+            end_x = min(width, start_x + crop_width)
+            end_y = min(height, start_y + crop_height)
+            
+            cropped_img = raw_img[start_y:end_y, start_x:end_x]
             
             self.get_status()
             self.task_status[task_name] = "finished"
             
             # Return the numpy array directly with preserved bit depth
-            return resized_img
+            return cropped_img
             
         except Exception as e:
             self.task_status[task_name] = "failed"
@@ -788,10 +761,36 @@ class Microscope:
         Returns: Compressed frame data (JPEG bytes) with associated metadata including stage position and timestamp
         """
         try:
-            # Update last video request time for auto-stop functionality
+            # If scanning is in progress, return a scanning placeholder immediately
+            if self.scanning_in_progress:
+                logger.debug("Scanning in progress, returning scanning placeholder frame")
+                placeholder = self._create_placeholder_frame(frame_width, frame_height, "Scanning in Progress...")
+                placeholder_compressed = self._encode_frame_jpeg(placeholder, quality=85)
+                
+                # Create metadata for scanning placeholder frame
+                scanning_metadata = {
+                    'stage_position': {'x_mm': None, 'y_mm': None, 'z_mm': None},
+                    'timestamp': time.time(),
+                    'channel': None,
+                    'intensity': None,
+                    'exposure_time_ms': None,
+                    'scanning_status': 'in_progress'
+                }
+                
+                return {
+                    'format': placeholder_compressed['format'],
+                    'data': placeholder_compressed['data'],
+                    'width': frame_width,
+                    'height': frame_height,
+                    'size_bytes': placeholder_compressed['size_bytes'],
+                    'compression_ratio': placeholder_compressed.get('compression_ratio', 1.0),
+                    'metadata': scanning_metadata
+                }
+            
+            # Update last video request time for auto-stop functionality (only when not scanning)
             self.last_video_request_time = time.time()
             
-            # Start video buffering if not already running
+            # Start video buffering if not already running and not scanning
             if not self.frame_acquisition_running:
                 logger.info("Starting video buffering for remote video frame request")
                 await self.start_video_buffering()
@@ -1275,7 +1274,7 @@ class Microscope:
             raise e
 
     @schema_function(skip_self=True)
-    def scan_well_plate(self, well_plate_type: str=Field("96", description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), illumination_settings: List[dict]=Field(default_factory=lambda: [{'channel': 'BF LED matrix full', 'intensity': 28.0, 'exposure_time': 20.0}, {'channel': 'Fluorescence 488 nm Ex', 'intensity': 27.0, 'exposure_time': 60.0}, {'channel': 'Fluorescence 561 nm Ex', 'intensity': 98.0, 'exposure_time': 100.0}], description="Illumination settings with channel name, intensity (0-100), and exposure time (ms) for each channel"), do_contrast_autofocus: bool=Field(False, description="Whether to do contrast based autofocus"), do_reflection_af: bool=Field(True, description="Whether to do reflection based autofocus"), scanning_zone: List[tuple]=Field(default_factory=lambda: [(0,0),(0,0)], description="The scanning zone of the well plate, for 96 well plate, it should be[(0,0),(7,11)] "), Nx: int=Field(3, description="Number of columns to scan"), Ny: int=Field(3, description="Number of rows to scan"), action_ID: str=Field('testPlateScan', description="The ID of the action"), context=None):
+    async def scan_well_plate(self, well_plate_type: str=Field("96", description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), illumination_settings: List[dict]=Field(default_factory=lambda: [{'channel': 'BF LED matrix full', 'intensity': 28.0, 'exposure_time': 20.0}, {'channel': 'Fluorescence 488 nm Ex', 'intensity': 27.0, 'exposure_time': 60.0}, {'channel': 'Fluorescence 561 nm Ex', 'intensity': 98.0, 'exposure_time': 100.0}], description="Illumination settings with channel name, intensity (0-100), and exposure time (ms) for each channel"), do_contrast_autofocus: bool=Field(False, description="Whether to do contrast based autofocus"), do_reflection_af: bool=Field(True, description="Whether to do reflection based autofocus"), scanning_zone: List[tuple]=Field(default_factory=lambda: [(0,0),(0,0)], description="The scanning zone of the well plate, for 96 well plate, it should be[(0,0),(7,11)] "), Nx: int=Field(3, description="Number of columns to scan"), Ny: int=Field(3, description="Number of rows to scan"), action_ID: str=Field('testPlateScan', description="The ID of the action"), context=None):
         """
         Scan the well plate according to the pre-defined position list with custom illumination settings
         Returns: The message of the action
@@ -1293,6 +1292,19 @@ class Microscope:
                     {'channel': 'Fluorescence 638 nm Ex', 'intensity': 100, 'exposure_time': 200},
                     {'channel': 'Fluorescence 730 nm Ex', 'intensity': 100, 'exposure_time': 200},
                 ]
+            
+            # Check if video buffering is active and stop it during scanning
+            video_buffering_was_active = self.frame_acquisition_running
+            if video_buffering_was_active:
+                logger.info("Video buffering is active, stopping it temporarily during well plate scanning")
+                await self.stop_video_buffering()
+                # Wait additional time to ensure camera fully settles after stopping video buffering
+                logger.info("Waiting for camera to settle after stopping video buffering...")
+                await asyncio.sleep(0.5)
+            
+            # Set scanning flag to prevent automatic video buffering restart during scan
+            self.scanning_in_progress = True
+            
             logger.info("Start scanning well plate with custom illumination settings")
             self.squidController.plate_scan(well_plate_type, illumination_settings, do_contrast_autofocus, do_reflection_af, scanning_zone, Nx, Ny, action_ID)
             logger.info("Well plate scanning completed")
@@ -1302,6 +1314,10 @@ class Microscope:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to scan well plate: {e}")
             raise e
+        finally:
+            # Always reset the scanning flag, regardless of success or failure
+            self.scanning_in_progress = False
+            logger.info("Well plate scanning completed, video buffering auto-start is now re-enabled")
     
     @schema_function(skip_self=True)
     def scan_well_plate_simulated(self, context=None):
@@ -1897,6 +1913,11 @@ class Microscope:
             "get_current_well_location": self.get_current_well_location,
             "get_microscope_configuration": self.get_microscope_configuration,
             "set_stage_velocity": self.set_stage_velocity,
+            # Stitching functions
+            "normal_scan_with_stitching": self.normal_scan_with_stitching,
+            "quick_scan_with_stitching": self.quick_scan_with_stitching,
+            "get_stitched_region": self.get_stitched_region,
+            "reset_stitching_canvas": self.reset_stitching_canvas,
         }
         
         # Only register get_canvas_chunk when not in local mode
@@ -2409,12 +2430,27 @@ class Microscope:
     def _process_raw_frame(self, raw_frame, frame_width=750, frame_height=750):
         """Process raw frame for video streaming - OPTIMIZED"""
         try:
-            # OPTIMIZATION 1: Resize FIRST to reduce data for all subsequent operations
-            if raw_frame.shape[:2] != (frame_height, frame_width):
+            # OPTIMIZATION 1: Crop FIRST, then resize to reduce data for all subsequent operations
+            crop_height = CONFIG.Acquisition.CROP_HEIGHT
+            crop_width = CONFIG.Acquisition.CROP_WIDTH
+            height, width = raw_frame.shape[:2]  # Support both grayscale and color images
+            start_x = width // 2 - crop_width // 2
+            start_y = height // 2 - crop_height // 2
+            
+            # Ensure crop coordinates are within bounds
+            start_x = max(0, start_x)
+            start_y = max(0, start_y)
+            end_x = min(width, start_x + crop_width)
+            end_y = min(height, start_y + crop_height)
+            
+            cropped_frame = raw_frame[start_y:end_y, start_x:end_x]
+            
+            # Now resize the cropped frame to target dimensions
+            if cropped_frame.shape[:2] != (frame_height, frame_width):
                 # Use INTER_AREA for downsampling (faster than INTER_LINEAR)
-                processed_frame = cv2.resize(raw_frame, (frame_width, frame_height), interpolation=cv2.INTER_AREA)
+                processed_frame = cv2.resize(cropped_frame, (frame_width, frame_height), interpolation=cv2.INTER_AREA)
             else:
-                processed_frame = raw_frame.copy()
+                processed_frame = cropped_frame.copy()
             
             # Calculate gray level statistics on original frame BEFORE min/max adjustments
             gray_level_stats = self._calculate_gray_level_statistics(processed_frame)
@@ -2617,6 +2653,10 @@ class Microscope:
         while self.frame_acquisition_running:
             try:
                 await asyncio.sleep(1.0)  # Check every 1 second instead of 500ms
+                
+                # Don't stop video buffering during scanning
+                if self.scanning_in_progress:
+                    continue
                 
                 if self.last_video_request_time is None:
                     continue
@@ -2899,6 +2939,343 @@ class Microscope:
 
     def set_stage_velocity_schema(self, config: SetStageVelocityInput, context=None):
         return self.set_stage_velocity(config.velocity_x_mm_per_s, config.velocity_y_mm_per_s, context)
+
+    @schema_function(skip_self=True)
+    async def normal_scan_with_stitching(self, start_x_mm: float = Field(20, description="Starting X position in millimeters"), 
+                                       start_y_mm: float = Field(20, description="Starting Y position in millimeters"),
+                                       Nx: int = Field(5, description="Number of positions in X direction"),
+                                       Ny: int = Field(5, description="Number of positions in Y direction"),
+                                       dx_mm: float = Field(0.9, description="Interval between positions in X (millimeters)"),
+                                       dy_mm: float = Field(0.9, description="Interval between positions in Y (millimeters)"),
+                                       illumination_settings: Optional[List[dict]] = Field(None, description="List of channel settings"),
+                                       do_contrast_autofocus: bool = Field(False, description="Whether to perform contrast-based autofocus"),
+                                       do_reflection_af: bool = Field(False, description="Whether to perform reflection-based autofocus"),
+                                       action_ID: str = Field('normal_scan_stitching', description="Identifier for this scan"),
+                                       context=None):
+        """
+        Perform a normal scan with live stitching to OME-Zarr canvas.
+        The images are saved to a zarr file that represents a spatial map of the scanned area.
+        
+        Args:
+            start_x_mm: Starting X position in millimeters
+            start_y_mm: Starting Y position in millimeters
+            Nx: Number of positions to scan in X direction
+            Ny: Number of positions to scan in Y direction
+            dx_mm: Distance between positions in X direction (millimeters)
+            dy_mm: Distance between positions in Y direction (millimeters)
+            illumination_settings: List of dictionaries with channel settings (optional)
+            do_contrast_autofocus: Enable contrast-based autofocus
+            do_reflection_af: Enable reflection-based autofocus
+            action_ID: Unique identifier for this scan
+            
+        Returns:
+            dict: Status of the scan
+        """
+        try:
+            # Set default illumination settings if not provided
+            if illumination_settings is None:
+                illumination_settings = [{'channel': 'BF LED matrix full', 'intensity': 50, 'exposure_time': 100}]
+            
+            logger.info(f"Starting normal scan with stitching: {Nx}x{Ny} positions from ({start_x_mm}, {start_y_mm})")
+            
+            # Check if video buffering is active and stop it during scanning
+            video_buffering_was_active = self.frame_acquisition_running
+            if video_buffering_was_active:
+                logger.info("Video buffering is active, stopping it temporarily during scanning")
+                await self.stop_video_buffering()
+                # Wait additional time to ensure camera fully settles after stopping video buffering
+                logger.info("Waiting for camera to settle after stopping video buffering...")
+                await asyncio.sleep(0.5)
+            
+            # Set scanning flag to prevent automatic video buffering restart during scan
+            self.scanning_in_progress = True
+            
+            # Ensure the squid controller has the new method
+            await self.squidController.normal_scan_with_stitching(
+                start_x_mm=start_x_mm,
+                start_y_mm=start_y_mm,
+                Nx=Nx,
+                Ny=Ny,
+                dx_mm=dx_mm,
+                dy_mm=dy_mm,
+                illumination_settings=illumination_settings,
+                do_contrast_autofocus=do_contrast_autofocus,
+                do_reflection_af=do_reflection_af,
+                action_ID=action_ID
+            )
+            
+            return {
+                "success": True,
+                "message": f"Normal scan with stitching completed successfully",
+                "scan_parameters": {
+                    "start_position": {"x_mm": start_x_mm, "y_mm": start_y_mm},
+                    "grid_size": {"nx": Nx, "ny": Ny},
+                    "step_size": {"dx_mm": dx_mm, "dy_mm": dy_mm},
+                    "total_area_mm2": (Nx * dx_mm) * (Ny * dy_mm)
+                }
+            }
+        except Exception as e:
+            logger.error(f"Failed to perform normal scan with stitching: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to perform normal scan: {str(e)}"
+            }
+        finally:
+            # Always reset the scanning flag, regardless of success or failure
+            self.scanning_in_progress = False
+            logger.info("Scanning completed, video buffering auto-start is now re-enabled")
+    
+    @schema_function(skip_self=True)
+    def get_stitched_region(self, start_x_mm: float = Field(..., description="Starting X position in millimeters (top-left corner)"),
+                           start_y_mm: float = Field(..., description="Starting Y position in millimeters (top-left corner)"),
+                           width_mm: float = Field(5.0, description="Width of region in millimeters"),
+                           height_mm: float = Field(5.0, description="Height of region in millimeters"),
+                           scale_level: int = Field(0, description="Scale level (0=full resolution, 1=1/4, 2=1/16, etc)"),
+                           channel_name: str = Field('BF LED matrix full', description="Name of channel to retrieve"),
+                           output_format: str = Field('base64', description="Output format: 'base64' or 'array'"),
+                           context=None):
+        """
+        Get a region from the stitched canvas.
+        
+        This function retrieves a rectangular region from the stitched microscope image canvas.
+        The region is specified by its starting position (top-left corner) and dimensions in millimeters.
+        
+        Args:
+            start_x_mm: X coordinate of region starting position (top-left) in millimeters
+            start_y_mm: Y coordinate of region starting position (top-left) in millimeters
+            width_mm: Width of the region in millimeters
+            height_mm: Height of the region in millimeters
+            scale_level: Pyramid level to retrieve (0=highest resolution)
+            channel_name: Name of the channel to retrieve
+            output_format: Format for the output ('base64' for compressed image, 'array' for numpy array)
+            
+        Returns:
+            dict: Retrieved image data with metadata
+        """
+        try:
+            # Calculate center coordinates for the underlying function
+            center_x_mm = start_x_mm + width_mm / 2
+            center_y_mm = start_y_mm + height_mm / 2
+            
+            # Get the region from the zarr canvas
+            region = self.squidController.get_stitched_region(
+                center_x_mm=center_x_mm,
+                center_y_mm=center_y_mm,
+                width_mm=width_mm,
+                height_mm=height_mm,
+                scale_level=scale_level,
+                channel_name=channel_name
+            )
+            
+            if output_format == 'base64':
+                # Convert to base64 encoded PNG
+                import base64
+                from PIL import Image
+                import io
+                
+                # Ensure data is uint8
+                if region.dtype != np.uint8:
+                    region = (region / region.max() * 255).astype(np.uint8) if region.max() > 0 else region.astype(np.uint8)
+                
+                # Convert to PIL Image and encode
+                img = Image.fromarray(region)
+                buffer = io.BytesIO()
+                img.save(buffer, format='PNG')
+                img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                
+                return {
+                    "success": True,
+                    "data": img_base64,
+                    "format": "png_base64",
+                    "shape": region.shape,
+                    "dtype": str(region.dtype),
+                    "region": {
+                        "start_x_mm": start_x_mm,
+                        "start_y_mm": start_y_mm,
+                        "width_mm": width_mm,
+                        "height_mm": height_mm,
+                        "scale_level": scale_level,
+                        "channel": channel_name
+                    }
+                }
+            else:
+                # Return as array (will be serialized by Hypha)
+                return {
+                    "success": True,
+                    "data": region.tolist(),  # Convert to list for JSON serialization
+                    "format": "array",
+                    "shape": region.shape,
+                    "dtype": str(region.dtype),
+                    "region": {
+                        "start_x_mm": start_x_mm,
+                        "start_y_mm": start_y_mm,
+                        "width_mm": width_mm,
+                        "height_mm": height_mm,
+                        "scale_level": scale_level,
+                        "channel": channel_name
+                    }
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to get stitched region: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to retrieve stitched region: {str(e)}"
+            }
+    
+    @schema_function(skip_self=True)
+    def reset_stitching_canvas(self, context=None):
+        """
+        Reset the stitching canvas, clearing all stored images.
+        
+        This will delete the existing zarr canvas and prepare for a new scan.
+        
+        Returns:
+            dict: Status of the reset operation
+        """
+        try:
+            if hasattr(self.squidController, 'zarr_canvas') and self.squidController.zarr_canvas is not None:
+                # Close the existing canvas
+                self.squidController.zarr_canvas.close()
+                
+                # Delete the zarr directory
+                import shutil
+                if self.squidController.zarr_canvas.zarr_path.exists():
+                    shutil.rmtree(self.squidController.zarr_canvas.zarr_path)
+                
+                # Clear the reference
+                self.squidController.zarr_canvas = None
+                
+                logger.info("Stitching canvas reset successfully")
+                return {
+                    "success": True,
+                    "message": "Stitching canvas has been reset"
+                }
+            else:
+                return {
+                    "success": True,
+                    "message": "No stitching canvas to reset"
+                }
+        except Exception as e:
+            logger.error(f"Failed to reset stitching canvas: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to reset canvas: {str(e)}"
+            }
+
+    @schema_function(skip_self=True)
+    async def quick_scan_with_stitching(self, wellplate_type: str = Field('96', description="Well plate type ('6', '12', '24', '96', '384')"),
+                                      exposure_time: float = Field(5, description="Camera exposure time in milliseconds (max 30ms)"),
+                                      intensity: float = Field(70, description="Brightfield LED intensity (0-100)"),
+                                      velocity_mm_per_s: float = Field(10, description="Stage velocity in mm/s for scanning"),
+                                      fps_target: int = Field(20, description="Target frame rate for acquisition"),
+                                      action_ID: str = Field('quick_scan_stitching', description="Identifier for this scan"),
+                                      context=None):
+        """
+        Perform a quick scan with live stitching to OME-Zarr canvas - brightfield only.
+        Uses continuous movement with high-speed frame acquisition for rapid well plate scanning.
+        Only supports brightfield channel with exposure time ≤ 30ms.
+        
+        Args:
+            wellplate_type: Well plate format ('6', '12', '24', '96', '384')
+            exposure_time: Camera exposure time in milliseconds (must be ≤ 30ms)
+            intensity: Brightfield LED intensity (0-100)
+            velocity_mm_per_s: Stage velocity in mm/s for scanning (default 20mm/s)
+            fps_target: Target frame rate for acquisition (default 20fps)
+            action_ID: Unique identifier for this scan
+            
+        Returns:
+            dict: Status of the scan with performance metrics
+        """
+        try:
+            # Validate exposure time early
+            if exposure_time > 30:
+                return {
+                    "success": False,
+                    "message": f"Quick scan exposure time must not exceed 30ms (got {exposure_time}ms)"
+                }
+            
+            logger.info(f"Starting quick scan with stitching: {wellplate_type} well plate, velocity={velocity_mm_per_s}mm/s, fps={fps_target}")
+            
+            # Check if video buffering is active and stop it during scanning
+            video_buffering_was_active = self.frame_acquisition_running
+            if video_buffering_was_active:
+                logger.info("Video buffering is active, stopping it temporarily during quick scanning")
+                await self.stop_video_buffering()
+                # Wait for camera to settle after stopping video buffering
+                logger.info("Waiting for camera to settle after stopping video buffering...")
+                await asyncio.sleep(0.5)
+            
+            # Set scanning flag to prevent automatic video buffering restart during scan
+            self.scanning_in_progress = True
+            
+            # Record start time for performance metrics
+            start_time = time.time()
+            
+            # Perform the quick scan
+            await self.squidController.quick_scan_with_stitching(
+                wellplate_type=wellplate_type,
+                exposure_time=exposure_time,
+                intensity=intensity,
+                velocity_mm_per_s=velocity_mm_per_s,
+                fps_target=fps_target,
+                action_ID=action_ID
+            )
+            
+            # Calculate performance metrics
+            scan_duration = time.time() - start_time
+            
+            # Calculate well plate dimensions for area estimation
+            wellplate_configs = {
+                '6': {'rows': 2, 'cols': 3},
+                '12': {'rows': 3, 'cols': 4},
+                '24': {'rows': 4, 'cols': 6},
+                '96': {'rows': 8, 'cols': 12},
+                '384': {'rows': 16, 'cols': 24}
+            }
+            
+            config = wellplate_configs.get(wellplate_type, wellplate_configs['96'])
+            
+            return {
+                "success": True,
+                "message": f"Quick scan with stitching completed successfully",
+                "scan_parameters": {
+                    "wellplate_type": wellplate_type,
+                    "rows_scanned": config['rows'],
+                    "columns_per_row": config['cols'],
+                    "exposure_time_ms": exposure_time,
+                    "intensity": intensity,
+                    "velocity_mm_per_s": velocity_mm_per_s,
+                    "target_fps": fps_target
+                },
+                "performance_metrics": {
+                    "total_scan_time_seconds": round(scan_duration, 2),
+                    "scan_time_per_row_seconds": round(scan_duration / config['rows'], 2),
+                    "estimated_frames_acquired": int(scan_duration * fps_target)
+                },
+                "stitching_info": {
+                    "zarr_scales_updated": "1-5 (scale 0 skipped for performance)",
+                    "channel": "BF LED matrix full",
+                    "action_id": action_ID
+                }
+            }
+            
+        except ValueError as e:
+            logger.error(f"Validation error in quick scan: {e}")
+            return {
+                "success": False,
+                "message": str(e)
+            }
+        except Exception as e:
+            logger.error(f"Failed to perform quick scan with stitching: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to perform quick scan: {str(e)}"
+            }
+        finally:
+            # Always reset the scanning flag, regardless of success or failure
+            self.scanning_in_progress = False
+            logger.info("Quick scanning completed, video buffering auto-start is now re-enabled")
 
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):

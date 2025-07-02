@@ -3473,7 +3473,35 @@ class ScanCoordinates:
     def add_well_selector(self, well_selector):
         self.well_selector = well_selector
 
-    def get_selected_wells_to_coordinates(self):
+    def get_selected_wells_to_coordinates(self, wellplate_type='96', is_simulation=False):
+        """
+        Convert selected wells to coordinates using the same logic as move_to_well function.
+        
+        Args:
+            wellplate_type (str): Type of well plate ('6', '12', '24', '96', '384')
+            is_simulation (bool): Whether in simulation mode (affects offset application)
+        """
+        # Import wellplate format classes
+        from squid_control.control.config import (
+            WELLPLATE_FORMAT_6, WELLPLATE_FORMAT_12, WELLPLATE_FORMAT_24,
+            WELLPLATE_FORMAT_96, WELLPLATE_FORMAT_384, CONFIG
+        )
+        
+        # Get well plate format configuration - same logic as move_to_well
+        if wellplate_type == '6':
+            wellplate_format = WELLPLATE_FORMAT_6
+        elif wellplate_type == '12':
+            wellplate_format = WELLPLATE_FORMAT_12
+        elif wellplate_type == '24':
+            wellplate_format = WELLPLATE_FORMAT_24
+        elif wellplate_type == '96':
+            wellplate_format = WELLPLATE_FORMAT_96
+        elif wellplate_type == '384':
+            wellplate_format = WELLPLATE_FORMAT_384
+        else:
+            # Default to 96-well plate if unsupported type is provided
+            wellplate_format = WELLPLATE_FORMAT_96
+        
         # get selected wells from the widget
         selected_wells = self.well_selector.get_selected_wells()
         selected_wells = np.array(selected_wells)
@@ -3490,30 +3518,14 @@ class ScanCoordinates:
             if _increasing == False:
                 columns = np.flip(columns)
             for column in columns:
-                x_mm = (
-                    CONFIG.X_MM_384_WELLPLATE_UPPERLEFT
-                    + CONFIG.WELL_SIZE_MM_384_WELLPLATE / 2
-                    - (
-                        CONFIG.A1_X_MM_384_WELLPLATE
-                        + CONFIG.WELL_SPACING_MM_384_WELLPLATE
-                        * CONFIG.NUMBER_OF_SKIP_384
-                    )
-                    + column * CONFIG.WELL_SPACING_MM
-                    + CONFIG.A1_X_MM
-                    + CONFIG.WELLPLATE_OFFSET_X_MM
-                )
-                y_mm = (
-                    CONFIG.Y_MM_384_WELLPLATE_UPPERLEFT
-                    + CONFIG.WELL_SIZE_MM_384_WELLPLATE / 2
-                    - (
-                        CONFIG.A1_Y_MM_384_WELLPLATE
-                        + CONFIG.WELL_SPACING_MM_384_WELLPLATE
-                        * CONFIG.NUMBER_OF_SKIP_384
-                    )
-                    + row * CONFIG.WELL_SPACING_MM
-                    + CONFIG.A1_Y_MM
-                    + CONFIG.WELLPLATE_OFFSET_Y_MM
-                )
+                # Use the same coordinate calculation as move_to_well function
+                if is_simulation:
+                    x_mm = wellplate_format.A1_X_MM + column * wellplate_format.WELL_SPACING_MM
+                    y_mm = wellplate_format.A1_Y_MM + row * wellplate_format.WELL_SPACING_MM
+                else:
+                    x_mm = wellplate_format.A1_X_MM + column * wellplate_format.WELL_SPACING_MM + CONFIG.WELLPLATE_OFFSET_X_MM
+                    y_mm = wellplate_format.A1_Y_MM + row * wellplate_format.WELL_SPACING_MM + CONFIG.WELLPLATE_OFFSET_Y_MM
+                
                 self.coordinates_mm.append((x_mm, y_mm))
                 self.name.append(chr(ord("A") + row) + str(column + 1))
             _increasing = not _increasing

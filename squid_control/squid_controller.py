@@ -5,12 +5,16 @@ import squid_control.control.microcontroller as microcontroller
 from squid_control.control.config import *
 from squid_control.control.camera import get_camera
 from squid_control.control.utils import rotate_and_flip_image
+from squid_control.control.config import ChannelMapper
 import cv2
 import logging
+import logging.handlers
 import matplotlib.path as mpath
 # Import serial_peripherals conditionally based on simulation mode
 import sys
 import numpy as np
+from squid_control.stitching.zarr_canvas import ZarrCanvas
+from pathlib import Path
 
 _is_simulation_mode = (
     "--simulation" in sys.argv or 
@@ -51,6 +55,24 @@ if os.path.exists(cache_file_path):
     except:
         pass
 
+def setup_logging(log_file="squid_controller.log", max_bytes=100000, backup_count=3):
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+
+    # Rotating file handler
+    file_handler = logging.handlers.RotatingFileHandler(log_file, maxBytes=max_bytes, backupCount=backup_count)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    return logger
+
+logger = setup_logging()
 
 class SquidController:
     fps_software_trigger= 10
@@ -180,9 +202,6 @@ class SquidController:
                 self.liveController,
                 self.autofocusController,
             )
-
-
-        
 
         # retract the objective
         self.navigationController.home_z()
@@ -328,7 +347,6 @@ class SquidController:
         self.current_exposure_time = 100
         self.current_intensity = 100
         self.pixel_size_xy = 0.333
-        self.pixel_size_adjument_factor = 0.936
         # drift correction for image map
         self.drift_correction_x = -1.6
         self.drift_correction_y = -2.1
@@ -336,6 +354,8 @@ class SquidController:
         self.sample_data_alias = "agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38"
         self.get_pixel_size()
 
+        # Initialize empty zarr canvas for stitching
+        self._initialize_empty_canvas()
 
     def get_pixel_size(self):
         """Calculate pixel size based on imaging parameters."""
@@ -355,8 +375,8 @@ class SquidController:
             return
 
         self.pixel_size_xy = pixel_size_um / (magnification / (objective_tube_lens_mm / tube_lens_mm))
-        self.pixel_size_xy = self.pixel_size_xy * self.pixel_size_adjument_factor
-        print(f"Pixel size: {self.pixel_size_xy} µm")
+        self.pixel_size_xy = self.pixel_size_xy * CONFIG.PIXEL_SIZE_ADJUSTMENT_FACTOR
+        print(f"Pixel size: {self.pixel_size_xy} µm (adjustment factor: {CONFIG.PIXEL_SIZE_ADJUSTMENT_FACTOR})")
         
                 
     def move_to_scaning_position(self):
@@ -419,7 +439,7 @@ class SquidController:
         
         # Set up scan coordinates
         self.scanCoordinates.well_selector.set_selected_wells(scanning_zone[0], scanning_zone[1])
-        self.scanCoordinates.get_selected_wells_to_coordinates()
+        self.scanCoordinates.get_selected_wells_to_coordinates(wellplate_type=well_plate_type, is_simulation=self.is_simulation)
         
         # Configure multipoint controller
         self.multipointController.set_base_path(CONFIG.DEFAULT_SAVING_PATH)
@@ -690,7 +710,7 @@ class SquidController:
             return True, x_pos_before, y_pos_before, z_pos_before, y
     
         return False, x_pos_before, y_pos_before, z_pos_before, y
-
+    
     def move_z_to_limited(self, z):
         x_pos_before,y_pos_before, z_pos_before, *_ = self.navigationController.update_pos(microcontroller=self.microcontroller)
         self.navigationController.move_z_to_limited(z)
@@ -789,7 +809,7 @@ class SquidController:
             if time.time() - t0 > 5:
                 print('z return timeout, the program will exit')
 
-    async def snap_image(self, channel=0, intensity=100, exposure_time=100):
+    async def snap_image(self, channel=0, intensity=100, exposure_time=100, full_frame=False):
         # turn off the illumination if it is on
         need_to_turn_illumination_back = False
         if self.liveController.illumination_on:
@@ -813,14 +833,43 @@ class SquidController:
             await asyncio.sleep(0.005)
 
         gray_img = self.camera.read_frame()
+        # Apply rotation and flip first
         gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
         
+        # In simulation mode, resize small images to expected camera resolution
+        if self.is_simulation:
+            height, width = gray_img.shape[:2]
+            # If image is too small, resize it to expected camera dimensions
+            expected_width = 3000  # Expected camera width
+            expected_height = 3000  # Expected camera height
+            if width < expected_width or height < expected_height:
+                gray_img = cv2.resize(gray_img, (expected_width, expected_height), interpolation=cv2.INTER_LINEAR)
+        
+        # Return full frame if requested, otherwise crop using configuration settings
+        if full_frame:
+            result_img = gray_img
+        else:
+            # Crop using configuration-based dimensions with proper bounds checking
+            crop_height = CONFIG.Acquisition.CROP_HEIGHT
+            crop_width = CONFIG.Acquisition.CROP_WIDTH
+            height, width = gray_img.shape[:2]
+            start_x = width // 2 - crop_width // 2
+            start_y = height // 2 - crop_height // 2
+            
+            # Add bounds checking
+            start_x = max(0, start_x)
+            start_y = max(0, start_y)
+            end_x = min(width, start_x + crop_width)
+            end_y = min(height, start_y + crop_height)
+            
+            result_img = gray_img[start_y:end_y, start_x:end_x]
+
         if not need_to_turn_illumination_back:
             self.liveController.turn_off_illumination()
             while self.microcontroller.is_busy():
                 await asyncio.sleep(0.005)
 
-        return gray_img
+        return result_img
     
     async def get_camera_frame_simulation(self, channel=0, intensity=100, exposure_time=100):
         self.camera.set_exposure_time(exposure_time)
@@ -828,6 +877,15 @@ class SquidController:
         await self.send_trigger_simulation(channel, intensity, exposure_time)
         gray_img = self.camera.read_frame() 
         gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
+        
+        # In simulation mode, resize small images to expected camera resolution
+        height, width = gray_img.shape[:2]
+        # If image is too small, resize it to expected camera dimensions
+        expected_width = 3000  # Expected camera width
+        expected_height = 3000  # Expected camera height
+        if width < expected_width or height < expected_height:
+            gray_img = cv2.resize(gray_img, (expected_width, expected_height), interpolation=cv2.INTER_LINEAR)
+        
         return gray_img
 
     def get_camera_frame(self, channel=0, intensity=100, exposure_time=100):
@@ -951,6 +1009,535 @@ class SquidController:
                 "velocity_x_mm_per_s": velocity_x_mm_per_s,
                 "velocity_y_mm_per_s": velocity_y_mm_per_s
             }
+
+    async def normal_scan_with_stitching(self, start_x_mm, start_y_mm, Nx, Ny, dx_mm, dy_mm, 
+                                        illumination_settings=None, do_contrast_autofocus=False, 
+                                        do_reflection_af=False, action_ID='normal_scan_stitching'):
+        """
+        Normal scan with live stitching to OME-Zarr canvas.
+        
+        Args:
+            start_x_mm (float): Starting X position in mm
+            start_y_mm (float): Starting Y position in mm
+            Nx (int): Number of positions in X
+            Ny (int): Number of positions in Y
+            dx_mm (float): Interval between positions in X (mm)
+            dy_mm (float): Interval between positions in Y (mm)
+            illumination_settings (list): List of channel settings
+            do_contrast_autofocus (bool): Whether to perform contrast-based autofocus
+            do_reflection_af (bool): Whether to perform reflection-based autofocus
+            action_ID (str): Identifier for this scan
+        """
+        if illumination_settings is None:
+            illumination_settings = [
+                {'channel': 'BF LED matrix full', 'intensity': 50, 'exposure_time': 100}
+            ]
+        
+        # Initialize the Zarr canvas if not already done (with ALL channels)
+        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
+            await self._initialize_zarr_canvas()
+        
+        # Validate that all requested channels are available in the zarr canvas
+        channel_map = ChannelMapper.get_human_to_id_map()
+        for settings in illumination_settings:
+            channel_name = settings['channel']
+            if channel_name not in self.zarr_canvas.channel_to_zarr_index:
+                logging.error(f"Requested channel '{channel_name}' not found in zarr canvas!")
+                logging.error(f"Available channels: {list(self.zarr_canvas.channel_to_zarr_index.keys())}")
+                raise ValueError(f"Channel '{channel_name}' not available in zarr canvas")
+        
+        # Start the background stitching task
+        await self.zarr_canvas.start_stitching()
+        
+        try:
+            self.is_busy = True
+            logging.info(f'Starting normal scan with stitching: {Nx}x{Ny} positions, dx={dx_mm}mm, dy={dy_mm}mm')
+            
+            # Map channel names to indices
+            channel_map = ChannelMapper.get_human_to_id_map()
+            
+            # Scan pattern: snake pattern for efficiency
+            for i in range(Ny):
+                for j in range(Nx):
+                    # Calculate position (snake pattern - reverse X on odd rows)
+                    if i % 2 == 0:
+                        x_idx = j
+                    else:
+                        x_idx = Nx - 1 - j
+                    
+                    x_mm = start_x_mm + x_idx * dx_mm
+                    y_mm = start_y_mm + i * dy_mm
+                    
+                    # Move to position
+                    self.navigationController.move_x_to(x_mm)
+                    self.navigationController.move_y_to(y_mm)
+                    while self.microcontroller.is_busy():
+                        await asyncio.sleep(0.005)
+                    
+                    # Let stage settle
+                    await asyncio.sleep(CONFIG.SCAN_STABILIZATION_TIME_MS_X / 1000)
+                    
+                    # Update position from microcontroller to get actual stage position
+                    actual_x_mm, actual_y_mm, actual_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
+                    
+                    # Autofocus if requested (first position or periodically)
+                    if do_reflection_af and (i == 0 and j == 0):
+                        if hasattr(self, 'laserAutofocusController'):
+                            await self.do_laser_autofocus()
+                            # Update position again after autofocus
+                            actual_x_mm, actual_y_mm, actual_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
+                    elif do_contrast_autofocus and ((i * Nx + j) % CONFIG.Acquisition.NUMBER_OF_FOVS_PER_AF == 0):
+                        await self.do_autofocus()
+                        # Update position again after autofocus
+                        actual_x_mm, actual_y_mm, actual_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
+                    
+                    # Acquire images for each channel
+                    for idx, settings in enumerate(illumination_settings):
+                        channel_name = settings['channel']
+                        intensity = settings['intensity']
+                        exposure_time = settings['exposure_time']
+                        
+                        # Get global channel index for snap_image (uses global channel IDs)
+                        global_channel_idx = channel_map.get(channel_name, 0)
+                        
+                        # Get local zarr channel index (0, 1, 2, etc.)
+                        try:
+                            zarr_channel_idx = self.zarr_canvas.get_zarr_channel_index(channel_name)
+                        except ValueError as e:
+                            logging.error(f"Channel mapping error: {e}")
+                            continue
+                        
+                        # Snap image using global channel ID with full frame for stitching
+                        image = await self.snap_image(global_channel_idx, intensity, exposure_time, full_frame=True)
+                        
+                        # Convert to 8-bit if needed
+                        if image.dtype != np.uint8:
+                            # Scale to 8-bit
+                            if image.dtype == np.uint16:
+                                image = (image / 256).astype(np.uint8)
+                            else:
+                                image = image.astype(np.uint8)
+                        
+                        # Add to stitching queue using actual stage position and local zarr index
+                        await self.zarr_canvas.add_image_async(
+                            image, actual_x_mm, actual_y_mm, 
+                            channel_idx=zarr_channel_idx,  # Use local zarr index
+                            z_idx=0
+                        )
+                        
+                        logging.info(f'Added image at actual position ({actual_x_mm:.2f}, {actual_y_mm:.2f}) for channel {channel_name} (global_id: {global_channel_idx}, zarr_idx: {zarr_channel_idx}) (intended: {x_mm:.2f}, {y_mm:.2f})')
+            
+            logging.info('Normal scan with stitching completed')
+            
+            # Give the stitching queue a moment to process any final images
+            logging.info('Allowing time for final images to be queued for stitching...')
+            await asyncio.sleep(0.3)  # Wait 500ms to ensure all images are queued
+            
+            # Save a preview image from the lowest resolution scale
+            # try:
+            #     preview_path = self.zarr_canvas.save_preview(action_ID)
+            #     if preview_path:
+            #         logging.info(f'Canvas preview saved at: {preview_path}')
+            # except Exception as e:
+            #     logging.error(f'Failed to save canvas preview: {e}')
+            
+        finally:
+            self.is_busy = False
+            # Stop the stitching task (this will now process all remaining images)
+            await self.zarr_canvas.stop_stitching()
+    
+    async def _initialize_zarr_canvas(self):
+        """Initialize the Zarr canvas for stitching with all available channels."""
+        # Get ALL channel names from ChannelMapper (not just from current illumination_settings)
+        all_channels = ChannelMapper.get_all_human_names()
+        
+        # Check if we already have a canvas initialized with all channels
+        if hasattr(self, 'zarr_canvas') and self.zarr_canvas is not None:
+            # Check if the existing canvas has all channels
+            if set(self.zarr_canvas.channels) == set(all_channels):
+                logging.info('Using existing Zarr canvas with all channels')
+                return
+            else:
+                # Close existing canvas and create new one with all channels
+                logging.info('Closing existing canvas and creating new one with all channels')
+                self.zarr_canvas.close()
+        
+        # Get the base path from environment variable
+        zarr_path = os.getenv('ZARR_PATH', '/tmp/zarr_canvas')
+        
+        # Define stage limits (from CONFIG)
+        stage_limits = {
+            'x_positive': 120,  # mm
+            'x_negative': 0,    # mm
+            'y_positive': 86,   # mm
+            'y_negative': 0,    # mm
+            'z_positive': 6     # mm
+        }
+        
+        # Create the canvas with ALL available channels
+        self.zarr_canvas = ZarrCanvas(
+            base_path=zarr_path,
+            pixel_size_xy_um=self.pixel_size_xy,
+            stage_limits=stage_limits,
+            channels=all_channels,  # Use all channels from ChannelMapper
+            rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
+        )
+        
+        # Initialize the OME-Zarr structure
+        self.zarr_canvas.initialize_canvas()
+        logging.info(f'Initialized Zarr canvas at {zarr_path} with ALL channels: {len(all_channels)} channels')
+        logging.info(f'Available channels: {all_channels}')
+        logging.info(f'Channel to zarr index mapping: {self.zarr_canvas.channel_to_zarr_index}')
+    
+    def get_stitched_region(self, center_x_mm, center_y_mm, width_mm, height_mm, 
+                           scale_level=0, channel_name='BF LED matrix full'):
+        """
+        Get a region from the stitched canvas.
+        
+        Args:
+            center_x_mm (float): Center X position in mm
+            center_y_mm (float): Center Y position in mm
+            width_mm (float): Width of region in mm
+            height_mm (float): Height of region in mm
+            scale_level (int): Scale level (0=full res, 1=1/4, 2=1/16, etc)
+            channel_name (str): Name of channel to retrieve
+            
+        Returns:
+            np.ndarray: The requested region
+        """
+        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
+            raise RuntimeError("Zarr canvas not initialized. Run a scan first.")
+        
+        # Get the region using the new channel name method
+        region = self.zarr_canvas.get_canvas_region_by_channel_name(
+            center_x_mm, center_y_mm, width_mm, height_mm,
+            channel_name, scale=scale_level
+        )
+        
+        if region is None:
+            logging.warning(f"Failed to get region for channel {channel_name}")
+            return None
+        
+        return region
+    
+    async def initialize_zarr_canvas_if_needed(self):
+        """
+        Initialize the zarr canvas with all channels if not already initialized.
+        This can be called early in the service lifecycle to ensure the canvas is ready.
+        """
+        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
+            # Initialize with all channels from ChannelMapper
+            await self._initialize_zarr_canvas()
+            logging.info("Zarr canvas pre-initialized with all available channels")
+
+    def _initialize_empty_canvas(self):
+        """Initialize an empty zarr canvas when the microscope starts up."""
+        try:
+            # Get the base path from environment variable
+            zarr_path = os.getenv('ZARR_PATH', '/tmp/zarr_canvas')
+            logging.info(f'ZARR_PATH environment variable: {os.getenv("ZARR_PATH", "not set (using default)")}')
+            logging.info(f'Initializing empty zarr canvas at: {zarr_path}')
+            
+            # Check if the directory is writable
+            zarr_dir = Path(zarr_path)
+            
+            # The actual zarr file will be at zarr_path/live_stitching.zarr
+            actual_zarr_path = zarr_dir / "live_stitching.zarr"
+            logging.info(f'Zarr file will be created at: {actual_zarr_path}')
+            
+            if not zarr_dir.exists():
+                logging.info(f'Creating zarr base directory: {zarr_dir}')
+                try:
+                    zarr_dir.mkdir(parents=True, exist_ok=True)
+                except PermissionError as e:
+                    raise RuntimeError(f"Cannot create zarr directory {zarr_dir}: Permission denied. Please check directory permissions or set ZARR_PATH to a writable location.")
+            
+            # Test write permissions
+            test_file = zarr_dir / 'test_write_permission.tmp'
+            try:
+                with open(test_file, 'w') as f:
+                    f.write('test')
+                test_file.unlink()  # Remove test file
+                logging.info(f'Write permission test successful for {zarr_dir}')
+            except (PermissionError, OSError) as e:
+                raise RuntimeError(f"No write permission for zarr directory {zarr_dir}: {e}. Please check directory permissions or set ZARR_PATH to a writable location.")
+            
+            # Define stage limits (from README)
+            stage_limits = {
+                'x_positive': 120,  # mm
+                'x_negative': 0,    # mm
+                'y_positive': 86,   # mm
+                'y_negative': 0,    # mm
+                'z_positive': 6     # mm
+            }
+            
+            # Use ALL available channels from ChannelMapper for initialization
+            default_channels = ChannelMapper.get_all_human_names()
+            logging.info(f'Initializing zarr canvas with channels from ChannelMapper: {len(default_channels)} channels')
+            
+            # Create the canvas
+            self.zarr_canvas = ZarrCanvas(
+                base_path=zarr_path,
+                pixel_size_xy_um=self.pixel_size_xy,
+                stage_limits=stage_limits,
+                channels=default_channels,
+                rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
+            )
+            
+            # Initialize the OME-Zarr structure
+            self.zarr_canvas.initialize_canvas()
+            logging.info(f'Successfully initialized Zarr canvas at {actual_zarr_path} with ALL channels: {len(default_channels)} channels')
+            logging.info(f'Available channels: {default_channels}')
+            logging.info(f'Pixel size: {self.pixel_size_xy:.3f} µm')
+            
+        except Exception as e:
+            logging.error(f'Failed to initialize zarr canvas with all channels: {e}')
+            logging.info('Canvas will be initialized later when needed for scanning')
+            logging.info('To fix this, either:')
+            logging.info('  1. Set ZARR_PATH environment variable to a writable directory (e.g., export ZARR_PATH=/tmp/zarr_canvas)')
+            logging.info('  2. Create the directory and set proper permissions')
+            logging.info('  3. Run the application with appropriate permissions')
+            self.zarr_canvas = None
+
+    async def quick_scan_with_stitching(self, wellplate_type='96', exposure_time=5, intensity=50, 
+                                      velocity_mm_per_s=10, fps_target=20, action_ID='quick_scan_stitching'):
+        """
+        Quick scan with live stitching to OME-Zarr canvas - brightfield only.
+        Uses continuous movement with high-speed frame acquisition.
+        
+        Args:
+            wellplate_type (str): Well plate type ('6', '12', '24', '96', '384')
+            exposure_time (float): Camera exposure time in ms (max 30ms)
+            intensity (float): Brightfield LED intensity (0-100)
+            velocity_mm_per_s (float): Stage velocity in mm/s for scanning (default 20)
+            fps_target (int): Target frame rate for acquisition (default 20)
+            action_ID (str): Identifier for this scan
+        """
+        
+        # Validate exposure time
+        if exposure_time > 30:
+            raise ValueError("Quick scan exposure time must not exceed 30ms")
+        
+        # Get well plate format configuration
+        if wellplate_type == '6':
+            wellplate_format = WELLPLATE_FORMAT_6
+            max_rows = 2  # A-B
+            max_cols = 3  # 1-3
+        elif wellplate_type == '12':
+            wellplate_format = WELLPLATE_FORMAT_12
+            max_rows = 3  # A-C
+            max_cols = 4  # 1-4
+        elif wellplate_type == '24':
+            wellplate_format = WELLPLATE_FORMAT_24
+            max_rows = 4  # A-D
+            max_cols = 6  # 1-6
+        elif wellplate_type == '96':
+            wellplate_format = WELLPLATE_FORMAT_96
+            max_rows = 8  # A-H
+            max_cols = 12  # 1-12
+        elif wellplate_type == '384':
+            wellplate_format = WELLPLATE_FORMAT_384
+            max_rows = 16  # A-P
+            max_cols = 24  # 1-24
+        else:
+            # Default to 96-well plate if unsupported type is provided
+            wellplate_format = WELLPLATE_FORMAT_96
+            max_rows = 8
+            max_cols = 12
+            wellplate_type = '96'
+        
+        # Initialize the Zarr canvas if not already done (with ALL channels)
+        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
+            await self._initialize_zarr_canvas()
+        
+        # Validate that brightfield channel is available in the zarr canvas
+        channel_name = 'BF LED matrix full'
+        if channel_name not in self.zarr_canvas.channel_to_zarr_index:
+            logging.error(f"Brightfield channel '{channel_name}' not found in zarr canvas!")
+            logging.error(f"Available channels: {list(self.zarr_canvas.channel_to_zarr_index.keys())}")
+            raise ValueError(f"Channel '{channel_name}' not available in zarr canvas")
+        
+        # Get zarr channel index for brightfield
+        zarr_channel_idx = self.zarr_canvas.get_zarr_channel_index(channel_name)
+        
+        # Start the background stitching task
+        await self.zarr_canvas.start_stitching()
+        
+        # Store original velocity settings
+        original_velocity_result = self.set_stage_velocity()
+        original_velocity_x = original_velocity_result.get('velocity_x_mm_per_s', CONFIG.MAX_VELOCITY_X_MM)
+        original_velocity_y = original_velocity_result.get('velocity_y_mm_per_s', CONFIG.MAX_VELOCITY_Y_MM)
+        
+        try:
+            self.is_busy = True
+            logging.info(f'Starting quick scan with stitching: {wellplate_type} well plate, velocity={velocity_mm_per_s}mm/s, fps={fps_target}')
+            
+            # Set high-speed velocity for scanning
+            velocity_result = self.set_stage_velocity(velocity_mm_per_s, velocity_mm_per_s)
+            if not velocity_result['success']:
+                raise RuntimeError(f"Failed to set scanning velocity: {velocity_result['message']}")
+            
+            # Set camera exposure time
+            self.camera.set_exposure_time(exposure_time)
+            
+            # Calculate well plate parameters
+            well_radius = wellplate_format.WELL_SIZE_MM / 2
+            well_spacing = wellplate_format.WELL_SPACING_MM
+            
+
+            x_offset = CONFIG.WELLPLATE_OFFSET_X_MM
+            y_offset = CONFIG.WELLPLATE_OFFSET_Y_MM
+            
+            # Calculate frame acquisition timing
+            frame_interval = 1.0 / fps_target  # seconds between frames
+            
+            # Get software limits for clamping
+            limit_x_pos = CONFIG.SOFTWARE_POS_LIMIT.X_POSITIVE
+            limit_x_neg = CONFIG.SOFTWARE_POS_LIMIT.X_NEGATIVE
+            
+            # Scan each row using snake pattern (S-pattern)
+            for row_idx in range(max_rows):
+                row_letter = chr(ord('A') + row_idx)
+                
+                # Calculate Y position for this row
+                y_mm = wellplate_format.A1_Y_MM + y_offset + row_idx * well_spacing
+                
+                # Snake pattern: alternate direction for each row
+                if row_idx % 2 == 0:
+                    # Even rows (0, 2, 4...): left to right (A1 → A12, C1 → C12, etc.)
+                    start_x_mm = wellplate_format.A1_X_MM + x_offset
+                    end_x_mm = wellplate_format.A1_X_MM + x_offset + (max_cols - 1) * well_spacing
+                    direction = "left-to-right"
+                else:
+                    # Odd rows (1, 3, 5...): right to left (B12 → B1, D12 → D1, etc.)
+                    start_x_mm = wellplate_format.A1_X_MM + x_offset + (max_cols - 1) * well_spacing
+                    end_x_mm = wellplate_format.A1_X_MM + x_offset
+                    direction = "right-to-left"
+                
+                # Clamp coordinates to software limits to prevent out-of-bounds errors
+                start_x_mm = min(max(start_x_mm, limit_x_neg), limit_x_pos)
+                end_x_mm = min(max(end_x_mm, limit_x_neg), limit_x_pos)
+                
+                logging.info(f'Quick scanning row {row_letter} ({direction}) from X={start_x_mm:.2f}mm to X={end_x_mm:.2f}mm at Y={y_mm:.2f}mm')
+                
+                # Move to start of row
+                self.navigationController.move_x_to(start_x_mm)
+                while self.microcontroller.is_busy():
+                    await asyncio.sleep(0.005)
+                print(f'Moved to X={start_x_mm:.2f}mm')
+                self.navigationController.move_y_to(y_mm)
+                while self.microcontroller.is_busy():
+                    await asyncio.sleep(0.005)
+                print(f'Moved to Y={y_mm:.2f}mm')
+                
+                # Let stage settle
+                await asyncio.sleep(0.1)
+                
+                # Turn on brightfield illumination
+                self.liveController.set_illumination(0, intensity)  # Channel 0 = brightfield
+                await asyncio.sleep(0.01)  # Small delay for illumination to stabilize
+                self.liveController.turn_on_illumination()
+                # Start continuous movement to end of row
+                self.navigationController.move_x_to(end_x_mm)
+                
+                # Acquire frames while moving
+                last_frame_time = time.time()
+                frames_acquired = 0
+                
+                while self.microcontroller.is_busy():
+                    current_time = time.time()
+                    
+                    # Check if it's time for next frame
+                    if current_time - last_frame_time >= frame_interval:
+                        # Get current actual position
+                        actual_x_mm, actual_y_mm, actual_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
+                        
+                        # Read frame from camera
+                        self.camera.send_trigger()
+                        gray_img = self.camera.read_frame()
+                        if gray_img is not None:
+                            # Immediately rescale to scale1 resolution (1/4 of original)
+                            original_height, original_width = gray_img.shape[:2]
+                            scale1_width = original_width // 4
+                            scale1_height = original_height // 4
+                            
+                            # Resize image to scale1 resolution
+                            scaled_img = cv2.resize(gray_img, (scale1_width, scale1_height), interpolation=cv2.INTER_AREA)
+                            
+                            # Apply rotate and flip transformations
+                            processed_img = rotate_and_flip_image(
+                                scaled_img,
+                                rotate_image_angle=self.camera.rotate_image_angle,
+                                flip_image=self.camera.flip_image
+                            )
+                            
+                            # Convert to 8-bit if needed
+                            if processed_img.dtype != np.uint8:
+                                if processed_img.dtype == np.uint16:
+                                    processed_img = (processed_img / 256).astype(np.uint8)
+                                else:
+                                    processed_img = processed_img.astype(np.uint8)
+                            
+                            # Add to stitching queue using actual stage position
+                            # Note: We're using a custom add_image_quick method that only updates scales 1-5
+                            await self._add_image_to_zarr_quick(
+                                processed_img, actual_x_mm, actual_y_mm,
+                                channel_idx=zarr_channel_idx, z_idx=0
+                            )
+                            
+                            frames_acquired += 1
+                            logging.debug(f'Acquired frame {frames_acquired} at position ({actual_x_mm:.2f}, {actual_y_mm:.2f})')
+                        
+                        last_frame_time = current_time
+                    
+                    # Small delay to prevent overwhelming the system
+                    await asyncio.sleep(0.001)
+                
+                # Turn off illumination
+                self.liveController.turn_off_illumination()
+                
+                logging.info(f'Row {row_letter} completed, acquired {frames_acquired} frames')
+                
+                # Small delay between rows
+                await asyncio.sleep(0.1)
+            
+            logging.info('Quick scan with stitching completed')
+            
+            # Give the stitching queue a moment to process any final images
+            logging.info('Allowing time for final images to be queued for stitching...')
+            await asyncio.sleep(0.5)
+            
+        finally:
+            self.is_busy = False
+            
+            # Turn off illumination if still on
+            self.liveController.turn_off_illumination()
+            
+            # Restore original velocity settings
+            restore_result = self.set_stage_velocity(original_velocity_x, original_velocity_y)
+            if restore_result['success']:
+                logging.info(f'Restored original stage velocity: X={original_velocity_x}mm/s, Y={original_velocity_y}mm/s')
+            else:
+                logging.warning(f'Failed to restore original stage velocity: {restore_result["message"]}')
+            
+            # Stop the stitching task
+            await self.zarr_canvas.stop_stitching()
+    
+    async def _add_image_to_zarr_quick(self, image: np.ndarray, x_mm: float, y_mm: float,
+                                     channel_idx: int = 0, z_idx: int = 0):
+        """
+        Add image to zarr canvas for quick scan - only updates scales 1-5 (skips scale 0).
+        The input image should already be at scale1 resolution (1/4 of original).
+        """
+        await self.zarr_canvas.stitch_queue.put({
+            'image': image.copy(),
+            'x_mm': x_mm,
+            'y_mm': y_mm,
+            'channel_idx': channel_idx,
+            'z_idx': z_idx,
+            'timestamp': time.time(),
+            'quick_scan': True  # Flag to indicate this is for quick scan (scales 1-5 only)
+        })
 
 async def try_microscope():
     squid_controller = SquidController(is_simulation=False)

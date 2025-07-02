@@ -178,9 +178,10 @@ async def test_configuration_and_pixel_size(sim_controller_fixture):
         assert isinstance(controller.pixel_size_xy, float)
         assert controller.pixel_size_xy > 0
         
-        # Test pixel size adjustment factor
-        assert hasattr(controller, 'pixel_size_adjument_factor')
-        assert controller.pixel_size_adjument_factor > 0
+        # Test pixel size adjustment factor from CONFIG (not as controller attribute)
+        from squid_control.control.config import CONFIG
+        assert hasattr(CONFIG, 'PIXEL_SIZE_ADJUSTMENT_FACTOR')
+        assert CONFIG.PIXEL_SIZE_ADJUSTMENT_FACTOR > 0
         
         # Test drift correction parameters
         assert hasattr(controller, 'drift_correction_x')
