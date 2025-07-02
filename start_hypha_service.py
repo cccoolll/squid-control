@@ -2924,7 +2924,6 @@ class Microscope:
             )
         except Exception as e:
             logger.error(f"Error setting stage velocity: {e}")
-            self.update_task_status("set_stage_velocity", "error", error_message=str(e))
             return {"success": False, "error": str(e)}
 
     @schema_function(skip_self=True)
@@ -3089,9 +3088,6 @@ class Microscope:
                 })
                 await self._zarr_artifact_manager.connect_server(agent_lens_server)
             
-            # Export zarr canvas as zip
-            self.update_task_status("upload_zarr_dataset", "running", 
-                                  progress_message="Exporting zarr canvas...")
             
             zarr_zip_content = self.squid_controller.zarr_canvas.export_as_zip()
             
@@ -3107,8 +3103,6 @@ class Microscope:
                 }
             
             # Upload to artifact manager
-            self.update_task_status("upload_zarr_dataset", "running", 
-                                  progress_message="Uploading to artifact manager...")
             
             upload_result = await self._zarr_artifact_manager.upload_zarr_dataset(
                 microscope_service_id=self.service_id,
@@ -3118,9 +3112,6 @@ class Microscope:
                 description=description
             )
             
-            self.update_task_status("upload_zarr_dataset", "completed",
-                                  progress_message="Upload completed successfully")
-            
             return {
                 "success": True,
                 "upload_result": upload_result,
@@ -3129,7 +3120,6 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Error uploading zarr dataset: {e}")
-            self.update_task_status("upload_zarr_dataset", "error", error_message=str(e))
             return {"success": False, "error": str(e)}
     
     @schema_function(skip_self=True)
