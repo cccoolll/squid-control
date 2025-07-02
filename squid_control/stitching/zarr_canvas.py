@@ -1276,7 +1276,7 @@ class WellZarrCanvasBase:
                 
                 metadata_json = json.dumps(metadata, indent=2, ensure_ascii=False)
                 zip_file.writestr("squid_canvas_metadata.json", metadata_json.encode('utf-8'))
-                processed_files += 1
+                processed_files += 1   
                 
                 logger.info(f"ZIP creation completed: {processed_files} files processed")
                 
