@@ -70,13 +70,14 @@ jobs:
 
   integration-tests:
     runs-on: ubuntu-latest
+    needs: [unit-tests]
     container:
       image: python:3.11-slim
     strategy:
       matrix:
         python-version: ["3.11"]
-    # Run integration tests regardless of unit test results
-    if: always()
+    # Run integration tests only when unit tests succeed
+    if: success()
 
     steps:
     - uses: actions/checkout@v4

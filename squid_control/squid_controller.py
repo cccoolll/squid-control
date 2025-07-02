@@ -809,7 +809,7 @@ class SquidController:
             if time.time() - t0 > 5:
                 print('z return timeout, the program will exit')
 
-    async def snap_image(self, channel=0, intensity=100, exposure_time=100):
+    async def snap_image(self, channel=0, intensity=100, exposure_time=100, full_frame=False):
         # turn off the illumination if it is on
         need_to_turn_illumination_back = False
         if self.liveController.illumination_on:
@@ -833,21 +833,43 @@ class SquidController:
             await asyncio.sleep(0.005)
 
         gray_img = self.camera.read_frame()
-        # corp
-        crop_height = 3036
-        crop_width = 3036
-        height, width = gray_img.shape
-        start_x = width // 2 - crop_width // 2
-        start_y = height // 2 - crop_height // 2
+        # Apply rotation and flip first
         gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
-        cropped_img = gray_img[start_y:start_y+crop_height, start_x:start_x+crop_width]
+        
+        # In simulation mode, resize small images to expected camera resolution
+        if self.is_simulation:
+            height, width = gray_img.shape[:2]
+            # If image is too small, resize it to expected camera dimensions
+            expected_width = 3000  # Expected camera width
+            expected_height = 3000  # Expected camera height
+            if width < expected_width or height < expected_height:
+                gray_img = cv2.resize(gray_img, (expected_width, expected_height), interpolation=cv2.INTER_LINEAR)
+        
+        # Return full frame if requested, otherwise crop using configuration settings
+        if full_frame:
+            result_img = gray_img
+        else:
+            # Crop using configuration-based dimensions with proper bounds checking
+            crop_height = CONFIG.Acquisition.CROP_HEIGHT
+            crop_width = CONFIG.Acquisition.CROP_WIDTH
+            height, width = gray_img.shape[:2]
+            start_x = width // 2 - crop_width // 2
+            start_y = height // 2 - crop_height // 2
+            
+            # Add bounds checking
+            start_x = max(0, start_x)
+            start_y = max(0, start_y)
+            end_x = min(width, start_x + crop_width)
+            end_y = min(height, start_y + crop_height)
+            
+            result_img = gray_img[start_y:end_y, start_x:end_x]
 
         if not need_to_turn_illumination_back:
             self.liveController.turn_off_illumination()
             while self.microcontroller.is_busy():
                 await asyncio.sleep(0.005)
 
-        return cropped_img
+        return result_img
     
     async def get_camera_frame_simulation(self, channel=0, intensity=100, exposure_time=100):
         self.camera.set_exposure_time(exposure_time)
@@ -855,6 +877,15 @@ class SquidController:
         await self.send_trigger_simulation(channel, intensity, exposure_time)
         gray_img = self.camera.read_frame() 
         gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
+        
+        # In simulation mode, resize small images to expected camera resolution
+        height, width = gray_img.shape[:2]
+        # If image is too small, resize it to expected camera dimensions
+        expected_width = 3000  # Expected camera width
+        expected_height = 3000  # Expected camera height
+        if width < expected_width or height < expected_height:
+            gray_img = cv2.resize(gray_img, (expected_width, expected_height), interpolation=cv2.INTER_LINEAR)
+        
         return gray_img
 
     def get_camera_frame(self, channel=0, intensity=100, exposure_time=100):
@@ -1076,8 +1107,8 @@ class SquidController:
                             logging.error(f"Channel mapping error: {e}")
                             continue
                         
-                        # Snap image using global channel ID
-                        image = await self.snap_image(global_channel_idx, intensity, exposure_time)
+                        # Snap image using global channel ID with full frame for stitching
+                        image = await self.snap_image(global_channel_idx, intensity, exposure_time, full_frame=True)
                         
                         # Convert to 8-bit if needed
                         if image.dtype != np.uint8:

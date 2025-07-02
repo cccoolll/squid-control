@@ -435,52 +435,6 @@ class Microscope:
             if datastore_svc is None:
                 raise RuntimeError("Datastore service not found")
             
-            try:
-                if not self.is_simulation:
-                    logger.info("Skipping Zarr access check in non-simulation mode.")
-                else:
-                    if not hasattr(self.squidController.camera, 'zarr_image_manager') or self.squidController.camera.zarr_image_manager is None:
-                        logger.info("ZarrImageManager not initialized yet, initializing it for health check")
-                        
-                        try:
-                            await asyncio.wait_for(
-                                self.initialize_zarr_manager(self.squidController.camera),
-                                timeout=30
-                            )
-                        except asyncio.TimeoutError:
-                            logger.error("ZarrImageManager initialization timed out")
-                            raise RuntimeError("ZarrImageManager initialization timed out")
-                    
-                    logger.info("Testing existing ZarrImageManager instance from simulated camera.")
-                    
-                    test_result = await asyncio.wait_for(
-                        self.squidController.camera.zarr_image_manager.test_zarr_access(
-                            dataset_id="agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38",
-                            channel="BF_LED_matrix_full",
-                            bypass_cache=True
-                        ), 
-                        50
-                    ) 
-                    
-                    if not test_result.get("success", False):
-                        error_msg = test_result.get("message", "Unknown error")
-                        raise RuntimeError(f"Zarr access test failed for existing instance: {error_msg}")
-                    else:
-                        stats = test_result.get("chunk_stats", {})
-                        non_zero = stats.get("non_zero_count", 0)
-                        total = stats.get("total_size", 1)
-                        if total > 0:
-                            logger.info(f"Existing Zarr access test succeeded. Non-zero values: {non_zero}/{total} ({(non_zero/total)*100:.1f}%)")
-                        else:
-                            logger.info("Existing Zarr access test succeeded, but chunk size was zero.")
-
-            except asyncio.TimeoutError:
-                logger.error("Zarr access health check timed out.")
-                raise RuntimeError("Zarr access health check timed out after 50 seconds.")
-            except Exception as artifact_error:
-                logger.error(f"Zarr access health check failed: {str(artifact_error)}")
-                raise RuntimeError(f"Zarr access health check failed: {str(artifact_error)}")
-            
             chatbot_id = f"squid-chatbot-{'simu' if self.is_simulation else 'real'}-{self.service_id}"
             
             chatbot_server_url = "https://chat.bioimage.io"
@@ -762,8 +716,17 @@ class Microscope:
             else:
                 logger.warning(f"Unknown channel {channel} in one_new_frame. Using default intensity/exposure.")
             
-            # Get the raw image from the camera with original bit depth preserved
-            raw_img = await self.squidController.snap_image(channel, intensity, exposure_time)
+            # Get the raw image from the camera with original bit depth preserved and full frame
+            raw_img = await self.squidController.snap_image(channel, intensity, exposure_time, full_frame=True)
+            
+            # In simulation mode, resize small images to expected camera resolution
+            if self.squidController.is_simulation:
+                height, width = raw_img.shape[:2]
+                # If image is too small, resize it to expected camera dimensions
+                expected_width = 3000  # Expected camera width
+                expected_height = 3000  # Expected camera height
+                if width < expected_width or height < expected_height:
+                    raw_img = cv2.resize(raw_img, (expected_width, expected_height), interpolation=cv2.INTER_LINEAR)
             
             # Crop the image before resizing, similar to squid_controller.py approach
             crop_height = CONFIG.Acquisition.CROP_HEIGHT
