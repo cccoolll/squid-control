@@ -1550,11 +1550,6 @@ async def test_zarr_upload_complete_workflow(sim_controller_fixture):
         service.squid_controller = controller  # Add alias for methods that use underscore
         service.service_id = "test-gallery"  # Use fixed test gallery name
         
-        # Add mock for update_task_status method
-        def mock_update_task_status(task_name, status, progress_message="", error_message=""):
-            print(f"   Task {task_name}: {status} - {progress_message or error_message}")
-        
-        service.update_task_status = mock_update_task_status
         
         print(f"   ✓ Service initialized with ID: {service.service_id}")
         
