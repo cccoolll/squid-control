@@ -314,18 +314,17 @@ class ZarrCanvas:
         
         # Crop to 95% of original size to remove black borders
         crop_factor = 0.96
-        new_height = int(height * crop_factor)
-        new_width = int(width * crop_factor)
+        image_size = min(int(height * crop_factor), int(width * crop_factor))
         
         # Calculate crop bounds (center crop)
-        y_start = (height - new_height) // 2
-        y_end = y_start + new_height
-        x_start = (width - new_width) // 2
-        x_end = x_start + new_width
+        y_start = (height - image_size) // 2
+        y_end = y_start + image_size
+        x_start = (width - image_size) // 2
+        x_end = x_start + image_size
         
         cropped = rotated[y_start:y_end, x_start:x_end]
         
-        logger.debug(f"Rotated image by {self.rotation_angle_deg}° and cropped from {width}x{height} to {new_width}x{new_height}")
+        logger.debug(f"Rotated image by {self.rotation_angle_deg}° and cropped from {width}x{height} to {image_size}x{image_size}")
         
         return cropped
     
