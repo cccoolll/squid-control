@@ -2911,35 +2911,276 @@ class Microscope:
         Returns:
             dict: Status and current velocity settings
         """
-        logger.info(f"Setting stage velocity - X: {velocity_x_mm_per_s} mm/s, Y: {velocity_y_mm_per_s} mm/s")
+        self.check_permission(context["user"])
         
         try:
-            # Call the SquidController method
-            result = self.squidController.set_stage_velocity(
+            return self.squid_controller.set_stage_velocity(
                 velocity_x_mm_per_s=velocity_x_mm_per_s,
                 velocity_y_mm_per_s=velocity_y_mm_per_s
             )
-            
-            logger.info(f"Stage velocity set successfully: {result}")
-            return result
-            
-        except ValueError as e:
-            logger.error(f"Invalid velocity parameters: {e}")
-            return {
-                "status": "error",
-                "message": f"Invalid velocity parameters: {str(e)}"
-            }
         except Exception as e:
             logger.error(f"Error setting stage velocity: {e}")
+            self.update_task_status("set_stage_velocity", "error", error_message=str(e))
+            return {"success": False, "error": str(e)}
+
+    @schema_function(skip_self=True)
+    async def get_zarr_upload_info(self, context=None):
+        """
+        Get information about the current zarr canvas for upload planning.
+        
+        Returns:
+            dict: Information about canvas size, export feasibility, and gallery status
+        """
+        self.check_permission(context["user"])
+        
+        try:
+            # Check if zarr canvas exists
+            if not hasattr(self.squid_controller, 'zarr_canvas') or self.squid_controller.zarr_canvas is None:
+                return {
+                    "success": False,
+                    "error": "No zarr canvas available. Start a scanning operation first to create data."
+                }
+            
+            # Get export info from zarr canvas
+            export_info = self.squid_controller.zarr_canvas.get_export_info()
+            
+                         # Add gallery information
+             if not hasattr(self, '_zarr_artifact_manager'):
+                 from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
+                 self._zarr_artifact_manager = SquidArtifactManager()
+                 # Connect to agent-lens workspace on remote server
+                 from hypha_rpc import connect_to_server
+                 import os
+                 token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+                 if not token:
+                     raise ValueError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. This is required for zarr upload functionality.")
+                 remote_server = await connect_to_server({
+                     "server_url": "https://hypha.aicell.io",
+                     "token": token,
+                     "workspace": "agent-lens"
+                 })
+                 await self._zarr_artifact_manager.connect_server(remote_server)
+            
+            # Check gallery status
+            try:
+                gallery = await self._zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
+                gallery_info = {
+                    "gallery_exists": True,
+                    "gallery_id": gallery.get("id"),
+                    "gallery_name": gallery.get("manifest", {}).get("name")
+                }
+            except Exception as e:
+                logger.error(f"Error getting gallery info: {e}")
+                gallery_info = {
+                    "gallery_exists": False,
+                    "gallery_error": str(e)
+                }
+            
             return {
-                "status": "error", 
-                "message": f"Failed to set stage velocity: {str(e)}"
+                "success": True,
+                "export_info": export_info,
+                "gallery_info": gallery_info,
+                "microscope_service_id": self.service_id
             }
+            
+        except Exception as e:
+            logger.error(f"Error getting zarr upload info: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @schema_function(skip_self=True)
+    async def check_zarr_dataset_name(self, dataset_name: str = Field(..., description="Proposed dataset name"), context=None):
+        """
+        Check if a dataset name is available for upload.
+        
+        Args:
+            dataset_name: The proposed dataset name
+            
+        Returns:
+            dict: Information about name availability and suggestions
+        """
+        self.check_permission(context["user"])
+        
+        try:
+            # Initialize artifact manager if needed
+            if not hasattr(self, '_zarr_artifact_manager'):
+                from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
+                self._zarr_artifact_manager = SquidArtifactManager()
+                # Connect to agent-lens workspace on remote server
+                from hypha_rpc import connect_to_server
+                import os
+                token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+                if not token:
+                    raise ValueError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. This is required for zarr upload functionality.")
+                remote_server = await connect_to_server({
+                    "server_url": "https://hypha.aicell.io",
+                    "token": token,
+                    "workspace": "agent-lens"
+                })
+                await self._zarr_artifact_manager.connect_server(remote_server)
+            
+            # Check name availability
+            name_check = await self._zarr_artifact_manager.check_dataset_name_availability(
+                self.service_id, dataset_name
+            )
+            
+            return {
+                "success": True,
+                "name_check": name_check
+            }
+            
+        except Exception as e:
+            logger.error(f"Error checking dataset name: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @schema_function(skip_self=True)
+    async def upload_zarr_dataset(self, 
+                                dataset_name: str = Field(..., description="Name for the dataset"),
+                                description: str = Field("", description="Description of the dataset"),
+                                include_acquisition_settings: bool = Field(True, description="Whether to include current acquisition settings as metadata"),
+                                context=None):
+        """
+        Upload the current zarr canvas as a dataset to the artifact manager.
+        
+        Args:
+            dataset_name: Name for the dataset
+            description: Description of the dataset
+            include_acquisition_settings: Whether to include current acquisition settings as metadata
+            
+        Returns:
+            dict: Upload result information
+        """
+        self.check_permission(context["user"])
+        
+        try:
+            # Check if zarr canvas exists
+            if not hasattr(self.squid_controller, 'zarr_canvas') or self.squid_controller.zarr_canvas is None:
+                return {
+                    "success": False,
+                    "error": "No zarr canvas available. Start a scanning operation first to create data."
+                }
+            
+            # Get export info to check feasibility
+            export_info = self.squid_controller.zarr_canvas.get_export_info()
+            if not export_info.get("export_feasible", False):
+                return {
+                    "success": False,
+                    "error": f"Dataset too large for upload. Estimated size: {export_info.get('estimated_zip_size_mb', 0):.1f} MB",
+                    "export_info": export_info
+                }
+            
+            # Initialize artifact manager if needed
+            if not hasattr(self, '_zarr_artifact_manager'):
+                from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
+                self._zarr_artifact_manager = SquidArtifactManager()
+                # Connect to agent-lens workspace on remote server  
+                from hypha_rpc import connect_to_server
+                import os
+                token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+                if not token:
+                    raise ValueError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. This is required for zarr upload functionality.")
+                remote_server = await connect_to_server({
+                    "server_url": "https://hypha.aicell.io",
+                    "token": token,
+                    "workspace": "agent-lens"
+                })
+                await self._zarr_artifact_manager.connect_server(remote_server)
+            
+            # Export zarr canvas as zip
+            self.update_task_status("upload_zarr_dataset", "running", 
+                                  progress_message="Exporting zarr canvas...")
+            
+            zarr_zip_content = self.squid_controller.zarr_canvas.export_as_zip()
+            
+            # Prepare acquisition settings if requested
+            acquisition_settings = None
+            if include_acquisition_settings:
+                acquisition_settings = {
+                    "pixel_size_xy_um": export_info.get("canvas_dimensions", {}).get("pixel_size_um"),
+                    "channels": export_info.get("channels", []),
+                    "canvas_dimensions": export_info.get("canvas_dimensions", {}),
+                    "num_scales": export_info.get("num_scales"),
+                    "microscope_service_id": self.service_id
+                }
+            
+            # Upload to artifact manager
+            self.update_task_status("upload_zarr_dataset", "running", 
+                                  progress_message="Uploading to artifact manager...")
+            
+            upload_result = await self._zarr_artifact_manager.upload_zarr_dataset(
+                microscope_service_id=self.service_id,
+                dataset_name=dataset_name,
+                zarr_zip_content=zarr_zip_content,
+                acquisition_settings=acquisition_settings,
+                description=description
+            )
+            
+            self.update_task_status("upload_zarr_dataset", "completed",
+                                  progress_message="Upload completed successfully")
+            
+            return {
+                "success": True,
+                "upload_result": upload_result,
+                "export_info": export_info
+            }
+            
+        except Exception as e:
+            logger.error(f"Error uploading zarr dataset: {e}")
+            self.update_task_status("upload_zarr_dataset", "error", error_message=str(e))
+            return {"success": False, "error": str(e)}
+    
+    @schema_function(skip_self=True)
+    async def list_microscope_datasets(self, context=None):
+        """
+        List all datasets uploaded by this microscope.
+        
+        Returns:
+            list: List of datasets in the microscope's gallery
+        """
+        self.check_permission(context["user"])
+        
+        try:
+            # Initialize artifact manager if needed
+            if not hasattr(self, '_zarr_artifact_manager'):
+                from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
+                self._zarr_artifact_manager = SquidArtifactManager()
+                # Connect to agent-lens workspace on remote server
+                from hypha_rpc import connect_to_server
+                import os
+                token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+                if not token:
+                    raise ValueError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. This is required for zarr upload functionality.")
+                remote_server = await connect_to_server({
+                    "server_url": "https://hypha.aicell.io",
+                    "token": token,
+                    "workspace": "agent-lens"
+                })
+                await self._zarr_artifact_manager.connect_server(remote_server)
+            
+            # Get gallery
+            gallery = await self._zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
+            
+            # List datasets in gallery
+            datasets = await self._zarr_artifact_manager._svc.list(gallery["id"])
+            
+            return {
+                "success": True,
+                "datasets": datasets,
+                "gallery_info": {
+                    "id": gallery["id"], 
+                    "name": gallery.get("manifest", {}).get("name"),
+                    "microscope_service_id": self.service_id
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error listing microscope datasets: {e}")
+            return {"success": False, "error": str(e)}
 
     def get_microscope_configuration_schema(self, config: GetMicroscopeConfigurationInput, context=None):
         return self.get_microscope_configuration(config.config_section, config.include_defaults, context)
 
     def set_stage_velocity_schema(self, config: SetStageVelocityInput, context=None):
+        """Set the maximum velocity for X and Y stage axes with schema validation."""
         return self.set_stage_velocity(config.velocity_x_mm_per_s, config.velocity_y_mm_per_s, context)
 
     @schema_function(skip_self=True)

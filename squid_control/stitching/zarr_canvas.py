@@ -19,6 +19,21 @@ class ZarrCanvas:
     """
     Manages an OME-Zarr canvas for live microscope image stitching.
     Creates and maintains a multi-scale pyramid structure for efficient viewing.
+    
+    Example usage with zarr upload:
+        # Create and initialize canvas
+        canvas = ZarrCanvas(base_path="/tmp/zarr", pixel_size_xy_um=0.33, stage_limits={...})
+        canvas.initialize_canvas()
+        
+        # Add images during scanning
+        canvas.add_image_sync(image, x_mm=10.0, y_mm=15.0, channel_idx=0)
+        
+        # Check export feasibility
+        export_info = canvas.get_export_info()
+        if export_info["export_feasible"]:
+            # Export for upload to artifact manager
+            zip_content = canvas.export_as_zip()
+            # Use the zip_content with the microscope service upload_zarr_dataset API
     """
     
     def __init__(self, base_path: str, pixel_size_xy_um: float, stage_limits: Dict[str, float], 
@@ -731,64 +746,136 @@ class ZarrCanvas:
         logger.info("ZarrCanvas closed")
     
     def save_preview(self, action_ID: str = "canvas_preview"):
-        """Save a preview image of the entire canvas from the lowest resolution scale."""
-        if not hasattr(self, 'zarr_arrays') or not self.zarr_arrays:
-            logger.warning('No zarr arrays available for preview generation')
-            return None
+        """Save a preview image of the canvas at different scales."""
+        try:
+            preview_dir = self.base_path / "previews"
+            preview_dir.mkdir(exist_ok=True)
+            
+            for scale in range(min(2, self.num_scales)):  # Save first 2 scales
+                if scale in self.zarr_arrays:
+                    # Get the first channel (usually brightfield)
+                    array = self.zarr_arrays[scale]
+                    if array.shape[1] > 0:  # Check if we have channels
+                        # Get the image data (T=0, C=0, Z=0, :, :)
+                        image_data = array[0, 0, 0, :, :]
+                        
+                        # Convert to PIL Image and save
+                        if image_data.max() > image_data.min():  # Only save if there's actual data
+                            # Normalize to 0-255
+                            normalized = ((image_data - image_data.min()) / 
+                                        (image_data.max() - image_data.min()) * 255).astype(np.uint8)
+                            image = Image.fromarray(normalized)
+                            preview_path = preview_dir / f"{action_ID}_scale{scale}.png"
+                            image.save(preview_path)
+                            logger.info(f"Saved preview: {preview_path}")
+                        
+        except Exception as e:
+            logger.warning(f"Failed to save preview: {e}")
+    
+    def export_as_zip(self) -> bytes:
+        """
+        Export the entire zarr canvas as a zip file for upload to artifact manager.
+        
+        Returns:
+            bytes: The zip file content containing the entire zarr directory structure
+        """
+        import zipfile
+        import io
+        
+        zip_buffer = io.BytesIO()
         
         try:
-            # Use the highest scale level (lowest resolution)
-            scale_level = self.num_scales - 1
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zip_file:
+                # Walk through the entire zarr directory
+                for root, dirs, files in os.walk(self.zarr_path):
+                    for file in files:
+                        file_path = Path(root) / file
+                        # Create relative path within the zip
+                        arcname = file_path.relative_to(self.zarr_path.parent)
+                        zip_file.write(file_path, arcname=str(arcname))
+                        logger.debug(f"Added to zip: {arcname}")
+                
+                # Add a metadata file with canvas information
+                metadata = {
+                    "canvas_info": {
+                        "pixel_size_xy_um": self.pixel_size_xy_um,
+                        "rotation_angle_deg": self.rotation_angle_deg,
+                        "stage_limits": self.stage_limits,
+                        "channels": self.channels,
+                        "num_scales": self.num_scales,
+                        "canvas_size_px": {
+                            "width": self.canvas_width_px,
+                            "height": self.canvas_height_px
+                        },
+                        "export_timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+                        "squid_canvas_version": "1.0"
+                    }
+                }
+                
+                import json
+                metadata_json = json.dumps(metadata, indent=2)
+                zip_file.writestr("squid_canvas_metadata.json", metadata_json)
+                
+            zip_buffer.seek(0)
+            zip_content = zip_buffer.getvalue()
+            zip_size_mb = len(zip_content) / (1024 * 1024)
             
-            logger.info(f'Generating preview image from scale{scale_level} for entire canvas')
-            
-            # Get the entire canvas at the lowest resolution
-            with self.zarr_lock:
-                zarr_array = self.zarr_arrays[scale_level]
-                # Get the entire array for the first channel (T=0, C=0, Z=0, all Y, all X)
-                preview_region = zarr_array[0, 0, 0, :, :]
-            
-            if preview_region.size == 0:
-                logger.warning('Preview region is empty, skipping preview generation')
-                return None
-            
-            # Convert to PIL Image
-            from PIL import Image
-            from datetime import datetime
-            
-            # Ensure data is uint8
-            if preview_region.dtype != np.uint8:
-                # Scale to 8-bit
-                if preview_region.max() > 0:
-                    preview_region = (preview_region / preview_region.max() * 255).astype(np.uint8)
-                else:
-                    preview_region = preview_region.astype(np.uint8)
-            
-            # Create PIL image
-            preview_img = Image.fromarray(preview_region)
-            
-            # Generate filename with timestamp
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            preview_filename = f'{action_ID}_preview.png'
-            
-            # Save in the same directory as the zarr canvas
-            preview_path = self.base_path / preview_filename
-            
-            # Save the image
-            preview_img.save(preview_path, 'PNG')
-            
-            # Calculate physical dimensions
-            scale_factor = 4 ** scale_level
-            pixel_size_at_scale = self.pixel_size_xy_um * scale_factor
-            width_mm = preview_region.shape[1] * pixel_size_at_scale / 1000
-            height_mm = preview_region.shape[0] * pixel_size_at_scale / 1000
-            
-            logger.info(f'Saved canvas preview image: {preview_path}')
-            logger.info(f'Preview image size: {preview_region.shape[1]}x{preview_region.shape[0]} pixels, '
-                        f'covering {width_mm:.1f}x{height_mm:.1f}mm canvas area')
-            
-            return str(preview_path)
+            logger.info(f"Exported zarr canvas as zip: {zip_size_mb:.2f} MB")
+            return zip_content
             
         except Exception as e:
-            logger.error(f'Error generating canvas preview: {e}')
-            return None 
+            logger.error(f"Failed to export zarr canvas as zip: {e}")
+            raise RuntimeError(f"Cannot export zarr canvas: {e}")
+        finally:
+            zip_buffer.close()
+    
+    def get_export_info(self) -> dict:
+        """
+        Get information about the current canvas for export planning.
+        
+        Returns:
+            dict: Information about canvas size, data, and export feasibility
+        """
+        try:
+            # Calculate total data size
+            total_size_bytes = 0
+            data_arrays = 0
+            
+            for scale in range(self.num_scales):
+                if scale in self.zarr_arrays:
+                    array = self.zarr_arrays[scale]
+                    array_size = array.nbytes
+                    total_size_bytes += array_size
+                    
+                    # Check if array has any data (non-zero values)
+                    if array.size > 0:
+                        sample = array[0, 0, 0, :min(100, array.shape[3]), :min(100, array.shape[4])]
+                        if sample.max() > 0:
+                            data_arrays += 1
+            
+            # Estimate zip size (zarr compresses well, estimate 20-40% of original)
+            estimated_zip_size_mb = (total_size_bytes * 0.3) / (1024 * 1024)
+            
+            return {
+                "canvas_path": str(self.zarr_path),
+                "total_size_bytes": total_size_bytes,
+                "total_size_mb": total_size_bytes / (1024 * 1024),
+                "estimated_zip_size_mb": estimated_zip_size_mb,
+                "num_scales": self.num_scales,
+                "num_channels": len(self.channels),
+                "channels": self.channels,
+                "arrays_with_data": data_arrays,
+                "canvas_dimensions": {
+                    "width_px": self.canvas_width_px,
+                    "height_px": self.canvas_height_px,
+                    "pixel_size_um": self.pixel_size_xy_um
+                },
+                "export_feasible": estimated_zip_size_mb < 1000  # Reasonable limit
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get export info: {e}")
+            return {
+                "error": str(e),
+                "export_feasible": False
+            } 
