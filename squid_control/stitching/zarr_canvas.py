@@ -28,25 +28,10 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.propagate = False  # Prevent double logging
 
-class ZarrCanvas:
+class WellZarrCanvasBase:
     """
-    Manages an OME-Zarr canvas for live microscope image stitching.
-    Creates and maintains a multi-scale pyramid structure for efficient viewing.
-    
-    Example usage with zarr upload:
-        # Create and initialize canvas
-        canvas = ZarrCanvas(base_path="/tmp/zarr", pixel_size_xy_um=0.33, stage_limits={...})
-        canvas.initialize_canvas()
-        
-        # Add images during scanning
-        canvas.add_image_sync(image, x_mm=10.0, y_mm=15.0, channel_idx=0, timepoint=0)
-        
-        # Check export feasibility
-        export_info = canvas.get_export_info()
-        if export_info["export_feasible"]:
-            # Export for upload to artifact manager
-            zip_content = canvas.export_as_zip()
-            # Use the zip_content with the microscope service upload_zarr_dataset API
+    Base class for well-specific zarr canvas functionality.
+    Contains the core stitching and zarr management functionality without single-canvas assumptions.
     """
     
     def __init__(self, base_path: str, pixel_size_xy_um: float, stage_limits: Dict[str, float], 
@@ -1529,3 +1514,596 @@ class ZarrCanvas:
             time.sleep(0.2)
             
         logger.info("All zarr operations completed and synchronized") 
+
+class WellZarrCanvas(WellZarrCanvasBase):
+    """
+    Well-specific zarr canvas for individual well imaging with well-center-relative coordinates.
+    
+    This class extends WellZarrCanvasBase to provide well-specific functionality:
+    - Well-center-relative coordinate system (0,0 at well center)
+    - Automatic well center calculation from well plate formats
+    - Canvas size based on well diameter + configurable padding
+    - Well-specific fileset naming (well_{row}{column}_{wellplate_type})
+    """
+    
+    def __init__(self, well_row: str, well_column: int, wellplate_type: str = '96',
+                 padding_mm: float = 2.0, base_path: str = None, 
+                 pixel_size_xy_um: float = 0.333, channels: List[str] = None, **kwargs):
+        """
+        Initialize well-specific canvas.
+        
+        Args:
+            well_row: Well row (e.g., 'A', 'B')
+            well_column: Well column (e.g., 1, 2, 3)
+            wellplate_type: Well plate type ('6', '12', '24', '96', '384')
+            padding_mm: Padding around well in mm (default 2.0)
+            base_path: Base directory for zarr storage
+            pixel_size_xy_um: Pixel size in micrometers
+            channels: List of channel names
+            **kwargs: Additional arguments passed to ZarrCanvas
+        """
+        # Import well plate format classes
+        from squid_control.control.config import (
+            WELLPLATE_FORMAT_6, WELLPLATE_FORMAT_12, WELLPLATE_FORMAT_24,
+            WELLPLATE_FORMAT_96, WELLPLATE_FORMAT_384, CONFIG
+        )
+        
+        # Get well plate format
+        self.wellplate_format = self._get_wellplate_format(wellplate_type)
+        
+        # Store well information
+        self.well_row = well_row
+        self.well_column = well_column
+        self.wellplate_type = wellplate_type
+        self.padding_mm = padding_mm
+        
+        # Calculate well center coordinates (absolute stage coordinates)
+        if hasattr(CONFIG, 'WELLPLATE_OFFSET_X_MM') and hasattr(CONFIG, 'WELLPLATE_OFFSET_Y_MM'):
+            # Use offsets if available (hardware mode)
+            x_offset = CONFIG.WELLPLATE_OFFSET_X_MM
+            y_offset = CONFIG.WELLPLATE_OFFSET_Y_MM
+        else:
+            # No offsets (simulation mode)
+            x_offset = 0
+            y_offset = 0
+            
+        self.well_center_x = (self.wellplate_format.A1_X_MM + x_offset + 
+                             (well_column - 1) * self.wellplate_format.WELL_SPACING_MM)
+        self.well_center_y = (self.wellplate_format.A1_Y_MM + y_offset + 
+                             (ord(well_row) - ord('A')) * self.wellplate_format.WELL_SPACING_MM)
+        
+        # Calculate canvas size (well diameter + padding)
+        canvas_size_mm = self.wellplate_format.WELL_SIZE_MM + (2 * padding_mm)
+        
+        # Define well-relative stage limits (centered around 0,0)
+        stage_limits = {
+            'x_positive': canvas_size_mm / 2,
+            'x_negative': -canvas_size_mm / 2,
+            'y_positive': canvas_size_mm / 2,
+            'y_negative': -canvas_size_mm / 2,
+            'z_positive': 6
+        }
+        
+        # Create well-specific fileset name
+        fileset_name = f"well_{well_row}{well_column}_{wellplate_type}"
+        
+        # Initialize parent ZarrCanvas with well-specific parameters
+        super().__init__(
+            base_path=base_path,
+            pixel_size_xy_um=pixel_size_xy_um,
+            stage_limits=stage_limits,
+            channels=channels,
+            fileset_name=fileset_name,
+            **kwargs
+        )
+        
+        logger.info(f"WellZarrCanvas initialized for well {well_row}{well_column} ({wellplate_type})")
+        logger.info(f"Well center: ({self.well_center_x:.2f}, {self.well_center_y:.2f}) mm")
+        logger.info(f"Canvas size: {canvas_size_mm:.2f} mm, padding: {padding_mm:.2f} mm")
+    
+    def _get_wellplate_format(self, wellplate_type: str):
+        """Get well plate format configuration."""
+        from squid_control.control.config import (
+            WELLPLATE_FORMAT_6, WELLPLATE_FORMAT_12, WELLPLATE_FORMAT_24,
+            WELLPLATE_FORMAT_96, WELLPLATE_FORMAT_384
+        )
+        
+        if wellplate_type == '6':
+            return WELLPLATE_FORMAT_6
+        elif wellplate_type == '12':
+            return WELLPLATE_FORMAT_12
+        elif wellplate_type == '24':
+            return WELLPLATE_FORMAT_24
+        elif wellplate_type == '96':
+            return WELLPLATE_FORMAT_96
+        elif wellplate_type == '384':
+            return WELLPLATE_FORMAT_384
+        else:
+            return WELLPLATE_FORMAT_96  # Default
+    
+    def stage_to_pixel_coords(self, x_mm: float, y_mm: float, scale: int = 0) -> Tuple[int, int]:
+        """
+        Convert absolute stage coordinates to well-relative pixel coordinates.
+        
+        Args:
+            x_mm: Absolute X position in mm
+            y_mm: Absolute Y position in mm
+            scale: Scale level
+            
+        Returns:
+            Tuple of (x_pixel, y_pixel) coordinates relative to well center
+        """
+        # Convert absolute coordinates to well-relative coordinates
+        well_relative_x = x_mm - self.well_center_x
+        well_relative_y = y_mm - self.well_center_y
+        
+        # Use parent's coordinate conversion with well-relative coordinates
+        return super().stage_to_pixel_coords(well_relative_x, well_relative_y, scale)
+    
+    def get_well_info(self) -> dict:
+        """
+        Get comprehensive information about this well canvas.
+        
+        Returns:
+            dict: Well information including coordinates, size, and metadata
+        """
+        return {
+            "well_info": {
+                "row": self.well_row,
+                "column": self.well_column,
+                "well_id": f"{self.well_row}{self.well_column}",
+                "wellplate_type": self.wellplate_type,
+                "well_center_x_mm": self.well_center_x,
+                "well_center_y_mm": self.well_center_y,
+                "well_diameter_mm": self.wellplate_format.WELL_SIZE_MM,
+                "well_spacing_mm": self.wellplate_format.WELL_SPACING_MM,
+                "padding_mm": self.padding_mm
+            },
+            "canvas_info": {
+                "canvas_width_mm": self.stage_limits['x_positive'] - self.stage_limits['x_negative'],
+                "canvas_height_mm": self.stage_limits['y_positive'] - self.stage_limits['y_negative'],
+                "coordinate_system": "well_relative",
+                "origin": "well_center",
+                "canvas_width_px": self.canvas_width_px,
+                "canvas_height_px": self.canvas_height_px,
+                "pixel_size_xy_um": self.pixel_size_xy_um
+            }
+        }
+    
+    def add_image_from_absolute_coords(self, image: np.ndarray, absolute_x_mm: float, absolute_y_mm: float,
+                                     channel_idx: int = 0, z_idx: int = 0, timepoint: int = 0):
+        """
+        Add an image using absolute stage coordinates (converts to well-relative internally).
+        
+        Args:
+            image: Image array (2D)
+            absolute_x_mm: Absolute X position in mm
+            absolute_y_mm: Absolute Y position in mm
+            channel_idx: Local zarr channel index (0, 1, 2, etc.)
+            z_idx: Z-slice index (default 0)
+            timepoint: Timepoint index (default 0)
+        """
+        # Convert absolute coordinates to well-relative
+        well_relative_x = absolute_x_mm - self.well_center_x
+        well_relative_y = absolute_y_mm - self.well_center_y
+        
+        # Use parent's add_image_sync with well-relative coordinates
+        self.add_image_sync(image, well_relative_x, well_relative_y, channel_idx, z_idx, timepoint)
+        
+        logger.debug(f"Added image at absolute coords ({absolute_x_mm:.2f}, {absolute_y_mm:.2f}) "
+                    f"-> well-relative ({well_relative_x:.2f}, {well_relative_y:.2f}) for well {self.well_row}{self.well_column}")
+    
+    async def add_image_from_absolute_coords_async(self, image: np.ndarray, absolute_x_mm: float, absolute_y_mm: float,
+                                                 channel_idx: int = 0, z_idx: int = 0, timepoint: int = 0):
+        """
+        Asynchronously add an image using absolute stage coordinates.
+        
+        Args:
+            image: Image array (2D)
+            absolute_x_mm: Absolute X position in mm
+            absolute_y_mm: Absolute Y position in mm
+            channel_idx: Local zarr channel index (0, 1, 2, etc.)
+            z_idx: Z-slice index (default 0)
+            timepoint: Timepoint index (default 0)
+        """
+        # Convert absolute coordinates to well-relative
+        well_relative_x = absolute_x_mm - self.well_center_x
+        well_relative_y = absolute_y_mm - self.well_center_y
+        
+        # Use parent's add_image_async with well-relative coordinates
+        await self.add_image_async(image, well_relative_x, well_relative_y, channel_idx, z_idx, timepoint) 
+
+class ExperimentManager:
+    """
+    Manages experiment folders containing well-specific zarr canvases.
+    
+    Each experiment is a folder containing multiple well canvases:
+    ZARR_PATH/experiment_name/A1_96.zarr, A2_96.zarr, etc.
+    
+    This replaces the single-canvas system with a well-separated approach.
+    """
+    
+    def __init__(self, base_path: str, pixel_size_xy_um: float):
+        """
+        Initialize the experiment manager.
+        
+        Args:
+            base_path: Base directory for zarr storage (from ZARR_PATH env variable)
+            pixel_size_xy_um: Pixel size in micrometers
+        """
+        self.base_path = Path(base_path)
+        self.pixel_size_xy_um = pixel_size_xy_um
+        self.current_experiment = None  # Current experiment name
+        self.well_canvases = {}  # {well_id: WellZarrCanvas} for current experiment
+        
+        # Ensure base directory exists
+        self.base_path.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"ExperimentManager initialized at {self.base_path}")
+    
+    @property
+    def current_experiment_name(self) -> str:
+        """Get the current experiment name."""
+        return self.current_experiment
+    
+    def create_experiment(self, experiment_name: str, wellplate_type: str = '96', 
+                         well_padding_mm: float = 2.0, initialize_all_wells: bool = False):
+        """
+        Create a new experiment folder and optionally initialize all well canvases.
+        
+        Args:
+            experiment_name: Name of the experiment
+            wellplate_type: Well plate type ('6', '12', '24', '96', '384')
+            well_padding_mm: Padding around each well in mm
+            initialize_all_wells: If True, create canvases for all wells in the plate
+            
+        Returns:
+            dict: Information about the created experiment
+        """
+        experiment_path = self.base_path / experiment_name
+        
+        if experiment_path.exists():
+            raise ValueError(f"Experiment '{experiment_name}' already exists")
+        
+        # Create experiment directory
+        experiment_path.mkdir(parents=True, exist_ok=True)
+        
+        # Set as current experiment
+        self.current_experiment = experiment_name
+        self.well_canvases = {}
+        
+        logger.info(f"Created experiment '{experiment_name}' at {experiment_path}")
+        
+        # Optionally initialize all wells
+        initialized_wells = []
+        if initialize_all_wells:
+            well_positions = self._get_all_well_positions(wellplate_type)
+            for well_row, well_column in well_positions:
+                try:
+                    canvas = self.get_well_canvas(well_row, well_column, wellplate_type, well_padding_mm)
+                    initialized_wells.append(f"{well_row}{well_column}")
+                except Exception as e:
+                    logger.warning(f"Failed to initialize well {well_row}{well_column}: {e}")
+        
+        return {
+            "experiment_name": experiment_name,
+            "experiment_path": str(experiment_path),
+            "wellplate_type": wellplate_type,
+            "initialized_wells": initialized_wells,
+            "total_wells": len(initialized_wells) if initialize_all_wells else 0
+        }
+    
+    def set_active_experiment(self, experiment_name: str):
+        """
+        Set the active experiment.
+        
+        Args:
+            experiment_name: Name of the experiment to activate
+            
+        Returns:
+            dict: Information about the activated experiment
+        """
+        experiment_path = self.base_path / experiment_name
+        
+        if not experiment_path.exists():
+            raise ValueError(f"Experiment '{experiment_name}' not found")
+        
+        # Close current well canvases
+        for canvas in self.well_canvases.values():
+            canvas.close()
+        
+        # Set new experiment
+        self.current_experiment = experiment_name
+        self.well_canvases = {}
+        
+        logger.info(f"Set active experiment to '{experiment_name}'")
+        
+        return {
+            "experiment_name": experiment_name,
+            "experiment_path": str(experiment_path),
+            "message": f"Activated experiment '{experiment_name}'"
+        }
+    
+    def list_experiments(self):
+        """
+        List all available experiments.
+        
+        Returns:
+            dict: List of experiments and their information
+        """
+        experiments = []
+        
+        try:
+            for item in self.base_path.iterdir():
+                if item.is_dir():
+                    # Count well canvases in this experiment
+                    well_count = len([f for f in item.iterdir() if f.is_dir() and f.suffix == '.zarr'])
+                    
+                    experiments.append({
+                        "name": item.name,
+                        "path": str(item),
+                        "is_active": item.name == self.current_experiment,
+                        "well_count": well_count
+                    })
+        except Exception as e:
+            logger.error(f"Error listing experiments: {e}")
+        
+        return {
+            "experiments": experiments,
+            "active_experiment": self.current_experiment,
+            "total_count": len(experiments)
+        }
+    
+    def remove_experiment(self, experiment_name: str):
+        """
+        Remove an experiment and all its well canvases.
+        
+        Args:
+            experiment_name: Name of the experiment to remove
+            
+        Returns:
+            dict: Information about the removed experiment
+        """
+        if experiment_name == self.current_experiment:
+            raise ValueError(f"Cannot remove active experiment '{experiment_name}'. Please switch to another experiment first.")
+        
+        experiment_path = self.base_path / experiment_name
+        
+        if not experiment_path.exists():
+            raise ValueError(f"Experiment '{experiment_name}' not found")
+        
+        # Remove experiment directory and all contents
+        import shutil
+        shutil.rmtree(experiment_path)
+        
+        logger.info(f"Removed experiment '{experiment_name}'")
+        
+        return {
+            "experiment_name": experiment_name,
+            "message": f"Removed experiment '{experiment_name}'"
+        }
+    
+    def reset_experiment(self, experiment_name: str = None):
+        """
+        Reset an experiment by removing all well canvases but keeping the folder.
+        
+        Args:
+            experiment_name: Name of the experiment to reset (default: current experiment)
+            
+        Returns:
+            dict: Information about the reset experiment
+        """
+        if experiment_name is None:
+            experiment_name = self.current_experiment
+        
+        if experiment_name is None:
+            raise ValueError("No experiment specified and no active experiment")
+        
+        experiment_path = self.base_path / experiment_name
+        
+        if not experiment_path.exists():
+            raise ValueError(f"Experiment '{experiment_name}' not found")
+        
+        # Close well canvases if this is the active experiment
+        if experiment_name == self.current_experiment:
+            for canvas in self.well_canvases.values():
+                canvas.close()
+            self.well_canvases = {}
+        
+        # Remove all .zarr directories in the experiment folder
+        removed_count = 0
+        for item in experiment_path.iterdir():
+            if item.is_dir() and item.suffix == '.zarr':
+                import shutil
+                shutil.rmtree(item)
+                removed_count += 1
+        
+        logger.info(f"Reset experiment '{experiment_name}', removed {removed_count} well canvases")
+        
+        return {
+            "experiment_name": experiment_name,
+            "removed_wells": removed_count,
+            "message": f"Reset experiment '{experiment_name}'"
+        }
+    
+    def get_well_canvas(self, well_row: str, well_column: int, wellplate_type: str = '96',
+                       padding_mm: float = 2.0):
+        """
+        Get or create a well canvas for the current experiment.
+        
+        Args:
+            well_row: Well row (e.g., 'A', 'B')
+            well_column: Well column (e.g., 1, 2, 3)
+            wellplate_type: Well plate type ('6', '12', '24', '96', '384')
+            padding_mm: Padding around well in mm
+            
+        Returns:
+            WellZarrCanvas: The well-specific canvas
+        """
+        if self.current_experiment is None:
+            raise RuntimeError("No active experiment. Create or set an experiment first.")
+        
+        well_id = f"{well_row}{well_column}_{wellplate_type}"
+        
+        if well_id not in self.well_canvases:
+            # Create new well canvas in experiment folder
+            experiment_path = self.base_path / self.current_experiment
+            
+            from squid_control.control.config import ChannelMapper, CONFIG
+            all_channels = ChannelMapper.get_all_human_names()
+            
+            canvas = WellZarrCanvas(
+                well_row=well_row,
+                well_column=well_column,
+                wellplate_type=wellplate_type,
+                padding_mm=padding_mm,
+                base_path=str(experiment_path),  # Use experiment folder as base
+                pixel_size_xy_um=self.pixel_size_xy_um,
+                channels=all_channels,
+                rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG,
+                initial_timepoints=20,
+                timepoint_expansion_chunk=10
+            )
+            
+            self.well_canvases[well_id] = canvas
+            logger.info(f"Created well canvas {well_row}{well_column} for experiment '{self.current_experiment}'")
+        
+        return self.well_canvases[well_id]
+    
+    def list_well_canvases(self):
+        """
+        List all well canvases in the current experiment.
+        
+        Returns:
+            dict: Information about well canvases
+        """
+        if self.current_experiment is None:
+            return {
+                "well_canvases": [],
+                "experiment_name": None,
+                "total_count": 0
+            }
+        
+        canvases = []
+        
+        # List active canvases
+        for well_id, canvas in self.well_canvases.items():
+            well_info = canvas.get_well_info()
+            canvases.append({
+                "well_id": well_id,
+                "well_row": canvas.well_row,
+                "well_column": canvas.well_column,
+                "wellplate_type": canvas.wellplate_type,
+                "canvas_path": str(canvas.zarr_path),
+                "well_center_x_mm": canvas.well_center_x,
+                "well_center_y_mm": canvas.well_center_y,
+                "padding_mm": canvas.padding_mm,
+                "channels": len(canvas.channels),
+                "timepoints": len(canvas.available_timepoints),
+                "status": "active"
+            })
+        
+        # List canvases on disk (in experiment folder)
+        experiment_path = self.base_path / self.current_experiment
+        for item in experiment_path.iterdir():
+            if item.is_dir() and item.suffix == '.zarr':
+                well_name = item.stem  # e.g., "well_A1_96"
+                if well_name not in [c["well_id"] for c in canvases]:
+                    canvases.append({
+                        "well_id": well_name,
+                        "canvas_path": str(item),
+                        "status": "on_disk"
+                    })
+        
+        return {
+            "well_canvases": canvases,
+            "experiment_name": self.current_experiment,
+            "total_count": len(canvases)
+        }
+    
+    def get_experiment_info(self, experiment_name: str = None):
+        """
+        Get detailed information about an experiment.
+        
+        Args:
+            experiment_name: Name of the experiment (default: current experiment)
+            
+        Returns:
+            dict: Detailed experiment information
+        """
+        if experiment_name is None:
+            experiment_name = self.current_experiment
+        
+        if experiment_name is None:
+            raise ValueError("No experiment specified and no active experiment")
+        
+        experiment_path = self.base_path / experiment_name
+        
+        if not experiment_path.exists():
+            raise ValueError(f"Experiment '{experiment_name}' not found")
+        
+        # Count well canvases
+        well_canvases = []
+        total_size_bytes = 0
+        
+        for item in experiment_path.iterdir():
+            if item.is_dir() and item.suffix == '.zarr':
+                try:
+                    # Calculate size
+                    size_bytes = sum(f.stat().st_size for f in item.rglob('*') if f.is_file())
+                    total_size_bytes += size_bytes
+                    
+                    well_canvases.append({
+                        "name": item.stem,
+                        "path": str(item),
+                        "size_bytes": size_bytes,
+                        "size_mb": size_bytes / (1024 * 1024)
+                    })
+                except Exception as e:
+                    logger.warning(f"Error getting info for {item}: {e}")
+        
+        return {
+            "experiment_name": experiment_name,
+            "experiment_path": str(experiment_path),
+            "is_active": experiment_name == self.current_experiment,
+            "well_canvases": well_canvases,
+            "total_wells": len(well_canvases),
+            "total_size_bytes": total_size_bytes,
+            "total_size_mb": total_size_bytes / (1024 * 1024)
+        }
+    
+    def _get_all_well_positions(self, wellplate_type: str):
+        """Get all well positions for a given plate type."""
+        from squid_control.control.config import (
+            WELLPLATE_FORMAT_6, WELLPLATE_FORMAT_12, WELLPLATE_FORMAT_24,
+            WELLPLATE_FORMAT_96, WELLPLATE_FORMAT_384
+        )
+        
+        if wellplate_type == '6':
+            max_rows, max_cols = 2, 3  # A-B, 1-3
+        elif wellplate_type == '12':
+            max_rows, max_cols = 3, 4  # A-C, 1-4
+        elif wellplate_type == '24':
+            max_rows, max_cols = 4, 6  # A-D, 1-6
+        elif wellplate_type == '96':
+            max_rows, max_cols = 8, 12  # A-H, 1-12
+        elif wellplate_type == '384':
+            max_rows, max_cols = 16, 24  # A-P, 1-24
+        else:
+            max_rows, max_cols = 8, 12  # Default to 96-well
+        
+        positions = []
+        for row_idx in range(max_rows):
+            for col_idx in range(max_cols):
+                row_letter = chr(ord('A') + row_idx)
+                col_number = col_idx + 1
+                positions.append((row_letter, col_number))
+        
+        return positions
+    
+    def close(self):
+        """Close all well canvases and clean up resources."""
+        for canvas in self.well_canvases.values():
+            canvas.close()
+        self.well_canvases = {}
+        logger.info("ExperimentManager closed")

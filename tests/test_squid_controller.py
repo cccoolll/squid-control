@@ -1473,272 +1473,303 @@ async def test_set_stage_velocity_error_handling(sim_controller_fixture):
         print("✅ set_stage_velocity error handling tests passed!")
         break
 
-# Zarr Fileset Management Tests
+# Zarr Fileset Management Tests - REMOVED
+# These tests are replaced by experiment management tests below
+
+# Experiment Management Tests
 @pytest.mark.timeout(60)
-async def test_zarr_fileset_creation(sim_controller_fixture):
-    """Test creating new zarr filesets."""
+async def test_experiment_creation(sim_controller_fixture):
+    """Test creating new experiments."""
     async for controller in sim_controller_fixture:
-        print("Testing zarr fileset creation...")
+        print("Testing experiment creation...")
         
-        # Test creating a new fileset
-        fileset_name = "test_experiment_1"
-        result = controller.create_zarr_fileset(fileset_name)
+        # Test creating a new experiment
+        experiment_name = "test_experiment_1"
+        result = controller.experiment_manager.create_experiment(experiment_name, wellplate_type='96')
         
         assert isinstance(result, dict)
-        assert result["fileset_name"] == fileset_name
-        assert result["is_active"] == True  # Should be active since it's the first one
-        assert "message" in result
+        assert result["experiment_name"] == experiment_name
+        assert result["wellplate_type"] == '96'
+        assert "experiment_path" in result
+        assert "initialized_wells" in result
         
-        # Verify it's in the tracking dictionary
-        assert fileset_name in controller.zarr_canvases
-        assert controller.active_canvas_name == fileset_name
-        assert controller.zarr_canvas is not None
+        # Verify it's set as current experiment
+        assert controller.experiment_manager.current_experiment == experiment_name
         
-        print(f"   ✓ Created fileset '{fileset_name}' successfully")
+        print(f"   ✓ Created experiment '{experiment_name}' successfully")
         
-        # Test creating another fileset
-        fileset_name_2 = "test_experiment_2"
-        result_2 = controller.create_zarr_fileset(fileset_name_2)
+        # Test creating another experiment
+        experiment_name_2 = "test_experiment_2"
+        result_2 = controller.experiment_manager.create_experiment(experiment_name_2, wellplate_type='384')
         
-        assert result_2["fileset_name"] == fileset_name_2
-        assert result_2["is_active"] == True  # Should become the new active one
-        assert fileset_name_2 in controller.zarr_canvases
-        assert controller.active_canvas_name == fileset_name_2
+        assert result_2["experiment_name"] == experiment_name_2
+        assert result_2["wellplate_type"] == '384'
+        assert controller.experiment_manager.current_experiment == experiment_name_2
         
-        print(f"   ✓ Created second fileset '{fileset_name_2}' successfully")
+        print(f"   ✓ Created second experiment '{experiment_name_2}' successfully")
         
-        # Test error case: creating duplicate fileset
+        # Test error case: creating duplicate experiment
         try:
-            controller.create_zarr_fileset(fileset_name)
-            assert False, "Should have raised ValueError for duplicate fileset"
+            controller.experiment_manager.create_experiment(experiment_name)
+            assert False, "Should have raised ValueError for duplicate experiment"
         except ValueError as e:
             assert "already exists" in str(e)
-            print(f"   ✓ Correctly prevented duplicate fileset creation")
+            print(f"   ✓ Correctly prevented duplicate experiment creation")
         
-        print("✅ Zarr fileset creation tests passed!")
+        print("✅ Experiment creation tests passed!")
         break
 
 @pytest.mark.timeout(60)
-async def test_zarr_fileset_listing(sim_controller_fixture):
-    """Test listing zarr filesets."""
+async def test_experiment_listing(sim_controller_fixture):
+    """Test listing experiments."""
     async for controller in sim_controller_fixture:
-        print("Testing zarr fileset listing...")
+        print("Testing experiment listing...")
         
-        # Initially should have no filesets
-        result = controller.list_zarr_filesets()
+        # Initially should have no experiments (or just default)
+        result = controller.experiment_manager.list_experiments()
         
         assert isinstance(result, dict)
-        assert "filesets" in result
-        assert "active_fileset" in result
+        assert "experiments" in result
+        assert "active_experiment" in result
         assert "total_count" in result
         
         initial_count = result["total_count"]
-        print(f"   Initial fileset count: {initial_count}")
+        print(f"   Initial experiment count: {initial_count}")
         
-        # Create some filesets
-        test_filesets = ["experiment_a", "experiment_b", "experiment_c"]
-        for fileset_name in test_filesets:
-            controller.create_zarr_fileset(fileset_name)
+        # Create some experiments
+        test_experiments = ["experiment_a", "experiment_b", "experiment_c"]
+        for experiment_name in test_experiments:
+            controller.experiment_manager.create_experiment(experiment_name, wellplate_type='96')
         
-        # List filesets again
-        result = controller.list_zarr_filesets()
+        # List experiments again
+        result = controller.experiment_manager.list_experiments()
         
-        assert result["total_count"] >= len(test_filesets)
-        assert result["active_fileset"] in test_filesets  # Should be one of our created filesets
+        assert result["total_count"] >= len(test_experiments)
+        assert result["active_experiment"] in test_experiments  # Should be one of our created experiments
         
-        # Check that all our filesets are in the list
-        fileset_names = [fs["name"] for fs in result["filesets"]]
-        for fileset_name in test_filesets:
-            assert fileset_name in fileset_names
+        # Check that all our experiments are in the list
+        experiment_names = [exp["name"] for exp in result["experiments"]]
+        for experiment_name in test_experiments:
+            assert experiment_name in experiment_names
         
-        # Verify fileset details
-        for fileset in result["filesets"]:
-            assert "name" in fileset
-            assert "is_active" in fileset
-            assert "loaded" in fileset
-            assert "path" in fileset
+        # Verify experiment details
+        for experiment in result["experiments"]:
+            assert "name" in experiment
+            assert "path" in experiment
+            assert "is_active" in experiment
+            assert "well_count" in experiment
             
-            if fileset["loaded"]:
-                assert "channels" in fileset
-                assert "timepoints" in fileset
-                assert fileset["channels"] > 0  # Should have channels
+        # Verify only one experiment is active
+        active_experiments = [exp for exp in result["experiments"] if exp["is_active"]]
+        assert len(active_experiments) == 1
         
-        # Verify only one fileset is active
-        active_filesets = [fs for fs in result["filesets"] if fs["is_active"]]
-        assert len(active_filesets) == 1
+        print(f"   ✓ Listed {result['total_count']} experiments successfully")
+        print(f"   ✓ Active experiment: {result['active_experiment']}")
         
-        print(f"   ✓ Listed {result['total_count']} filesets successfully")
-        print(f"   ✓ Active fileset: {result['active_fileset']}")
-        
-        print("✅ Zarr fileset listing tests passed!")
+        print("✅ Experiment listing tests passed!")
         break
 
 @pytest.mark.timeout(60)
-async def test_zarr_fileset_activation(sim_controller_fixture):
-    """Test setting active zarr fileset."""
+async def test_experiment_activation(sim_controller_fixture):
+    """Test setting active experiment."""
     async for controller in sim_controller_fixture:
-        print("Testing zarr fileset activation...")
+        print("Testing experiment activation...")
         
-        # Create multiple filesets
-        test_filesets = ["project_alpha", "project_beta", "project_gamma"]
-        for fileset_name in test_filesets:
-            controller.create_zarr_fileset(fileset_name)
+        # Create multiple experiments
+        test_experiments = ["project_alpha", "project_beta", "project_gamma"]
+        for experiment_name in test_experiments:
+            controller.experiment_manager.create_experiment(experiment_name, wellplate_type='96')
         
         # The last created should be active
-        assert controller.active_canvas_name == test_filesets[-1]
+        assert controller.experiment_manager.current_experiment == test_experiments[-1]
         
-        # Test switching to a different fileset
-        target_fileset = test_filesets[0]
-        result = controller.set_active_zarr_fileset(target_fileset)
+        # Test switching to a different experiment
+        target_experiment = test_experiments[0]
+        result = controller.experiment_manager.set_active_experiment(target_experiment)
         
         assert isinstance(result, dict)
-        assert result["fileset_name"] == target_fileset
-        assert result["was_already_active"] == False
+        assert result["experiment_name"] == target_experiment
         assert "message" in result
         
         # Verify the switch worked
-        assert controller.active_canvas_name == target_fileset
-        assert controller.zarr_canvas == controller.zarr_canvases[target_fileset]
+        assert controller.experiment_manager.current_experiment == target_experiment
         
-        print(f"   ✓ Switched to fileset '{target_fileset}' successfully")
+        print(f"   ✓ Switched to experiment '{target_experiment}' successfully")
         
-        # Test switching to already active fileset
-        result_same = controller.set_active_zarr_fileset(target_fileset)
-        assert result_same["was_already_active"] == True
-        assert "already active" in result_same["message"]
-        
-        print(f"   ✓ Correctly handled switching to already active fileset")
-        
-        # Test error case: switching to non-existent fileset
+        # Test error case: switching to non-existent experiment
         try:
-            controller.set_active_zarr_fileset("non_existent_fileset")
-            assert False, "Should have raised ValueError for non-existent fileset"
+            controller.experiment_manager.set_active_experiment("non_existent_experiment")
+            assert False, "Should have raised ValueError for non-existent experiment"
         except ValueError as e:
             assert "not found" in str(e)
-            print(f"   ✓ Correctly handled non-existent fileset")
+            print(f"   ✓ Correctly handled non-existent experiment")
         
-        print("✅ Zarr fileset activation tests passed!")
+        print("✅ Experiment activation tests passed!")
         break
 
 @pytest.mark.timeout(60)
-async def test_zarr_fileset_removal(sim_controller_fixture):
-    """Test removing zarr filesets."""
+async def test_experiment_removal(sim_controller_fixture):
+    """Test removing experiments."""
     async for controller in sim_controller_fixture:
-        print("Testing zarr fileset removal...")
+        print("Testing experiment removal...")
         
-        # Create multiple filesets
-        test_filesets = ["temp_exp_1", "temp_exp_2", "temp_exp_3"]
-        for fileset_name in test_filesets:
-            controller.create_zarr_fileset(fileset_name)
+        # Create multiple experiments
+        test_experiments = ["temp_exp_1", "temp_exp_2", "temp_exp_3"]
+        for experiment_name in test_experiments:
+            controller.experiment_manager.create_experiment(experiment_name, wellplate_type='96')
         
-        # Verify all filesets exist
-        list_result = controller.list_zarr_filesets()
+        # Verify all experiments exist
+        list_result = controller.experiment_manager.list_experiments()
         initial_count = list_result["total_count"]
         
-        # Make sure we have an active fileset (should be the last created)
-        active_fileset = controller.active_canvas_name
-        assert active_fileset in test_filesets
+        # Make sure we have an active experiment (should be the last created)
+        active_experiment = controller.experiment_manager.current_experiment
+        assert active_experiment in test_experiments
         
-        # Test error case: trying to remove active fileset
+        # Test error case: trying to remove active experiment
         try:
-            controller.remove_zarr_fileset(active_fileset)
-            assert False, "Should have raised ValueError for removing active fileset"
+            controller.experiment_manager.remove_experiment(active_experiment)
+            assert False, "Should have raised ValueError for removing active experiment"
         except ValueError as e:
-            assert "Cannot remove active fileset" in str(e)
-            print(f"   ✓ Correctly prevented removal of active fileset")
+            assert "Cannot remove active experiment" in str(e)
+            print(f"   ✓ Correctly prevented removal of active experiment")
         
-        # Switch to a different fileset so we can remove the previous one
+        # Switch to a different experiment so we can remove the previous one
         target_to_remove = None
-        for fileset_name in test_filesets:
-            if fileset_name != active_fileset:
-                target_to_remove = fileset_name
+        for experiment_name in test_experiments:
+            if experiment_name != active_experiment:
+                target_to_remove = experiment_name
                 break
         
-        assert target_to_remove is not None, "Should have a non-active fileset to remove"
+        assert target_to_remove is not None, "Should have a non-active experiment to remove"
         
-        # Remove the non-active fileset
-        result = controller.remove_zarr_fileset(target_to_remove)
+        # Remove the non-active experiment
+        result = controller.experiment_manager.remove_experiment(target_to_remove)
         
         assert isinstance(result, dict)
-        assert result["fileset_name"] == target_to_remove
+        assert result["experiment_name"] == target_to_remove
         assert "message" in result
         
-        # Verify it was removed from memory
-        assert target_to_remove not in controller.zarr_canvases
-        
         # Verify the count decreased
-        list_result_after = controller.list_zarr_filesets()
+        list_result_after = controller.experiment_manager.list_experiments()
         assert list_result_after["total_count"] == initial_count - 1
         
         # Verify it's not in the list anymore
-        remaining_names = [fs["name"] for fs in list_result_after["filesets"]]
+        remaining_names = [exp["name"] for exp in list_result_after["experiments"]]
         assert target_to_remove not in remaining_names
         
-        print(f"   ✓ Removed fileset '{target_to_remove}' successfully")
+        print(f"   ✓ Removed experiment '{target_to_remove}' successfully")
         
-        # Test removing non-existent fileset (should not raise error, just report what happened)
-        try:
-            result_nonexistent = controller.remove_zarr_fileset("non_existent_fileset")
-            # Should complete without error but report nothing was removed
-            assert result_nonexistent["removed_from_memory"] == False
-            assert result_nonexistent["removed_from_disk"] == False
-            print(f"   ✓ Handled non-existent fileset removal gracefully")
-        except Exception:
-            # If it raises an error, that's also acceptable behavior
-            print(f"   ✓ Non-existent fileset removal raised error (acceptable)")
-        
-        print("✅ Zarr fileset removal tests passed!")
+        print("✅ Experiment removal tests passed!")
         break
 
 @pytest.mark.timeout(60)
-async def test_zarr_fileset_get_active_canvas(sim_controller_fixture):
-    """Test getting active canvas with automatic creation."""
+async def test_experiment_reset(sim_controller_fixture):
+    """Test resetting experiments."""
     async for controller in sim_controller_fixture:
-        print("Testing get_active_canvas functionality...")
+        print("Testing experiment reset...")
         
-        # Reset the controller's zarr state to test auto-creation
-        controller.zarr_canvas = None
-        controller.active_canvas_name = None
-        controller.zarr_canvases.clear()
+        # Create an experiment
+        experiment_name = "test_reset_experiment"
+        controller.experiment_manager.create_experiment(experiment_name, wellplate_type='96')
         
-        # Call get_active_canvas - should create default fileset
-        canvas = controller.get_active_canvas()
+        # Create some well canvases in the experiment
+        well_canvas = controller.experiment_manager.get_well_canvas('A', 1, '96')
+        assert well_canvas is not None
         
-        assert canvas is not None
-        assert controller.active_canvas_name == "default"
-        assert "default" in controller.zarr_canvases
-        assert controller.zarr_canvas == canvas
+        # List well canvases to verify they exist
+        well_list = controller.experiment_manager.list_well_canvases()
+        assert well_list["total_count"] > 0
         
-        print(f"   ✓ Auto-created default fileset when no canvas exists")
+        # Reset the experiment
+        result = controller.experiment_manager.reset_experiment(experiment_name)
         
-        # Create a custom fileset and switch to it
-        custom_name = "custom_experiment"
-        controller.create_zarr_fileset(custom_name)
+        assert isinstance(result, dict)
+        assert result["experiment_name"] == experiment_name
+        assert "message" in result
+        assert "removed_wells" in result
         
-        # Get active canvas - should return the custom one
-        canvas_custom = controller.get_active_canvas()
+        # Verify well canvases were removed
+        well_list_after = controller.experiment_manager.list_well_canvases()
+        assert well_list_after["total_count"] == 0
         
-        assert canvas_custom is not None
-        assert controller.active_canvas_name == custom_name
-        assert canvas_custom == controller.zarr_canvases[custom_name]
+        print(f"   ✓ Reset experiment '{experiment_name}' successfully")
         
-        print(f"   ✓ Returned correct active canvas '{custom_name}'")
-        
-        print("✅ Get active canvas tests passed!")
+        print("✅ Experiment reset tests passed!")
         break
 
 @pytest.mark.timeout(60)
-async def test_zarr_fileset_error_handling(sim_controller_fixture):
-    """Test error handling in zarr fileset operations."""
+async def test_well_canvas_management(sim_controller_fixture):
+    """Test well canvas management within experiments."""
     async for controller in sim_controller_fixture:
-        print("Testing zarr fileset error handling...")
+        print("Testing well canvas management...")
         
-        # Test creating fileset with invalid name characters
+        # Create an experiment
+        experiment_name = "test_well_canvas_experiment"
+        controller.experiment_manager.create_experiment(experiment_name, wellplate_type='96')
+        
+        # Test getting well canvas
+        well_canvas = controller.experiment_manager.get_well_canvas('A', 1, '96')
+        assert well_canvas is not None
+        assert hasattr(well_canvas, 'well_row')
+        assert hasattr(well_canvas, 'well_column')
+        assert well_canvas.well_row == 'A'
+        assert well_canvas.well_column == 1
+        
+        print(f"   ✓ Created well canvas for A1")
+        
+        # Test getting another well canvas
+        well_canvas_2 = controller.experiment_manager.get_well_canvas('B', 2, '96')
+        assert well_canvas_2 is not None
+        assert well_canvas_2.well_row == 'B'
+        assert well_canvas_2.well_column == 2
+        
+        print(f"   ✓ Created well canvas for B2")
+        
+        # Test listing well canvases
+        well_list = controller.experiment_manager.list_well_canvases()
+        assert isinstance(well_list, dict)
+        assert "well_canvases" in well_list
+        assert "experiment_name" in well_list
+        assert "total_count" in well_list
+        assert well_list["experiment_name"] == experiment_name
+        assert well_list["total_count"] >= 2
+        
+        # Verify well canvas details
+        for canvas_info in well_list["well_canvases"]:
+            assert "well_id" in canvas_info
+            assert "well_row" in canvas_info
+            assert "well_column" in canvas_info
+            assert "wellplate_type" in canvas_info
+            assert "canvas_path" in canvas_info
+        
+        print(f"   ✓ Listed {well_list['total_count']} well canvases")
+        
+        # Test getting experiment info
+        experiment_info = controller.experiment_manager.get_experiment_info(experiment_name)
+        assert isinstance(experiment_info, dict)
+        assert experiment_info["experiment_name"] == experiment_name
+        assert experiment_info["is_active"] == True
+        assert "well_canvases" in experiment_info
+        assert "total_wells" in experiment_info
+        
+        print(f"   ✓ Got experiment info: {experiment_info['total_wells']} wells")
+        
+        print("✅ Well canvas management tests passed!")
+        break
+
+@pytest.mark.timeout(60)
+async def test_experiment_error_handling(sim_controller_fixture):
+    """Test error handling in experiment operations."""
+    async for controller in sim_controller_fixture:
+        print("Testing experiment error handling...")
+        
+        # Test creating experiment with invalid name
         invalid_names = ["", "   ", "invalid/name", "invalid\\name", "invalid:name"]
         
         for invalid_name in invalid_names:
             try:
-                controller.create_zarr_fileset(invalid_name)
+                controller.experiment_manager.create_experiment(invalid_name, wellplate_type='96')
                 # If it doesn't raise an error, that's also fine - depends on implementation
                 print(f"   Note: Invalid name '{invalid_name}' was accepted (implementation choice)")
             except (ValueError, RuntimeError) as e:
@@ -1746,35 +1777,36 @@ async def test_zarr_fileset_error_handling(sim_controller_fixture):
             except Exception as e:
                 print(f"   ✓ Rejected invalid name '{invalid_name}' with error: {type(e).__name__}")
         
-        # Test operations on empty zarr_canvases dictionary
-        controller.zarr_canvases.clear()
-        controller.active_canvas_name = None
-        controller.zarr_canvas = None
+        # Test operations on empty experiment manager
+        controller.experiment_manager.current_experiment = None
+        controller.experiment_manager.well_canvases.clear()
         
-        # List filesets should work even with empty state
+        # List experiments should work even with empty state
         try:
-            result = controller.list_zarr_filesets()
+            result = controller.experiment_manager.list_experiments()
             assert isinstance(result, dict)
-            print(f"   ✓ list_zarr_filesets handled empty state gracefully")
+            print(f"   ✓ list_experiments handled empty state gracefully")
         except Exception as e:
-            assert False, f"list_zarr_filesets should not fail with empty state: {e}"
+            assert False, f"list_experiments should not fail with empty state: {e}"
         
-        # Setting active fileset to non-existent should raise error
+        # Setting active experiment to non-existent should raise error
         try:
-            controller.set_active_zarr_fileset("definitely_does_not_exist")
-            assert False, "Should have raised error for non-existent fileset"
+            controller.experiment_manager.set_active_experiment("definitely_does_not_exist")
+            assert False, "Should have raised error for non-existent experiment"
         except ValueError:
-            print(f"   ✓ set_active_zarr_fileset correctly raised ValueError for non-existent fileset")
+            print(f"   ✓ set_active_experiment correctly raised ValueError for non-existent experiment")
         except RuntimeError:
-            print(f"   ✓ set_active_zarr_fileset correctly raised RuntimeError for non-existent fileset")
+            print(f"   ✓ set_active_experiment correctly raised RuntimeError for non-existent experiment")
         
-        # Test that get_active_canvas creates default when needed
-        canvas = controller.get_active_canvas()
-        assert canvas is not None
-        assert controller.active_canvas_name == "default"
-        print(f"   ✓ get_active_canvas auto-created default fileset when needed")
+        # Test that get_well_canvas raises error when no active experiment
+        try:
+            controller.experiment_manager.get_well_canvas('A', 1, '96')
+            assert False, "Should have raised error when no active experiment"
+        except RuntimeError as e:
+            assert "No active experiment" in str(e)
+            print(f"   ✓ get_well_canvas correctly raised RuntimeError when no active experiment")
         
-        print("✅ Zarr fileset error handling tests passed!")
+        print("✅ Experiment error handling tests passed!")
         break
 
 if __name__ == "__main__":
