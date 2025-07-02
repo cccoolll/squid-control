@@ -76,8 +76,8 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11"]
-    # Run integration tests after unit tests complete
-    if: always()
+    # Run integration tests only when unit tests succeed
+    if: success()
 
     steps:
     - uses: actions/checkout@v4
