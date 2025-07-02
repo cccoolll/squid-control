@@ -837,30 +837,70 @@ class ZarrCanvas:
             dict: Information about canvas size, data, and export feasibility
         """
         try:
-            # Calculate total data size
+            # Calculate actual disk usage instead of theoretical array size
             total_size_bytes = 0
             data_arrays = 0
+            file_count = 0
             
+            # Get actual file size on disk by walking the zarr directory
+            if self.zarr_path.exists():
+                try:
+                    for file_path in self.zarr_path.rglob('*'):
+                        if file_path.is_file():
+                            try:
+                                size = file_path.stat().st_size
+                                total_size_bytes += size
+                                file_count += 1
+                            except (OSError, PermissionError) as e:
+                                logger.warning(f"Could not read size of {file_path}: {e}")
+                except Exception as e:
+                    logger.error(f"Error walking zarr directory {self.zarr_path}: {e}")
+                    # Fallback: try to get directory size using os.path.getsize
+                    try:
+                        import os
+                        total_size_bytes = sum(os.path.getsize(os.path.join(dirpath, filename))
+                                             for dirpath, dirnames, filenames in os.walk(self.zarr_path)
+                                             for filename in filenames)
+                    except Exception as fallback_e:
+                        logger.error(f"Fallback size calculation also failed: {fallback_e}")
+                        total_size_bytes = 0
+            else:
+                logger.warning(f"Zarr path does not exist: {self.zarr_path}")
+            
+            # Check which arrays have actual data
             for scale in range(self.num_scales):
                 if scale in self.zarr_arrays:
                     array = self.zarr_arrays[scale]
-                    array_size = array.nbytes
-                    total_size_bytes += array_size
                     
                     # Check if array has any data (non-zero values)
                     if array.size > 0:
-                        sample = array[0, 0, 0, :min(100, array.shape[3]), :min(100, array.shape[4])]
-                        if sample.max() > 0:
-                            data_arrays += 1
+                        try:
+                            # Sample a small region to check for data
+                            sample_size = min(100, array.shape[3], array.shape[4])
+                            sample = array[0, 0, 0, :sample_size, :sample_size]
+                            if sample.max() > 0:
+                                data_arrays += 1
+                        except Exception as e:
+                            logger.warning(f"Could not sample array at scale {scale}: {e}")
             
-            # Estimate zip size (zarr compresses well, estimate 20-40% of original)
-            estimated_zip_size_mb = (total_size_bytes * 0.3) / (1024 * 1024)
+            # For empty arrays, estimate zip size based on actual disk usage
+            # Zarr metadata and empty arrays compress very well
+            if data_arrays == 0:
+                # Empty zarr structures are mostly metadata, compress to ~10% of disk size
+                estimated_zip_size_mb = (total_size_bytes * 0.1) / (1024 * 1024)
+            else:
+                # Arrays with data compress moderately (20-40% depending on content)
+                estimated_zip_size_mb = (total_size_bytes * 0.3) / (1024 * 1024)
+            
+            logger.info(f"Export info: {total_size_bytes / (1024*1024):.1f} MB on disk ({file_count} files), "
+                       f"{data_arrays} arrays with data, estimated zip: {estimated_zip_size_mb:.1f} MB")
             
             return {
                 "canvas_path": str(self.zarr_path),
                 "total_size_bytes": total_size_bytes,
                 "total_size_mb": total_size_bytes / (1024 * 1024),
                 "estimated_zip_size_mb": estimated_zip_size_mb,
+                "file_count": file_count,
                 "num_scales": self.num_scales,
                 "num_channels": len(self.channels),
                 "channels": self.channels,
