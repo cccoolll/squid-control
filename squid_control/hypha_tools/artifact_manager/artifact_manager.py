@@ -288,8 +288,13 @@ class SquidArtifactManager:
             gallery = await self._svc.read(artifact_id=f"{workspace}/{gallery_alias}")
             print(f"Found existing gallery: {gallery_alias}")
             return gallery
-        except RemoteException as e:
-            if "not found" in str(e).lower():
+        except Exception as e:
+            # Handle both RemoteException and RemoteError, and check for various error patterns
+            error_str = str(e).lower()
+            if ("not found" in error_str or 
+                "does not exist" in error_str or 
+                "keyerror" in error_str or
+                "artifact with id" in error_str):
                 # Gallery doesn't exist, create it
                 print(f"Creating new gallery: {gallery_alias}")
                 gallery_manifest = {
@@ -369,7 +374,7 @@ class SquidArtifactManager:
             for suggestion in base_suggestions:
                 try:
                     await self._svc.read(artifact_id=f"{workspace}/{suggestion}")
-                except RemoteException:
+                except Exception:
                     suggestions.append(suggestion)
                     if len(suggestions) >= 3:
                         break
@@ -381,8 +386,13 @@ class SquidArtifactManager:
                 "suggestions": suggestions
             }
             
-        except RemoteException as e:
-            if "not found" in str(e).lower():
+        except Exception as e:
+            # Handle both RemoteException and RemoteError, and check for various error patterns
+            error_str = str(e).lower()
+            if ("not found" in error_str or 
+                "does not exist" in error_str or 
+                "keyerror" in error_str or
+                "artifact with id" in error_str):
                 return {
                     "available": True,
                     "reason": "Name is available",
