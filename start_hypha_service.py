@@ -2133,6 +2133,29 @@ class Microscope:
         
         self.server = server
         
+        # Setup zarr artifact manager for dataset upload functionality
+        try:
+            from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
+            self.zarr_artifact_manager = SquidArtifactManager()
+            
+            # Connect to agent-lens workspace for zarr uploads
+            zarr_token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+            if zarr_token:
+                zarr_server = await connect_to_server({
+                    "server_url": "https://hypha.aicell.io",
+                    "token": zarr_token,
+                    "workspace": "agent-lens",
+                    "ping_interval": None
+                })
+                await self.zarr_artifact_manager.connect_server(zarr_server)
+                logger.info("Zarr artifact manager initialized successfully")
+            else:
+                logger.warning("AGENT_LENS_WORKSPACE_TOKEN not found, zarr upload functionality disabled")
+                self.zarr_artifact_manager = None
+        except Exception as e:
+            logger.warning(f"Failed to initialize zarr artifact manager: {e}")
+            self.zarr_artifact_manager = None
+        
         if self.is_simulation:
             await self.start_hypha_service(self.server, service_id=self.service_id)
             datastore_id = f'data-store-simu-{self.service_id}'
@@ -2917,7 +2940,7 @@ class Microscope:
         self.check_permission(context["user"])
         
         try:
-            return self.squid_controller.set_stage_velocity(
+            return self.squidController.set_stage_velocity(
                 velocity_x_mm_per_s=velocity_x_mm_per_s,
                 velocity_y_mm_per_s=velocity_y_mm_per_s
             )
@@ -2937,35 +2960,25 @@ class Microscope:
         
         try:
             # Check if zarr canvas exists
-            if not hasattr(self.squid_controller, 'zarr_canvas') or self.squid_controller.zarr_canvas is None:
+            if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
                 return {
                     "success": False,
                     "error": "No zarr canvas available. Start a scanning operation first to create data."
                 }
             
             # Get export info from zarr canvas
-            export_info = self.squid_controller.zarr_canvas.get_export_info()
+            export_info = self.squidController.zarr_canvas.get_export_info()
             
-            # Add gallery information
-            if not hasattr(self, '_zarr_artifact_manager'):
-                from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
-                self._zarr_artifact_manager = SquidArtifactManager()
-                # Connect to agent-lens workspace on remote server
-                from hypha_rpc import connect_to_server
-                import os
-                token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
-                if not token:
-                    raise ValueError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. This is required for zarr upload functionality.")
-                agent_lens_server = await connect_to_server({
-                    "server_url": "https://hypha.aicell.io",
-                    "token": token,
-                    "workspace": "agent-lens"
-                })
-                await self._zarr_artifact_manager.connect_server(agent_lens_server)
+            # Check if zarr artifact manager is available
+            if self.zarr_artifact_manager is None:
+                return {
+                    "success": False,
+                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
+                }
             
             # Check gallery status
             try:
-                gallery = await self._zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
+                gallery = await self.zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
                 gallery_info = {
                     "gallery_exists": True,
                     "gallery_id": gallery.get("id"),
@@ -3003,25 +3016,15 @@ class Microscope:
         #self.check_permission(context["user"])
         
         try:
-            # Initialize artifact manager if needed
-            if not hasattr(self, '_zarr_artifact_manager'):
-                from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
-                self._zarr_artifact_manager = SquidArtifactManager()
-                # Connect to agent-lens workspace on remote server
-                from hypha_rpc import connect_to_server
-                import os
-                token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
-                if not token:
-                    raise ValueError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. This is required for zarr upload functionality.")
-                agent_lens_server = await connect_to_server({
-                    "server_url": "https://hypha.aicell.io",
-                    "token": token,
-                    "workspace": "agent-lens"
-                })
-                await self._zarr_artifact_manager.connect_server(agent_lens_server)
+            # Check if zarr artifact manager is available
+            if self.zarr_artifact_manager is None:
+                return {
+                    "success": False,
+                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
+                }
             
             # Check name availability
-            name_check = await self._zarr_artifact_manager.check_dataset_name_availability(
+            name_check = await self.zarr_artifact_manager.check_dataset_name_availability(
                 self.service_id, dataset_name
             )
             
@@ -3055,14 +3058,14 @@ class Microscope:
         
         try:
             # Check if zarr canvas exists
-            if not hasattr(self.squid_controller, 'zarr_canvas') or self.squid_controller.zarr_canvas is None:
+            if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
                 return {
                     "success": False,
                     "error": "No zarr canvas available. Start a scanning operation first to create data."
                 }
             
             # Get export info to check feasibility
-            export_info = self.squid_controller.zarr_canvas.get_export_info()
+            export_info = self.squidController.zarr_canvas.get_export_info()
             if not export_info.get("export_feasible", False):
                 return {
                     "success": False,
@@ -3070,25 +3073,14 @@ class Microscope:
                     "export_info": export_info
                 }
             
-            # Initialize artifact manager if needed
-            if not hasattr(self, '_zarr_artifact_manager'):
-                from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
-                self._zarr_artifact_manager = SquidArtifactManager()
-                # Connect to agent-lens workspace on remote server  
-                from hypha_rpc import connect_to_server
-                import os
-                token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
-                if not token:
-                    raise ValueError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. This is required for zarr upload functionality.")
-                agent_lens_server = await connect_to_server({
-                    "server_url": "https://hypha.aicell.io",
-                    "token": token,
-                    "workspace": "agent-lens"
-                })
-                await self._zarr_artifact_manager.connect_server(agent_lens_server)
+            # Check if zarr artifact manager is available
+            if self.zarr_artifact_manager is None:
+                return {
+                    "success": False,
+                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
+                }
             
-            
-            zarr_zip_content = self.squid_controller.zarr_canvas.export_as_zip()
+            zarr_zip_content = self.squidController.zarr_canvas.export_as_zip()
             
             # Prepare acquisition settings if requested
             acquisition_settings = None
@@ -3102,8 +3094,7 @@ class Microscope:
                 }
             
             # Upload to artifact manager
-            
-            upload_result = await self._zarr_artifact_manager.upload_zarr_dataset(
+            upload_result = await self.zarr_artifact_manager.upload_zarr_dataset(
                 microscope_service_id=self.service_id,
                 dataset_name=dataset_name,
                 zarr_zip_content=zarr_zip_content,
@@ -3132,28 +3123,18 @@ class Microscope:
         #self.check_permission(context["user"])
         
         try:
-            # Initialize artifact manager if needed
-            if not hasattr(self, '_zarr_artifact_manager'):
-                from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
-                self._zarr_artifact_manager = SquidArtifactManager()
-                # Connect to agent-lens workspace on remote server
-                from hypha_rpc import connect_to_server
-                import os
-                token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
-                if not token:
-                    raise ValueError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. This is required for zarr upload functionality.")
-                agent_lens_server = await connect_to_server({
-                    "server_url": "https://hypha.aicell.io",
-                    "token": token,
-                    "workspace": "agent-lens"
-                })
-                await self._zarr_artifact_manager.connect_server(agent_lens_server)
+            # Check if zarr artifact manager is available
+            if self.zarr_artifact_manager is None:
+                return {
+                    "success": False,
+                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
+                }
             
             # Get gallery
-            gallery = await self._zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
+            gallery = await self.zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
             
             # List datasets in gallery
-            datasets = await self._zarr_artifact_manager._svc.list(gallery["id"])
+            datasets = await self.zarr_artifact_manager._svc.list(gallery["id"])
             
             return {
                 "success": True,
