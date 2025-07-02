@@ -1473,7 +1473,6 @@ async def test_set_stage_velocity_error_handling(sim_controller_fixture):
         print("✅ set_stage_velocity error handling tests passed!")
         break
 
-# Zarr Fileset Management Tests - REMOVED
 # These tests are replaced by experiment management tests below
 
 # Experiment Management Tests
