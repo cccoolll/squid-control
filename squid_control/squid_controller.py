@@ -1470,12 +1470,21 @@ class SquidController:
                     
                     # Check if it's time for next frame
                     if current_time - last_frame_time >= frame_interval:
-                        # Get current actual position
-                        actual_x_mm, actual_y_mm, actual_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
+                        # Get position before frame acquisition
+                        pos_before_x_mm, pos_before_y_mm, pos_before_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
                         
                         # Read frame from camera
                         self.camera.send_trigger()
                         gray_img = self.camera.read_frame()
+                        
+                        # Get position after frame acquisition
+                        pos_after_x_mm, pos_after_y_mm, pos_after_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
+                        
+                        # Calculate average position during frame acquisition
+                        avg_x_mm = (pos_before_x_mm + pos_after_x_mm) / 2.0
+                        avg_y_mm = (pos_before_y_mm + pos_after_y_mm) / 2.0
+                        avg_z_mm = (pos_before_z_mm + pos_after_z_mm) / 2.0
+                        
                         if gray_img is not None:
                             # Immediately rescale to scale1 resolution (1/4 of original)
                             original_height, original_width = gray_img.shape[:2]
@@ -1499,15 +1508,15 @@ class SquidController:
                                 else:
                                     processed_img = processed_img.astype(np.uint8)
                             
-                            # Add to stitching queue using actual stage position
+                            # Add to stitching queue using average stage position
                             # Note: We're using a custom add_image_quick method that only updates scales 1-5
                             await self._add_image_to_zarr_quick(
-                                processed_img, actual_x_mm, actual_y_mm,
+                                processed_img, avg_x_mm, avg_y_mm,
                                 channel_idx=zarr_channel_idx, z_idx=0
                             )
                             
                             frames_acquired += 1
-                            logging.debug(f'Acquired frame {frames_acquired} at position ({actual_x_mm:.2f}, {actual_y_mm:.2f})')
+                            logging.debug(f'Acquired frame {frames_acquired} at average position ({avg_x_mm:.2f}, {avg_y_mm:.2f}) (before: {pos_before_x_mm:.2f}, after: {pos_after_x_mm:.2f})')
                         
                         last_frame_time = current_time
                     
