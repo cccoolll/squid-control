@@ -2944,22 +2944,22 @@ class Microscope:
             # Get export info from zarr canvas
             export_info = self.squid_controller.zarr_canvas.get_export_info()
             
-                         # Add gallery information
-             if not hasattr(self, '_zarr_artifact_manager'):
-                 from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
-                 self._zarr_artifact_manager = SquidArtifactManager()
-                 # Connect to agent-lens workspace on remote server
-                 from hypha_rpc import connect_to_server
-                 import os
-                 token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
-                 if not token:
-                     raise ValueError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. This is required for zarr upload functionality.")
-                 remote_server = await connect_to_server({
-                     "server_url": "https://hypha.aicell.io",
-                     "token": token,
-                     "workspace": "agent-lens"
-                 })
-                 await self._zarr_artifact_manager.connect_server(remote_server)
+            # Add gallery information
+            if not hasattr(self, '_zarr_artifact_manager'):
+                from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
+                self._zarr_artifact_manager = SquidArtifactManager()
+                # Connect to agent-lens workspace on remote server
+                from hypha_rpc import connect_to_server
+                import os
+                token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+                if not token:
+                    raise ValueError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. This is required for zarr upload functionality.")
+                agent_lens_server = await connect_to_server({
+                    "server_url": "https://hypha.aicell.io",
+                    "token": token,
+                    "workspace": "agent-lens"
+                })
+                await self._zarr_artifact_manager.connect_server(agent_lens_server)
             
             # Check gallery status
             try:
@@ -3011,12 +3011,12 @@ class Microscope:
                 token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
                 if not token:
                     raise ValueError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. This is required for zarr upload functionality.")
-                remote_server = await connect_to_server({
+                agent_lens_server = await connect_to_server({
                     "server_url": "https://hypha.aicell.io",
                     "token": token,
                     "workspace": "agent-lens"
                 })
-                await self._zarr_artifact_manager.connect_server(remote_server)
+                await self._zarr_artifact_manager.connect_server(agent_lens_server)
             
             # Check name availability
             name_check = await self._zarr_artifact_manager.check_dataset_name_availability(
@@ -3078,12 +3078,12 @@ class Microscope:
                 token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
                 if not token:
                     raise ValueError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. This is required for zarr upload functionality.")
-                remote_server = await connect_to_server({
+                agent_lens_server = await connect_to_server({
                     "server_url": "https://hypha.aicell.io",
                     "token": token,
                     "workspace": "agent-lens"
                 })
-                await self._zarr_artifact_manager.connect_server(remote_server)
+                await self._zarr_artifact_manager.connect_server(agent_lens_server)
             
             # Export zarr canvas as zip
             self.update_task_status("upload_zarr_dataset", "running", 
@@ -3149,12 +3149,12 @@ class Microscope:
                 token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
                 if not token:
                     raise ValueError("AGENT_LENS_WORKSPACE_TOKEN environment variable not set. This is required for zarr upload functionality.")
-                remote_server = await connect_to_server({
+                agent_lens_server = await connect_to_server({
                     "server_url": "https://hypha.aicell.io",
                     "token": token,
                     "workspace": "agent-lens"
                 })
-                await self._zarr_artifact_manager.connect_server(remote_server)
+                await self._zarr_artifact_manager.connect_server(agent_lens_server)
             
             # Get gallery
             gallery = await self._zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
