@@ -836,6 +836,15 @@ class SquidController:
         # Apply rotation and flip first
         gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
         
+        # In simulation mode, resize small images to expected camera resolution
+        if self.is_simulation:
+            height, width = gray_img.shape[:2]
+            # If image is too small, resize it to expected camera dimensions
+            expected_width = 3000  # Expected camera width
+            expected_height = 3000  # Expected camera height
+            if width < expected_width or height < expected_height:
+                gray_img = cv2.resize(gray_img, (expected_width, expected_height), interpolation=cv2.INTER_LINEAR)
+        
         # Return full frame if requested, otherwise crop using configuration settings
         if full_frame:
             result_img = gray_img
@@ -868,6 +877,15 @@ class SquidController:
         await self.send_trigger_simulation(channel, intensity, exposure_time)
         gray_img = self.camera.read_frame() 
         gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
+        
+        # In simulation mode, resize small images to expected camera resolution
+        height, width = gray_img.shape[:2]
+        # If image is too small, resize it to expected camera dimensions
+        expected_width = 3000  # Expected camera width
+        expected_height = 3000  # Expected camera height
+        if width < expected_width or height < expected_height:
+            gray_img = cv2.resize(gray_img, (expected_width, expected_height), interpolation=cv2.INTER_LINEAR)
+        
         return gray_img
 
     def get_camera_frame(self, channel=0, intensity=100, exposure_time=100):

@@ -716,8 +716,17 @@ class Microscope:
             else:
                 logger.warning(f"Unknown channel {channel} in one_new_frame. Using default intensity/exposure.")
             
-            # Get the raw image from the camera with original bit depth preserved
-            raw_img = await self.squidController.snap_image(channel, intensity, exposure_time)
+            # Get the raw image from the camera with original bit depth preserved and full frame
+            raw_img = await self.squidController.snap_image(channel, intensity, exposure_time, full_frame=True)
+            
+            # In simulation mode, resize small images to expected camera resolution
+            if self.squidController.is_simulation:
+                height, width = raw_img.shape[:2]
+                # If image is too small, resize it to expected camera dimensions
+                expected_width = 3000  # Expected camera width
+                expected_height = 3000  # Expected camera height
+                if width < expected_width or height < expected_height:
+                    raw_img = cv2.resize(raw_img, (expected_width, expected_height), interpolation=cv2.INTER_LINEAR)
             
             # Crop the image before resizing, similar to squid_controller.py approach
             crop_height = CONFIG.Acquisition.CROP_HEIGHT
