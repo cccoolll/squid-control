@@ -809,7 +809,7 @@ class SquidController:
             if time.time() - t0 > 5:
                 print('z return timeout, the program will exit')
 
-    async def snap_image(self, channel=0, intensity=100, exposure_time=100):
+    async def snap_image(self, channel=0, intensity=100, exposure_time=100, full_frame=False):
         # turn off the illumination if it is on
         need_to_turn_illumination_back = False
         if self.liveController.illumination_on:
@@ -833,21 +833,34 @@ class SquidController:
             await asyncio.sleep(0.005)
 
         gray_img = self.camera.read_frame()
-        # corp
-        crop_height = 3036
-        crop_width = 3036
-        height, width = gray_img.shape
-        start_x = width // 2 - crop_width // 2
-        start_y = height // 2 - crop_height // 2
+        # Apply rotation and flip first
         gray_img = rotate_and_flip_image(gray_img, self.camera.rotate_image_angle, self.camera.flip_image)
-        cropped_img = gray_img[start_y:start_y+crop_height, start_x:start_x+crop_width]
+        
+        # Return full frame if requested, otherwise crop using configuration settings
+        if full_frame:
+            result_img = gray_img
+        else:
+            # Crop using configuration-based dimensions with proper bounds checking
+            crop_height = CONFIG.Acquisition.CROP_HEIGHT
+            crop_width = CONFIG.Acquisition.CROP_WIDTH
+            height, width = gray_img.shape[:2]
+            start_x = width // 2 - crop_width // 2
+            start_y = height // 2 - crop_height // 2
+            
+            # Add bounds checking
+            start_x = max(0, start_x)
+            start_y = max(0, start_y)
+            end_x = min(width, start_x + crop_width)
+            end_y = min(height, start_y + crop_height)
+            
+            result_img = gray_img[start_y:end_y, start_x:end_x]
 
         if not need_to_turn_illumination_back:
             self.liveController.turn_off_illumination()
             while self.microcontroller.is_busy():
                 await asyncio.sleep(0.005)
 
-        return cropped_img
+        return result_img
     
     async def get_camera_frame_simulation(self, channel=0, intensity=100, exposure_time=100):
         self.camera.set_exposure_time(exposure_time)
@@ -1076,8 +1089,8 @@ class SquidController:
                             logging.error(f"Channel mapping error: {e}")
                             continue
                         
-                        # Snap image using global channel ID
-                        image = await self.snap_image(global_channel_idx, intensity, exposure_time)
+                        # Snap image using global channel ID with full frame for stitching
+                        image = await self.snap_image(global_channel_idx, intensity, exposure_time, full_frame=True)
                         
                         # Convert to 8-bit if needed
                         if image.dtype != np.uint8:
