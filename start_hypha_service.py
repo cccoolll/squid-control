@@ -524,12 +524,7 @@ class Microscope:
             else:
                 result = f'The stage cannot move ({x},{y},{z})mm through x,y,z axis, from ({x_pos},{y_pos},{z_pos})mm to ({x_des},{y_des},{z_des})mm because out of the range.'
                 self.task_status[task_name] = "failed"
-                return {
-                    "success": False,
-                    "message": result,
-                    "initial_position": {"x": x_pos, "y": y_pos, "z": z_pos},
-                    "attempted_position": {"x": x_des, "y": y_des, "z": z_des}
-                }
+                raise Exception(result)
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to move by distance: {e}")
@@ -553,34 +548,19 @@ class Microscope:
                 is_success, x_pos, y_pos, z_pos, x_des = self.squidController.move_x_to_limited(x)
                 if not is_success:
                     self.task_status[task_name] = "failed"
-                    return {
-                        "success": False,
-                        "message": f'The stage cannot move to position ({x},{y},{z})mm from ({initial_x},{initial_y},{initial_z})mm because out of the limit of X axis.',
-                        "initial_position": {"x": initial_x, "y": initial_y, "z": initial_z},
-                        "final_position": {"x": x_pos, "y": y_pos, "z": z_pos}
-                    }
+                    raise Exception(f'The stage cannot move to position ({x},{y},{z})mm from ({initial_x},{initial_y},{initial_z})mm because out of the limit of X axis.')
 
             if y != 0:
                 is_success, x_pos, y_pos, z_pos, y_des = self.squidController.move_y_to_limited(y)
                 if not is_success:
                     self.task_status[task_name] = "failed"
-                    return {
-                        "success": False,
-                        "message": f'X axis moved successfully, the stage is now at ({x_pos},{y_pos},{z_pos})mm. But aimed position is out of the limit of Y axis and the stage cannot move to position ({x},{y},{z})mm.',
-                        "initial_position": {"x": initial_x, "y": initial_y, "z": initial_z},
-                        "final_position": {"x": x_pos, "y": y_pos, "z": z_pos}
-                    }
+                    raise Exception(f'X axis moved successfully, the stage is now at ({x_pos},{y_pos},{z_pos})mm. But aimed position is out of the limit of Y axis and the stage cannot move to position ({x},{y},{z})mm.')
 
             if z != 0:
                 is_success, x_pos, y_pos, z_pos, z_des = self.squidController.move_z_to_limited(z)
                 if not is_success:
                     self.task_status[task_name] = "failed"
-                    return {
-                        "success": False,
-                        "message": f'X and Y axis moved successfully, the stage is now at ({x_pos},{y_pos},{z_pos})mm. But aimed position is out of the limit of Z axis and the stage cannot move to position ({x},{y},{z})mm.',
-                        "initial_position": {"x": initial_x, "y": initial_y, "z": initial_z},
-                        "final_position": {"x": x_pos, "y": y_pos, "z": z_pos}
-                    }
+                    raise Exception(f'X and Y axis moved successfully, the stage is now at ({x_pos},{y_pos},{z_pos})mm. But aimed position is out of the limit of Z axis and the stage cannot move to position ({x},{y},{z})mm.')
 
             self.task_status[task_name] = "finished"
             return {
@@ -901,10 +881,7 @@ class Microscope:
             }
         except Exception as e:
             logger.error(f"Failed to configure video buffer: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to configure video buffer: {str(e)}"
-            }
+            raise e
 
     @schema_function(skip_self=True)
     def get_video_buffer_status(self, context=None):
@@ -930,10 +907,7 @@ class Microscope:
             }
         except Exception as e:
             logger.error(f"Failed to get video buffer status: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to get video buffer status: {str(e)}"
-            }
+            raise e
 
     @schema_function(skip_self=True)
     async def start_video_buffering(self, context=None):
@@ -957,10 +931,7 @@ class Microscope:
             }
         except Exception as e:
             logger.error(f"Failed to start video buffering: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to start video buffering: {str(e)}"
-            }
+            raise e
 
     @schema_function(skip_self=True)
     async def stop_video_buffering(self, context=None):
@@ -1012,10 +983,7 @@ class Microscope:
             }
         except Exception as e:
             logger.error(f"Failed to configure video idle timeout: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to configure video idle timeout: {str(e)}"
-            }
+            raise e
 
     @schema_function(skip_self=True)
     async def set_video_fps(self, fps: int = Field(5, description="Target frames per second for video acquisition (1-30 FPS)"), context=None):
@@ -1030,11 +998,7 @@ class Microscope:
         try:
             # Validate FPS range
             if not isinstance(fps, int) or fps < 1 or fps > 30:
-                return {
-                    "success": False,
-                    "message": f"Invalid FPS value: {fps}. Must be an integer between 1 and 30.",
-                    "current_fps": self.buffer_fps
-                }
+                raise ValueError(f"Invalid FPS value: {fps}. Must be an integer between 1 and 30.")
             
             # Store old FPS for comparison
             old_fps = self.buffer_fps
@@ -1068,11 +1032,7 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Failed to set video FPS: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to set video FPS: {str(e)}",
-                "current_fps": getattr(self, 'buffer_fps', 5)
-            }
+            raise e
 
 
 
@@ -1143,10 +1103,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to stop video buffering: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to stop video buffering: {str(e)}"
-            }
+            raise e
 
     @schema_function(skip_self=True)
     def get_video_buffering_status(self, context=None):
@@ -1189,7 +1146,7 @@ class Microscope:
         except Exception as e:
             self.task_status[task_name] = "failed"
             logger.error(f"Failed to adjust video frame: {e}")
-            return {"success": False, "message": f"Failed to adjust video frame: {str(e)}"}
+            raise e
 
     @schema_function(skip_self=True)
     async def snap(self, exposure_time: int=Field(100, description="Exposure time, in milliseconds"), channel: int=Field(0, description="Light source (0 for Bright Field, Fluorescence channels: 11 for 405 nm, 12 for 488 nm, 13 for 638nm, 14 for 561 nm, 15 for 730 nm)"), intensity: int=Field(50, description="Intensity of the illumination source"), context=None):
@@ -2773,10 +2730,7 @@ class Microscope:
             }
         except Exception as e:
             logger.error(f"Failed to configure video buffer frame size: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to configure video buffer frame size: {str(e)}"
-            }
+            raise e
 
     @schema_function(skip_self=True)
     def get_microscope_configuration(self, config_section: str = Field("all", description="Configuration section to retrieve ('all', 'camera', 'stage', 'illumination', 'acquisition', 'limits', 'hardware', 'wellplate', 'optics', 'autofocus')"), include_defaults: bool = Field(True, description="Whether to include default values from config.py"), context=None):
@@ -2803,11 +2757,7 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Failed to get microscope configuration: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "section": config_section
-            }
+            raise e
 
     @schema_function(skip_self=True)
     async def get_canvas_chunk(self, x_mm: float = Field(..., description="X coordinate of the stage location in millimeters"), y_mm: float = Field(..., description="Y coordinate of the stage location in millimeters"), scale_level: int = Field(1, description="Scale level for the chunk (0-2, where 0 is highest resolution)"), context=None):
@@ -2815,16 +2765,10 @@ class Microscope:
         
         # Check if this function is available in current mode
         if self.is_local:
-            return {
-                "success": False,
-                "error": "get_canvas_chunk is not available in local mode"
-            }
+            raise Exception("get_canvas_chunk is not available in local mode")
         
         if not self.is_simulation:
-            return {
-                "success": False,
-                "error": "get_canvas_chunk is only available in simulation mode"
-            }
+            raise Exception("get_canvas_chunk is only available in simulation mode")
         
         try:
             logger.info(f"Getting canvas chunk at position: x={x_mm}mm, y={y_mm}mm, scale_level={scale_level}")
@@ -2873,10 +2817,7 @@ class Microscope:
             )
             
             if region_data is None:
-                return {
-                    "success": False,
-                    "error": "Failed to retrieve chunk data from Zarr storage"
-                }
+                raise Exception("Failed to retrieve chunk data from Zarr storage")
             
             # Convert numpy array to base64 encoded PNG for transmission
             try:
@@ -2908,19 +2849,13 @@ class Microscope:
                 
             except Exception as e:
                 logger.error(f"Error converting chunk data to base64: {e}")
-                return {
-                    "success": False,
-                    "error": f"Failed to convert chunk data: {str(e)}"
-                }
+                raise e
                 
         except Exception as e:
             logger.error(f"Error in get_canvas_chunk: {e}")
             import traceback
             traceback.print_exc()
-            return {
-                "success": False,
-                "error": f"Failed to get canvas chunk: {str(e)}"
-            }
+            raise e
 
     @schema_function(skip_self=True)
     def set_stage_velocity(self, velocity_x_mm_per_s: Optional[float] = Field(None, description="Maximum velocity for X axis in mm/s (default: uses configuration value)"), velocity_y_mm_per_s: Optional[float] = Field(None, description="Maximum velocity for Y axis in mm/s (default: uses configuration value)"), context=None):
@@ -2945,7 +2880,7 @@ class Microscope:
             )
         except Exception as e:
             logger.error(f"Error setting stage velocity: {e}")
-            return {"success": False, "error": str(e)}
+            raise e
 
     @schema_function(skip_self=True)
     async def get_zarr_upload_info(self, context=None):
@@ -2959,20 +2894,14 @@ class Microscope:
         try:
             # Check if zarr canvas exists
             if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
-                return {
-                    "success": False,
-                    "error": "No zarr canvas available. Start a scanning operation first to create data."
-                }
+                raise Exception("No zarr canvas available. Start a scanning operation first to create data.")
             
             # Get export info from zarr canvas
             export_info = self.squidController.zarr_canvas.get_export_info()
             
             # Check if zarr artifact manager is available
             if self.zarr_artifact_manager is None:
-                return {
-                    "success": False,
-                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
-                }
+                raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
             
             # Check gallery status
             try:
@@ -2998,7 +2927,7 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Error getting zarr upload info: {e}")
-            return {"success": False, "error": str(e)}
+            raise e
     
     @schema_function(skip_self=True)
     async def check_zarr_dataset_name(self, dataset_name: str = Field(..., description="Proposed dataset name"), context=None):
@@ -3015,10 +2944,7 @@ class Microscope:
         try:
             # Check if zarr artifact manager is available
             if self.zarr_artifact_manager is None:
-                return {
-                    "success": False,
-                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
-                }
+               raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
             
             # Check name availability
             name_check = await self.zarr_artifact_manager.check_dataset_name_availability(
@@ -3032,7 +2958,7 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Error checking dataset name: {e}")
-            return {"success": False, "error": str(e)}
+            raise e
     
     @schema_function(skip_self=True)
     async def upload_zarr_dataset(self, 
@@ -3055,26 +2981,16 @@ class Microscope:
         try:
             # Check if zarr canvas exists
             if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
-                return {
-                    "success": False,
-                    "error": "No zarr canvas available. Start a scanning operation first to create data."
-                }
+                raise Exception("No zarr canvas available. Start a scanning operation first to create data.")
             
             # Get export info to check feasibility
             export_info = self.squidController.zarr_canvas.get_export_info()
             if not export_info.get("export_feasible", False):
-                return {
-                    "success": False,
-                    "error": f"Dataset too large for upload. Estimated size: {export_info.get('estimated_zip_size_mb', 0):.1f} MB",
-                    "export_info": export_info
-                }
+                raise Exception(f"Dataset too large for upload. Estimated size: {export_info.get('estimated_zip_size_mb', 0):.1f} MB")
             
             # Check if zarr artifact manager is available
             if self.zarr_artifact_manager is None:
-                return {
-                    "success": False,
-                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
-                }
+                raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
             
             zarr_zip_content = self.squidController.zarr_canvas.export_as_zip()
             
@@ -3106,7 +3022,7 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Error uploading zarr dataset: {e}")
-            return {"success": False, "error": str(e)}
+            raise e
     
     @schema_function(skip_self=True)
     async def list_microscope_datasets(self, context=None):
@@ -3120,10 +3036,7 @@ class Microscope:
         try:
             # Check if zarr artifact manager is available
             if self.zarr_artifact_manager is None:
-                return {
-                    "success": False,
-                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
-                }
+                raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
             
             # Get gallery
             gallery = await self.zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
@@ -3143,7 +3056,7 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Error listing microscope datasets: {e}")
-            return {"success": False, "error": str(e)}
+            raise e
 
     def get_microscope_configuration_schema(self, config: GetMicroscopeConfigurationInput, context=None):
         return self.get_microscope_configuration(config.config_section, config.include_defaults, context)
@@ -3228,10 +3141,7 @@ class Microscope:
             }
         except Exception as e:
             logger.error(f"Failed to perform normal scan with stitching: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to perform normal scan: {str(e)}"
-            }
+            raise e
         finally:
             # Always reset the scanning flag, regardless of success or failure
             self.scanning_in_progress = False
@@ -3330,10 +3240,7 @@ class Microscope:
                 
         except Exception as e:
             logger.error(f"Failed to get stitched region: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to retrieve stitched region: {str(e)}"
-            }
+            raise e
     
     @schema_function(skip_self=True)
     def reset_stitching_canvas(self, context=None):
@@ -3370,10 +3277,7 @@ class Microscope:
                 }
         except Exception as e:
             logger.error(f"Failed to reset stitching canvas: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to reset canvas: {str(e)}"
-            }
+            raise e
 
     @schema_function(skip_self=True)
     async def quick_scan_with_stitching(self, wellplate_type: str = Field('96', description="Well plate type ('6', '12', '24', '96', '384')"),
@@ -3402,10 +3306,7 @@ class Microscope:
         try:
             # Validate exposure time early
             if exposure_time > 30:
-                return {
-                    "success": False,
-                    "message": f"Quick scan exposure time must not exceed 30ms (got {exposure_time}ms)"
-                }
+                raise ValueError(f"Quick scan exposure time must not exceed 30ms (got {exposure_time}ms)")
             
             logger.info(f"Starting quick scan with stitching: {wellplate_type} well plate, velocity={velocity_mm_per_s}mm/s, fps={fps_target}")
             
@@ -3474,16 +3375,10 @@ class Microscope:
             
         except ValueError as e:
             logger.error(f"Validation error in quick scan: {e}")
-            return {
-                "success": False,
-                "message": str(e)
-            }
+            raise e
         except Exception as e:
             logger.error(f"Failed to perform quick scan with stitching: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to perform quick scan: {str(e)}"
-            }
+            raise e
         finally:
             # Always reset the scanning flag, regardless of success or failure
             self.scanning_in_progress = False
@@ -3517,10 +3412,7 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Failed to stop scan and stitching: {e}")
-            return {
-                "success": False,
-                "message": f"Failed to stop scan: {str(e)}"
-            }
+            raise e
 
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):
