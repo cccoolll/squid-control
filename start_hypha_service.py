@@ -2921,7 +2921,7 @@ class Microscope:
             )
         except Exception as e:
             logger.error(f"Error setting stage velocity: {e}")
-            return {"success": False, "error": str(e)}
+            raise e
 
     @schema_function(skip_self=True)
     async def get_zarr_upload_info(self, context=None):
@@ -2935,20 +2935,14 @@ class Microscope:
         try:
             # Check if zarr canvas exists
             if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
-                return {
-                    "success": False,
-                    "error": "No zarr canvas available. Start a scanning operation first to create data."
-                }
+                raise Exception("No zarr canvas available. Start a scanning operation first to create data.")
             
             # Get export info from zarr canvas
             export_info = self.squidController.zarr_canvas.get_export_info()
             
             # Check if zarr artifact manager is available
             if self.zarr_artifact_manager is None:
-                return {
-                    "success": False,
-                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
-                }
+                raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
             
             # Check gallery status
             try:
@@ -2974,7 +2968,7 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Error getting zarr upload info: {e}")
-            return {"success": False, "error": str(e)}
+            raise e
     
     @schema_function(skip_self=True)
     async def check_zarr_dataset_name(self, dataset_name: str = Field(..., description="Proposed dataset name"), context=None):
@@ -2991,10 +2985,7 @@ class Microscope:
         try:
             # Check if zarr artifact manager is available
             if self.zarr_artifact_manager is None:
-                return {
-                    "success": False,
-                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
-                }
+               raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
             
             # Check name availability
             name_check = await self.zarr_artifact_manager.check_dataset_name_availability(
@@ -3008,7 +2999,7 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Error checking dataset name: {e}")
-            return {"success": False, "error": str(e)}
+            raise e
     
     @schema_function(skip_self=True)
     async def upload_zarr_dataset(self, 
@@ -3031,26 +3022,16 @@ class Microscope:
         try:
             # Check if zarr canvas exists
             if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
-                return {
-                    "success": False,
-                    "error": "No zarr canvas available. Start a scanning operation first to create data."
-                }
+                raise Exception("No zarr canvas available. Start a scanning operation first to create data.")
             
             # Get export info to check feasibility
             export_info = self.squidController.zarr_canvas.get_export_info()
             if not export_info.get("export_feasible", False):
-                return {
-                    "success": False,
-                    "error": f"Dataset too large for upload. Estimated size: {export_info.get('estimated_zip_size_mb', 0):.1f} MB",
-                    "export_info": export_info
-                }
+                raise Exception(f"Dataset too large for upload. Estimated size: {export_info.get('estimated_zip_size_mb', 0):.1f} MB")
             
             # Check if zarr artifact manager is available
             if self.zarr_artifact_manager is None:
-                return {
-                    "success": False,
-                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
-                }
+                raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
             
             zarr_zip_content = self.squidController.zarr_canvas.export_as_zip()
             
@@ -3082,7 +3063,7 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Error uploading zarr dataset: {e}")
-            return {"success": False, "error": str(e)}
+            raise e
     
     @schema_function(skip_self=True)
     async def list_microscope_datasets(self, context=None):
@@ -3096,10 +3077,7 @@ class Microscope:
         try:
             # Check if zarr artifact manager is available
             if self.zarr_artifact_manager is None:
-                return {
-                    "success": False,
-                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
-                }
+                raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
             
             # Get gallery
             gallery = await self.zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
@@ -3119,7 +3097,7 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Error listing microscope datasets: {e}")
-            return {"success": False, "error": str(e)}
+            raise e
 
     def get_microscope_configuration_schema(self, config: GetMicroscopeConfigurationInput, context=None):
         return self.get_microscope_configuration(config.config_section, config.include_defaults, context)
