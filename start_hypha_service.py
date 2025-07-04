@@ -415,9 +415,6 @@ class Microscope:
             return True
         else:
             return False
-        
-    async def ping(self, context=None):
-        return "pong"
     
     async def is_service_healthy(self, context=None):
         """Check if all services are healthy"""
@@ -1263,7 +1260,22 @@ class Microscope:
             self.scanning_in_progress = True
             
             logger.info("Start scanning well plate with custom illumination settings")
-            self.squidController.plate_scan(well_plate_type, illumination_settings, do_contrast_autofocus, do_reflection_af, scanning_zone, Nx, Ny, action_ID)
+            
+            # Run the blocking plate_scan operation in a separate thread executor
+            # This prevents the asyncio event loop from being blocked during long scans
+            await asyncio.get_event_loop().run_in_executor(
+                None,  # Use default ThreadPoolExecutor
+                self.squidController.plate_scan,
+                well_plate_type,
+                illumination_settings,
+                do_contrast_autofocus,
+                do_reflection_af,
+                scanning_zone,
+                Nx,
+                Ny,
+                action_ID
+            )
+            
             logger.info("Well plate scanning completed")
             self.task_status[task_name] = "finished"
             return "Well plate scanning completed"
@@ -1909,7 +1921,6 @@ class Microscope:
             "name": "Squid Microscope Control",
             "description": "You are an AI agent controlling microscope. Automate tasks, adjust imaging parameters, and make decisions based on live visual feedback. Solve all the problems from visual feedback; the user only wants to see good results.",
             "config": {"visibility": "public", "require_context": True},
-            "ping": self.ping,
             "get_schema": self.get_schema,
             "tools": {
                 "move_by_distance": self.move_by_distance_schema,
