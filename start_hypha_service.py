@@ -1396,7 +1396,7 @@ class Microscope:
             raise e
 
     @schema_function(skip_self=True)
-    def home_stage(self, context=None):
+    async def home_stage(self, context=None):
         """
         Move the stage to home/zero position
         Returns: A string message
@@ -1404,7 +1404,12 @@ class Microscope:
         task_name = "home_stage"
         self.task_status[task_name] = "started"
         try:
-            self.squidController.home_stage()
+            # Run the blocking home_stage operation in a separate thread executor
+            # This prevents the asyncio event loop from being blocked during homing
+            await asyncio.get_event_loop().run_in_executor(
+                None,  # Use default ThreadPoolExecutor
+                self.squidController.home_stage
+            )
             logger.info('The stage moved to home position in z, y, and x axis')
             self.task_status[task_name] = "finished"
             return 'The stage moved to home position in z, y, and x axis'
@@ -1414,7 +1419,7 @@ class Microscope:
             raise e
     
     @schema_function(skip_self=True)
-    def return_stage(self,context=None):
+    async def return_stage(self, context=None):
         """
         Move the stage to the initial position for imaging.
         Returns: A string message
@@ -1422,7 +1427,12 @@ class Microscope:
         task_name = "return_stage"
         self.task_status[task_name] = "started"
         try:
-            self.squidController.return_stage()
+            # Run the blocking return_stage operation in a separate thread executor
+            # This prevents the asyncio event loop from being blocked during stage movement
+            await asyncio.get_event_loop().run_in_executor(
+                None,  # Use default ThreadPoolExecutor
+                self.squidController.return_stage
+            )
             logger.info('The stage moved to the initial position')
             self.task_status[task_name] = "finished"
             return 'The stage moved to the initial position'
@@ -1432,7 +1442,7 @@ class Microscope:
             raise e
     
     @schema_function(skip_self=True)
-    def move_to_loading_position(self, context=None):
+    async def move_to_loading_position(self, context=None):
         """
         Move the stage to the loading position.
         Returns: A  string message
@@ -1440,7 +1450,12 @@ class Microscope:
         task_name = "move_to_loading_position"
         self.task_status[task_name] = "started"
         try:
-            self.squidController.slidePositionController.move_to_slide_loading_position()
+            # Run the blocking move_to_slide_loading_position operation in a separate thread executor
+            # This prevents the asyncio event loop from being blocked during stage movement
+            await asyncio.get_event_loop().run_in_executor(
+                None,  # Use default ThreadPoolExecutor
+                self.squidController.slidePositionController.move_to_slide_loading_position
+            )
             logger.info('The stage moved to loading position')
             self.task_status[task_name] = "finished"
             return 'The stage moved to loading position'
@@ -1486,7 +1501,7 @@ class Microscope:
             raise e
         
     @schema_function(skip_self=True)
-    def set_laser_reference(self, context=None):
+    async def set_laser_reference(self, context=None):
         """
         Set the reference of the laser
         Returns: A string message
@@ -1497,7 +1512,12 @@ class Microscope:
             if self.is_simulation:
                 pass
             else:
-                self.squidController.laserAutofocusController.set_reference()
+                # Run the potentially blocking set_reference operation in a separate thread executor
+                # This prevents the asyncio event loop from being blocked during laser reference setting
+                await asyncio.get_event_loop().run_in_executor(
+                    None,  # Use default ThreadPoolExecutor
+                    self.squidController.laserAutofocusController.set_reference
+                )
             logger.info('The laser reference is set')
             self.task_status[task_name] = "finished"
             return 'The laser reference is set'
@@ -1507,7 +1527,7 @@ class Microscope:
             raise e
         
     @schema_function(skip_self=True)
-    def navigate_to_well(self, row: str=Field('A', description="Row number of the well position (e.g., 'A')"), col: int=Field(1, description="Column number of the well position"), wellplate_type: str=Field('96', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), context=None):
+    async def navigate_to_well(self, row: str=Field('A', description="Row number of the well position (e.g., 'A')"), col: int=Field(1, description="Column number of the well position"), wellplate_type: str=Field('96', description="Type of the well plate (e.g., '6', '12', '24', '96', '384')"), context=None):
         """
         Navigate to the specified well position in the well plate.
         Returns: A string message
@@ -1517,7 +1537,15 @@ class Microscope:
         try:
             if wellplate_type is None:
                 wellplate_type = '96'
-            self.squidController.move_to_well(row, col, wellplate_type)
+            # Run the blocking move_to_well operation in a separate thread executor
+            # This prevents the asyncio event loop from being blocked during stage movement
+            await asyncio.get_event_loop().run_in_executor(
+                None,  # Use default ThreadPoolExecutor
+                self.squidController.move_to_well,
+                row,
+                col,
+                wellplate_type
+            )
             logger.info(f'The stage moved to well position ({row},{col})')
             self.task_status[task_name] = "finished"
             return f'The stage moved to well position ({row},{col})'
@@ -1753,20 +1781,20 @@ class Microscope:
         image_url = await self.snap(config.exposure, config.channel, config.intensity, context)
         return f"![Image]({image_url})"
 
-    def navigate_to_well_schema(self, config: NavigateToWellInput, context=None):
-        self.navigate_to_well(config.row, config.col, config.wellplate_type, context)
+    async def navigate_to_well_schema(self, config: NavigateToWellInput, context=None):
+        await self.navigate_to_well(config.row, config.col, config.wellplate_type, context)
         return f'The stage moved to well position ({config.row},{config.col})'
 
     async def inspect_tool_schema(self, config: InspectToolInput, context=None):
         response = await self.inspect_tool(config.images, config.query, config.context_description)
         return {"result": response}
 
-    def home_stage_schema(self, context=None):
-        response = self.home_stage(context)
+    async def home_stage_schema(self, context=None):
+        response = await self.home_stage(context)
         return {"result": response}
 
-    def return_stage_schema(self, context=None):
-        response = self.return_stage(context)
+    async def return_stage_schema(self, context=None):
+        response = await self.return_stage(context)
         return {"result": response}
 
     async def find_similar_image_text_schema(self, config: FindSimilarImageTextInput, context=None):
@@ -1789,8 +1817,8 @@ class Microscope:
         response = await self.do_laser_autofocus(context)
         return {"result": response}
 
-    def set_laser_reference_schema(self, context=None):
-        response = self.set_laser_reference(context)
+    async def set_laser_reference_schema(self, context=None):
+        response = await self.set_laser_reference(context)
         return {"result": response}
 
     def get_status_schema(self, context=None):
