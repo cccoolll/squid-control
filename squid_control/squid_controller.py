@@ -1150,6 +1150,7 @@ class SquidController:
             for well_idx, (well_row, well_column) in enumerate(wells_to_scan):
                 if self.scan_stop_requested:
                     logging.info("Scan stopped by user request")
+                    self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                     break
                 
                 logging.info(f"Scanning well {well_row}{well_column} ({well_idx + 1}/{len(wells_to_scan)})")
@@ -1919,6 +1920,7 @@ class SquidController:
             for stripe_idx in range(n_stripes):
                 if self.scan_stop_requested:
                     logging.info("Quick scan stopped by user request")
+                    self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                     break
                     
                 stripe_y = stripe_start_y + stripe_idx * dy_mm
@@ -1955,6 +1957,7 @@ class SquidController:
                 while self.microcontroller.is_busy():
                     if self.scan_stop_requested:
                         logging.info("Quick scan stopped during stripe movement")
+                        self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                         break
                         
                     current_time = time.time()
@@ -2008,6 +2011,7 @@ class SquidController:
         while self.microcontroller.is_busy():
             if self.scan_stop_requested:
                 logging.info("Quick scan stopped during stripe movement")
+                self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                 break
                 
             current_time = time.time()
