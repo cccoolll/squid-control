@@ -3282,22 +3282,28 @@ class Microscope:
     async def quick_scan_with_stitching(self, wellplate_type: str = Field('96', description="Well plate type ('6', '12', '24', '96', '384')"),
                                       exposure_time: float = Field(5, description="Camera exposure time in milliseconds (max 30ms)"),
                                       intensity: float = Field(70, description="Brightfield LED intensity (0-100)"),
-                                      velocity_mm_per_s: float = Field(10, description="Stage velocity in mm/s for scanning"),
-                                      fps_target: int = Field(20, description="Target frame rate for acquisition"),
+                                      fps_target: int = Field(10, description="Target frame rate for acquisition (default 10fps)"),
                                       action_ID: str = Field('quick_scan_stitching', description="Identifier for this scan"),
+                                      n_stripes: int = Field(4, description="Number of stripes per well (default 4)"),
+                                      stripe_width_mm: float = Field(4.0, description="Length of each stripe inside a well in mm (default 4.0)"),
+                                      dy_mm: float = Field(0.9, description="Y increment between stripes in mm (default 0.9)"),
+                                      velocity_scan_mm_per_s: float = Field(7.0, description="Stage velocity during stripe scanning in mm/s (default 7.0)"),
                                       context=None):
         """
         Perform a quick scan with live stitching to OME-Zarr canvas - brightfield only.
-        Uses continuous movement with high-speed frame acquisition for rapid well plate scanning.
+        Uses 4-stripe × 4 mm scanning pattern with serpentine motion per well.
         Only supports brightfield channel with exposure time ≤ 30ms.
         
         Args:
             wellplate_type: Well plate format ('6', '12', '24', '96', '384')
             exposure_time: Camera exposure time in milliseconds (must be ≤ 30ms)
             intensity: Brightfield LED intensity (0-100)
-            velocity_mm_per_s: Stage velocity in mm/s for scanning (default 20mm/s)
-            fps_target: Target frame rate for acquisition (default 20fps)
+            fps_target: Target frame rate for acquisition (default 10fps)
             action_ID: Unique identifier for this scan
+            n_stripes: Number of stripes per well (default 4)
+            stripe_width_mm: Length of each stripe inside a well in mm (default 4.0)
+            dy_mm: Y increment between stripes in mm (default 0.9)
+            velocity_scan_mm_per_s: Stage velocity during stripe scanning in mm/s (default 7.0)
             
         Returns:
             dict: Status of the scan with performance metrics
@@ -3307,7 +3313,7 @@ class Microscope:
             if exposure_time > 30:
                 raise ValueError(f"Quick scan exposure time must not exceed 30ms (got {exposure_time}ms)")
             
-            logger.info(f"Starting quick scan with stitching: {wellplate_type} well plate, velocity={velocity_mm_per_s}mm/s, fps={fps_target}")
+            logger.info(f"Starting quick scan with stitching: {wellplate_type} well plate, {n_stripes} stripes × {stripe_width_mm}mm, dy={dy_mm}mm, scan_velocity={velocity_scan_mm_per_s}mm/s, fps={fps_target}")
             
             # Check if video buffering is active and stop it during scanning
             video_buffering_was_active = self.frame_acquisition_running
@@ -3329,9 +3335,12 @@ class Microscope:
                 wellplate_type=wellplate_type,
                 exposure_time=exposure_time,
                 intensity=intensity,
-                velocity_mm_per_s=velocity_mm_per_s,
                 fps_target=fps_target,
-                action_ID=action_ID
+                action_ID=action_ID,
+                n_stripes=n_stripes,
+                stripe_width_mm=stripe_width_mm,
+                dy_mm=dy_mm,
+                velocity_scan_mm_per_s=velocity_scan_mm_per_s
             )
             
             # Calculate performance metrics
@@ -3347,28 +3356,36 @@ class Microscope:
             }
             
             config = wellplate_configs.get(wellplate_type, wellplate_configs['96'])
+            total_wells = config['rows'] * config['cols']
+            total_stripes = total_wells * n_stripes
             
             return {
                 "success": True,
                 "message": f"Quick scan with stitching completed successfully",
                 "scan_parameters": {
                     "wellplate_type": wellplate_type,
-                    "rows_scanned": config['rows'],
-                    "columns_per_row": config['cols'],
+                    "wells_scanned": total_wells,
+                    "stripes_per_well": n_stripes,
+                    "stripe_width_mm": stripe_width_mm,
+                    "dy_mm": dy_mm,
+                    "total_stripes": total_stripes,
                     "exposure_time_ms": exposure_time,
                     "intensity": intensity,
-                    "velocity_mm_per_s": velocity_mm_per_s,
-                    "target_fps": fps_target
+                    "scan_velocity_mm_per_s": velocity_scan_mm_per_s,
+                    "target_fps": fps_target,
+                    "inter_well_velocity_mm_per_s": 30.0
                 },
                 "performance_metrics": {
                     "total_scan_time_seconds": round(scan_duration, 2),
-                    "scan_time_per_row_seconds": round(scan_duration / config['rows'], 2),
+                    "scan_time_per_well_seconds": round(scan_duration / total_wells, 2),
+                    "scan_time_per_stripe_seconds": round(scan_duration / total_stripes, 2),
                     "estimated_frames_acquired": int(scan_duration * fps_target)
                 },
                 "stitching_info": {
                     "zarr_scales_updated": "1-5 (scale 0 skipped for performance)",
                     "channel": "BF LED matrix full",
-                    "action_id": action_ID
+                    "action_id": action_ID,
+                    "pattern": f"{n_stripes}-stripe × {stripe_width_mm}mm serpentine per well"
                 }
             }
             

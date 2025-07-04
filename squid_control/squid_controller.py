@@ -1311,18 +1311,22 @@ class SquidController:
             self.zarr_canvas = None
 
     async def quick_scan_with_stitching(self, wellplate_type='96', exposure_time=5, intensity=50, 
-                                      velocity_mm_per_s=10, fps_target=20, action_ID='quick_scan_stitching'):
+                                      fps_target=10, action_ID='quick_scan_stitching',
+                                      n_stripes=4, stripe_width_mm=4.0, dy_mm=0.9, velocity_scan_mm_per_s=7.0):
         """
         Quick scan with live stitching to OME-Zarr canvas - brightfield only.
-        Uses continuous movement with high-speed frame acquisition.
+        Uses 4-stripe × 4 mm scanning pattern with serpentine motion per well.
         
         Args:
             wellplate_type (str): Well plate type ('6', '12', '24', '96', '384')
             exposure_time (float): Camera exposure time in ms (max 30ms)
             intensity (float): Brightfield LED intensity (0-100)
-            velocity_mm_per_s (float): Stage velocity in mm/s for scanning (default 20)
-            fps_target (int): Target frame rate for acquisition (default 20)
+            fps_target (int): Target frame rate for acquisition (default 10fps)
             action_ID (str): Identifier for this scan
+            n_stripes (int): Number of stripes per well (default 4)
+            stripe_width_mm (float): Length of each stripe inside a well in mm (default 4.0)
+            dy_mm (float): Y increment between stripes in mm (default 0.9)
+            velocity_scan_mm_per_s (float): Stage velocity during stripe scanning in mm/s (default 7.0)
         """
         
         # Validate exposure time
@@ -1374,166 +1378,104 @@ class SquidController:
         # Start the background stitching task
         await self.zarr_canvas.start_stitching()
         
-        # Store original velocity settings
+        # Store original velocity settings for restoration
         original_velocity_result = self.set_stage_velocity()
         original_velocity_x = original_velocity_result.get('velocity_x_mm_per_s', CONFIG.MAX_VELOCITY_X_MM)
         original_velocity_y = original_velocity_result.get('velocity_y_mm_per_s', CONFIG.MAX_VELOCITY_Y_MM)
         
+        # Define velocity constants
+        HIGH_SPEED_VELOCITY_MM_PER_S = 30.0  # For moving between wells
+        scan_velocity = velocity_scan_mm_per_s  # For scanning within wells
+        
         try:
             self.is_busy = True
             self.scan_stop_requested = False  # Reset stop flag at start of scan
-            logging.info(f'Starting quick scan with stitching: {wellplate_type} well plate, velocity={velocity_mm_per_s}mm/s, fps={fps_target}')
-            
-            # Set high-speed velocity for scanning
-            velocity_result = self.set_stage_velocity(velocity_mm_per_s, velocity_mm_per_s)
-            if not velocity_result['success']:
-                raise RuntimeError(f"Failed to set scanning velocity: {velocity_result['message']}")
+            logging.info(f'Starting quick scan with stitching: {wellplate_type} well plate, {n_stripes} stripes × {stripe_width_mm}mm, dy={dy_mm}mm, scan_velocity={scan_velocity}mm/s, fps={fps_target}')
             
             # Set camera exposure time
             self.camera.set_exposure_time(exposure_time)
             
             # Calculate well plate parameters
-            well_radius = wellplate_format.WELL_SIZE_MM / 2
             well_spacing = wellplate_format.WELL_SPACING_MM
-            
-
             x_offset = CONFIG.WELLPLATE_OFFSET_X_MM
             y_offset = CONFIG.WELLPLATE_OFFSET_Y_MM
             
             # Calculate frame acquisition timing
             frame_interval = 1.0 / fps_target  # seconds between frames
             
-            # Get software limits for clamping
+            # Get software limits for safety
             limit_x_pos = CONFIG.SOFTWARE_POS_LIMIT.X_POSITIVE
             limit_x_neg = CONFIG.SOFTWARE_POS_LIMIT.X_NEGATIVE
+            limit_y_pos = CONFIG.SOFTWARE_POS_LIMIT.Y_POSITIVE
+            limit_y_neg = CONFIG.SOFTWARE_POS_LIMIT.Y_NEGATIVE
             
-            # Scan each row using snake pattern (S-pattern)
+            # Scan each well using snake pattern for rows
             for row_idx in range(max_rows):
-                # Check for stop request before each row
                 if self.scan_stop_requested:
                     logging.info("Quick scan stopped by user request")
                     break
+                    
                 row_letter = chr(ord('A') + row_idx)
-                
-                # Calculate Y position for this row
-                y_mm = wellplate_format.A1_Y_MM + y_offset + row_idx * well_spacing
                 
                 # Snake pattern: alternate direction for each row
                 if row_idx % 2 == 0:
                     # Even rows (0, 2, 4...): left to right (A1 → A12, C1 → C12, etc.)
-                    start_x_mm = wellplate_format.A1_X_MM + x_offset
-                    end_x_mm = wellplate_format.A1_X_MM + x_offset + (max_cols - 1) * well_spacing
+                    col_range = range(max_cols)
                     direction = "left-to-right"
                 else:
                     # Odd rows (1, 3, 5...): right to left (B12 → B1, D12 → D1, etc.)
-                    start_x_mm = wellplate_format.A1_X_MM + x_offset + (max_cols - 1) * well_spacing
-                    end_x_mm = wellplate_format.A1_X_MM + x_offset
+                    col_range = range(max_cols - 1, -1, -1)
                     direction = "right-to-left"
                 
-                # Clamp coordinates to software limits to prevent out-of-bounds errors
-                start_x_mm = min(max(start_x_mm, limit_x_neg), limit_x_pos)
-                end_x_mm = min(max(end_x_mm, limit_x_neg), limit_x_pos)
+                logging.info(f'Scanning row {row_letter} ({direction})')
                 
-                logging.info(f'Quick scanning row {row_letter} ({direction}) from X={start_x_mm:.2f}mm to X={end_x_mm:.2f}mm at Y={y_mm:.2f}mm')
-                
-                # Move to start of row
-                self.navigationController.move_x_to(start_x_mm)
-                while self.microcontroller.is_busy():
-                    await asyncio.sleep(0.005)
-                print(f'Moved to X={start_x_mm:.2f}mm')
-                self.navigationController.move_y_to(y_mm)
-                while self.microcontroller.is_busy():
-                    await asyncio.sleep(0.005)
-                print(f'Moved to Y={y_mm:.2f}mm')
-                
-                # Let stage settle
-                await asyncio.sleep(0.1)
-                
-                # Turn on brightfield illumination
-                self.liveController.set_illumination(0, intensity)  # Channel 0 = brightfield
-                await asyncio.sleep(0.01)  # Small delay for illumination to stabilize
-                self.liveController.turn_on_illumination()
-                # Start continuous movement to end of row
-                self.navigationController.move_x_to(end_x_mm)
-                
-                # Acquire frames while moving
-                last_frame_time = time.time()
-                frames_acquired = 0
-                
-                while self.microcontroller.is_busy():
-                    # Check for stop request during movement
+                for col_idx in col_range:
                     if self.scan_stop_requested:
-                        logging.info("Quick scan stopped during row movement")
+                        logging.info("Quick scan stopped by user request")
                         break
                         
-                    current_time = time.time()
+                    col_number = col_idx + 1
+                    well_name = f"{row_letter}{col_number}"
                     
-                    # Check if it's time for next frame
-                    if current_time - last_frame_time >= frame_interval:
-                        # Get position before frame acquisition
-                        pos_before_x_mm, pos_before_y_mm, pos_before_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
-                        
-                        # Read frame from camera
-                        self.camera.send_trigger()
-                        gray_img = self.camera.read_frame()
-                        
-                        # Get position after frame acquisition
-                        pos_after_x_mm, pos_after_y_mm, pos_after_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
-                        
-                        # Calculate average position during frame acquisition
-                        avg_x_mm = (pos_before_x_mm + pos_after_x_mm) / 2.0
-                        avg_y_mm = (pos_before_y_mm + pos_after_y_mm) / 2.0
-                        avg_z_mm = (pos_before_z_mm + pos_after_z_mm) / 2.0
-                        
-                        if gray_img is not None:
-                            # Immediately rescale to scale1 resolution (1/4 of original)
-                            original_height, original_width = gray_img.shape[:2]
-                            scale1_width = original_width // 4
-                            scale1_height = original_height // 4
-                            
-                            # Resize image to scale1 resolution
-                            scaled_img = cv2.resize(gray_img, (scale1_width, scale1_height), interpolation=cv2.INTER_AREA)
-                            
-                            # Apply rotate and flip transformations
-                            processed_img = rotate_and_flip_image(
-                                scaled_img,
-                                rotate_image_angle=self.camera.rotate_image_angle,
-                                flip_image=self.camera.flip_image
-                            )
-                            
-                            # Convert to 8-bit if needed
-                            if processed_img.dtype != np.uint8:
-                                if processed_img.dtype == np.uint16:
-                                    processed_img = (processed_img / 256).astype(np.uint8)
-                                else:
-                                    processed_img = processed_img.astype(np.uint8)
-                            
-                            # Add to stitching queue using average stage position
-                            # Note: We're using a custom add_image_quick method that only updates scales 1-5
-                            await self._add_image_to_zarr_quick(
-                                processed_img, avg_x_mm, avg_y_mm,
-                                channel_idx=zarr_channel_idx, z_idx=0
-                            )
-                            
-                            frames_acquired += 1
-                            logging.debug(f'Acquired frame {frames_acquired} at average position ({avg_x_mm:.2f}, {avg_y_mm:.2f}) (before: {pos_before_x_mm:.2f}, after: {pos_after_x_mm:.2f})')
-                        
-                        last_frame_time = current_time
+                    # Calculate well center position
+                    well_center_x = wellplate_format.A1_X_MM + x_offset + col_idx * well_spacing
+                    well_center_y = wellplate_format.A1_Y_MM + y_offset + row_idx * well_spacing
                     
-                    # Small delay to prevent overwhelming the system
-                    await asyncio.sleep(0.001)
-                
-                # Turn off illumination
-                self.liveController.turn_off_illumination()
-                
-                logging.info(f'Row {row_letter} completed, acquired {frames_acquired} frames')
-                
-                # Small delay between rows
-                await asyncio.sleep(0.1)
+                    # Calculate stripe boundaries within the well
+                    stripe_half_width = stripe_width_mm / 2
+                    stripe_start_x = well_center_x - stripe_half_width
+                    stripe_end_x = well_center_x + stripe_half_width
+                    
+                    # Clamp stripe boundaries to software limits
+                    stripe_start_x = max(min(stripe_start_x, limit_x_pos), limit_x_neg)
+                    stripe_end_x = max(min(stripe_end_x, limit_x_pos), limit_x_neg)
+                    
+                    # Calculate starting Y position for stripes (centered around well)
+                    stripe_start_y = well_center_y - ((n_stripes - 1) * dy_mm) / 2
+                    
+                    logging.info(f'Scanning well {well_name}: {n_stripes} stripes × {stripe_width_mm}mm at Y positions starting from {stripe_start_y:.2f}mm')
+                    
+                    # Move to well at high speed if not the first well
+                    if row_idx > 0 or col_idx > 0:
+                        await self._move_to_well_at_high_speed(well_name, stripe_start_x, stripe_start_y, 
+                                                             HIGH_SPEED_VELOCITY_MM_PER_S, limit_y_neg, limit_y_pos)
+                    
+                    # Set scan velocity for stripe scanning
+                    velocity_result = self.set_stage_velocity(scan_velocity, scan_velocity)
+                    if not velocity_result['success']:
+                        logging.warning(f"Failed to set scanning velocity: {velocity_result['message']}")
+                    
+                    # Scan all stripes within the well with continuous frame acquisition
+                    total_frames = await self._scan_well_with_continuous_acquisition(
+                        well_name, n_stripes, stripe_start_x, stripe_end_x, 
+                        stripe_start_y, dy_mm, intensity, frame_interval, 
+                        zarr_channel_idx, limit_y_neg, limit_y_pos)
+                    
+                    logging.info(f'Well {well_name} completed with {n_stripes} stripes, total frames: {total_frames}')
             
             logging.info('Quick scan with stitching completed')
             
-            # Give the stitching queue a moment to process any final images
+            # Allow time for final images to be queued for stitching
             logging.info('Allowing time for final images to be queued for stitching...')
             await asyncio.sleep(0.5)
             
@@ -1544,14 +1486,221 @@ class SquidController:
             self.liveController.turn_off_illumination()
             
             # Restore original velocity settings
-            restore_result = self.set_stage_velocity(original_velocity_x, original_velocity_y)
-            if restore_result['success']:
-                logging.info(f'Restored original stage velocity: X={original_velocity_x}mm/s, Y={original_velocity_y}mm/s')
-            else:
-                logging.warning(f'Failed to restore original stage velocity: {restore_result["message"]}')
+            self._restore_original_velocity(original_velocity_x, original_velocity_y)
             
             # Stop the stitching task
             await self.zarr_canvas.stop_stitching()
+    
+    async def _move_to_well_at_high_speed(self, well_name, start_x, start_y, high_speed_velocity, limit_y_neg, limit_y_pos):
+        """Move to well at high speed (30 mm/s) for efficient inter-well movement."""
+        logging.info(f'Moving to well {well_name} at high speed ({high_speed_velocity} mm/s)')
+        
+        velocity_result = self.set_stage_velocity(high_speed_velocity, high_speed_velocity)
+        if not velocity_result['success']:
+            logging.warning(f"Failed to set high-speed velocity: {velocity_result['message']}")
+        
+        # Clamp Y position to limits
+        clamped_y = max(min(start_y, limit_y_pos), limit_y_neg)
+        
+        # Move to first stripe start position
+        self.navigationController.move_x_to(start_x)
+        self.navigationController.move_y_to(clamped_y)
+        
+        # Wait for movement to complete
+        while self.microcontroller.is_busy():
+            await asyncio.sleep(0.005)
+        
+        logging.info(f'Moved to well {well_name} start position ({start_x:.2f}, {clamped_y:.2f})')
+    
+    async def _scan_well_with_continuous_acquisition(self, well_name, n_stripes, stripe_start_x, stripe_end_x, 
+                                                   stripe_start_y, dy_mm, intensity, frame_interval, 
+                                                   zarr_channel_idx, limit_y_neg, limit_y_pos):
+        """Scan all stripes within a well with continuous frame acquisition."""
+        total_frames = 0
+        
+        # Turn on brightfield illumination once for the entire well
+        self.liveController.set_illumination(0, intensity)  # Channel 0 = brightfield
+        await asyncio.sleep(0.01)  # Small delay for illumination to stabilize
+        self.liveController.turn_on_illumination()
+        
+        # Start continuous frame acquisition
+        last_frame_time = time.time()
+        
+        try:
+            for stripe_idx in range(n_stripes):
+                if self.scan_stop_requested:
+                    logging.info("Quick scan stopped by user request")
+                    break
+                    
+                stripe_y = stripe_start_y + stripe_idx * dy_mm
+                stripe_y = max(min(stripe_y, limit_y_pos), limit_y_neg)
+                
+                # Serpentine pattern: alternate direction for each stripe
+                if stripe_idx % 2 == 0:
+                    # Even stripes: left to right
+                    start_x, end_x = stripe_start_x, stripe_end_x
+                    direction = "left-to-right"
+                else:
+                    # Odd stripes: right to left
+                    start_x, end_x = stripe_end_x, stripe_start_x
+                    direction = "right-to-left"
+                
+                logging.info(f'Well {well_name}, stripe {stripe_idx + 1}/{n_stripes} ({direction}) from X={start_x:.2f}mm to X={end_x:.2f}mm at Y={stripe_y:.2f}mm')
+                
+                # Move to stripe start position
+                self.navigationController.move_x_to(start_x)
+                self.navigationController.move_y_to(stripe_y)
+                
+                # Wait for positioning to complete
+                while self.microcontroller.is_busy():
+                    await asyncio.sleep(0.005)
+                
+                # Let stage settle briefly
+                await asyncio.sleep(0.05)
+                
+                # Start continuous movement to end of stripe
+                self.navigationController.move_x_to(end_x)
+                
+                # Acquire frames while moving along this stripe
+                stripe_frames = 0
+                while self.microcontroller.is_busy():
+                    if self.scan_stop_requested:
+                        logging.info("Quick scan stopped during stripe movement")
+                        break
+                        
+                    current_time = time.time()
+                    
+                    # Check if it's time for next frame
+                    if current_time - last_frame_time >= frame_interval:
+                        frame_acquired = await self._acquire_and_process_frame(zarr_channel_idx)
+                        if frame_acquired:
+                            stripe_frames += 1
+                            total_frames += 1
+                        last_frame_time = current_time
+                    
+                    # Small delay to prevent overwhelming the system
+                    await asyncio.sleep(0.001)
+                
+                logging.info(f'Well {well_name}, stripe {stripe_idx + 1}/{n_stripes} completed, acquired {stripe_frames} frames')
+                
+                # Continue to next stripe without stopping illumination or frame acquisition
+                
+        finally:
+            # Turn off illumination only when done with the entire well
+            self.liveController.turn_off_illumination()
+        
+        return total_frames
+    
+    async def _scan_single_stripe(self, start_x, end_x, stripe_y, intensity, frame_interval, zarr_channel_idx):
+        """Scan a single stripe and return the number of frames acquired."""
+        # Move to stripe start position
+        self.navigationController.move_x_to(start_x)
+        self.navigationController.move_y_to(stripe_y)
+        
+        # Wait for positioning to complete
+        while self.microcontroller.is_busy():
+            await asyncio.sleep(0.005)
+        
+        # Let stage settle
+        await asyncio.sleep(0.1)
+        
+        # Turn on brightfield illumination
+        self.liveController.set_illumination(0, intensity)  # Channel 0 = brightfield
+        await asyncio.sleep(0.01)  # Small delay for illumination to stabilize
+        self.liveController.turn_on_illumination()
+        
+        # Start continuous movement to end of stripe
+        self.navigationController.move_x_to(end_x)
+        
+        # Acquire frames while moving
+        frames_acquired = 0
+        last_frame_time = time.time()
+        
+        while self.microcontroller.is_busy():
+            if self.scan_stop_requested:
+                logging.info("Quick scan stopped during stripe movement")
+                break
+                
+            current_time = time.time()
+            
+            # Check if it's time for next frame
+            if current_time - last_frame_time >= frame_interval:
+                frame_acquired = await self._acquire_and_process_frame(zarr_channel_idx)
+                if frame_acquired:
+                    frames_acquired += 1
+                last_frame_time = current_time
+            
+            # Small delay to prevent overwhelming the system
+            await asyncio.sleep(0.001)
+        
+        # Turn off illumination
+        self.liveController.turn_off_illumination()
+        
+        return frames_acquired
+    
+    async def _acquire_and_process_frame(self, zarr_channel_idx):
+        """Acquire a single frame and add it to the stitching queue."""
+        # Get position before frame acquisition
+        pos_before_x_mm, pos_before_y_mm, pos_before_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
+        
+        # Read frame from camera
+        self.camera.send_trigger()
+        gray_img = self.camera.read_frame()
+        
+        # Get position after frame acquisition
+        pos_after_x_mm, pos_after_y_mm, pos_after_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
+        
+        # Calculate average position during frame acquisition
+        avg_x_mm = (pos_before_x_mm + pos_after_x_mm) / 2.0
+        avg_y_mm = (pos_before_y_mm + pos_after_y_mm) / 2.0
+        
+        if gray_img is not None:
+            # Process and add image to stitching queue
+            processed_img = self._process_frame_for_stitching(gray_img)
+            
+            await self._add_image_to_zarr_quick(
+                processed_img, avg_x_mm, avg_y_mm,
+                channel_idx=zarr_channel_idx, z_idx=0
+            )
+            
+            logging.debug(f'Acquired frame at average position ({avg_x_mm:.2f}, {avg_y_mm:.2f})')
+            return True
+        
+        return False
+    
+    def _process_frame_for_stitching(self, gray_img):
+        """Process a frame for stitching (resize, rotate, flip, convert to 8-bit)."""
+        # Immediately rescale to scale1 resolution (1/4 of original)
+        original_height, original_width = gray_img.shape[:2]
+        scale1_width = original_width // 4
+        scale1_height = original_height // 4
+        
+        # Resize image to scale1 resolution
+        scaled_img = cv2.resize(gray_img, (scale1_width, scale1_height), interpolation=cv2.INTER_AREA)
+        
+        # Apply rotate and flip transformations
+        processed_img = rotate_and_flip_image(
+            scaled_img,
+            rotate_image_angle=self.camera.rotate_image_angle,
+            flip_image=self.camera.flip_image
+        )
+        
+        # Convert to 8-bit if needed
+        if processed_img.dtype != np.uint8:
+            if processed_img.dtype == np.uint16:
+                processed_img = (processed_img / 256).astype(np.uint8)
+            else:
+                processed_img = processed_img.astype(np.uint8)
+        
+        return processed_img
+    
+    def _restore_original_velocity(self, original_velocity_x, original_velocity_y):
+        """Restore the original stage velocity settings."""
+        restore_result = self.set_stage_velocity(original_velocity_x, original_velocity_y)
+        if restore_result['success']:
+            logging.info(f'Restored original stage velocity: X={original_velocity_x}mm/s, Y={original_velocity_y}mm/s')
+        else:
+            logging.warning(f'Failed to restore original stage velocity: {restore_result["message"]}')
     
     def stop_scan_and_stitching(self):
         """
