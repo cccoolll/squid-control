@@ -536,8 +536,6 @@ class SquidController:
                 x_mm = wellplate_format.A1_X_MM + (int(column)-1)*wellplate_format.WELL_SPACING_MM + CONFIG.WELLPLATE_OFFSET_X_MM
             x_usteps = CONFIG.STAGE_MOVEMENT_SIGN_X*round(x_mm/mm_per_ustep_X)
             self.microcontroller.move_x_to_usteps(x_usteps)
-            while self.microcontroller.is_busy():
-                time.sleep(0.005)
         if row != 0 and row != None:
             mm_per_ustep_Y = CONFIG.SCREW_PITCH_Y_MM/(self.navigationController.y_microstepping*CONFIG.FULLSTEPS_PER_REV_Y)
             if self.is_simulation:
@@ -1063,12 +1061,14 @@ class SquidController:
                 # Check for stop request before each row
                 if self.scan_stop_requested:
                     logging.info("Scan stopped by user request")
+                    self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                     break
                     
                 for j in range(Nx):
                     # Check for stop request before each position
                     if self.scan_stop_requested:
                         logging.info("Scan stopped by user request")
+                        self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                         break
                     # Calculate position (snake pattern - reverse X on odd rows)
                     if i % 2 == 0:
@@ -1413,6 +1413,7 @@ class SquidController:
             for row_idx in range(max_rows):
                 if self.scan_stop_requested:
                     logging.info("Quick scan stopped by user request")
+                    self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                     break
                     
                 row_letter = chr(ord('A') + row_idx)
@@ -1432,6 +1433,7 @@ class SquidController:
                 for col_idx in col_range:
                     if self.scan_stop_requested:
                         logging.info("Quick scan stopped by user request")
+                        self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                         break
                         
                     col_number = col_idx + 1
@@ -1455,10 +1457,9 @@ class SquidController:
                     
                     logging.info(f'Scanning well {well_name}: {n_stripes} stripes × {stripe_width_mm}mm at Y positions starting from {stripe_start_y:.2f}mm')
                     
-                    # Move to well at high speed if not the first well
-                    if row_idx > 0 or col_idx > 0:
-                        await self._move_to_well_at_high_speed(well_name, stripe_start_x, stripe_start_y, 
-                                                             HIGH_SPEED_VELOCITY_MM_PER_S, limit_y_neg, limit_y_pos)
+                    # Move to well at high speed
+                    await self._move_to_well_at_high_speed(well_name, stripe_start_x, stripe_start_y, 
+                                                            HIGH_SPEED_VELOCITY_MM_PER_S, limit_y_neg, limit_y_pos)
                     
                     # Set scan velocity for stripe scanning
                     velocity_result = self.set_stage_velocity(scan_velocity, scan_velocity)
@@ -1530,6 +1531,7 @@ class SquidController:
             for stripe_idx in range(n_stripes):
                 if self.scan_stop_requested:
                     logging.info("Quick scan stopped by user request")
+                    self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                     break
                     
                 stripe_y = stripe_start_y + stripe_idx * dy_mm
@@ -1566,6 +1568,7 @@ class SquidController:
                 while self.microcontroller.is_busy():
                     if self.scan_stop_requested:
                         logging.info("Quick scan stopped during stripe movement")
+                        self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                         break
                         
                     current_time = time.time()
@@ -1619,6 +1622,7 @@ class SquidController:
         while self.microcontroller.is_busy():
             if self.scan_stop_requested:
                 logging.info("Quick scan stopped during stripe movement")
+                self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                 break
                 
             current_time = time.time()
@@ -1709,6 +1713,7 @@ class SquidController:
         """
         self.scan_stop_requested = True
         logging.info("Scan stop requested - ongoing scans will be interrupted")
+        self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
         return {"success": True, "message": "Scan stop requested"}
     
     async def _add_image_to_zarr_quick(self, image: np.ndarray, x_mm: float, y_mm: float,
@@ -1752,3 +1757,4 @@ async def try_microscope():
 
 if __name__ == "__main__":
     asyncio.run(try_microscope())
+
