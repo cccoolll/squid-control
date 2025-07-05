@@ -1312,7 +1312,8 @@ class SquidController:
 
     async def quick_scan_with_stitching(self, wellplate_type='96', exposure_time=5, intensity=50, 
                                       fps_target=10, action_ID='quick_scan_stitching',
-                                      n_stripes=4, stripe_width_mm=4.0, dy_mm=0.9, velocity_scan_mm_per_s=7.0):
+                                      n_stripes=4, stripe_width_mm=4.0, dy_mm=0.9, velocity_scan_mm_per_s=7.0,
+                                      do_contrast_autofocus=False, do_reflection_af=False):
         """
         Quick scan with live stitching to OME-Zarr canvas - brightfield only.
         Uses 4-stripe × 4 mm scanning pattern with serpentine motion per well.
@@ -1327,6 +1328,8 @@ class SquidController:
             stripe_width_mm (float): Length of each stripe inside a well in mm (default 4.0)
             dy_mm (float): Y increment between stripes in mm (default 0.9)
             velocity_scan_mm_per_s (float): Stage velocity during stripe scanning in mm/s (default 7.0)
+            do_contrast_autofocus (bool): Whether to perform contrast-based autofocus
+            do_reflection_af (bool): Whether to perform reflection-based autofocus
         """
         
         # Validate exposure time
@@ -1391,6 +1394,15 @@ class SquidController:
             self.is_busy = True
             self.scan_stop_requested = False  # Reset stop flag at start of scan
             logging.info(f'Starting quick scan with stitching: {wellplate_type} well plate, {n_stripes} stripes × {stripe_width_mm}mm, dy={dy_mm}mm, scan_velocity={scan_velocity}mm/s, fps={fps_target}')
+            
+            if do_contrast_autofocus:
+                logging.info('Contrast autofocus enabled for quick scan')
+            if do_reflection_af:
+                logging.info('Reflection autofocus enabled for quick scan')
+            
+            # 1. Before starting scanning, read the position of z axis
+            original_x_mm, original_y_mm, original_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
+            logging.info(f'Original Z position before autofocus: {original_z_mm:.3f}mm')
             
             # Set camera exposure time
             self.camera.set_exposure_time(exposure_time)
@@ -1457,6 +1469,38 @@ class SquidController:
                     
                     logging.info(f'Scanning well {well_name}: {n_stripes} stripes × {stripe_width_mm}mm at Y positions starting from {stripe_start_y:.2f}mm')
                     
+                    # Autofocus workflow: move to well center first if autofocus is requested
+                    if do_contrast_autofocus or do_reflection_af:
+                        logging.info(f'Moving to well {well_name} center for autofocus')
+                        
+                        
+                        # Set high speed velocity for moving to well center
+                        velocity_result = self.set_stage_velocity(HIGH_SPEED_VELOCITY_MM_PER_S, HIGH_SPEED_VELOCITY_MM_PER_S)
+                        if not velocity_result['success']:
+                            logging.warning(f"Failed to set high-speed velocity for autofocus: {velocity_result['message']}")
+                        
+                        # Move to well center using move_to_well function
+                        self.move_to_well(row_letter, col_number, wellplate_type)
+                        
+                        # Wait for movement to complete
+                        while self.microcontroller.is_busy():
+                            await asyncio.sleep(0.005)
+                        
+                        # Perform autofocus
+                        if do_reflection_af:
+                            logging.info(f'Performing reflection autofocus at well {well_name}')
+                            if hasattr(self, 'laserAutofocusController'):
+                                await self.do_laser_autofocus()
+                            else:
+                                logging.warning('Reflection autofocus requested but laserAutofocusController not available')
+                        elif do_contrast_autofocus:
+                            logging.info(f'Performing contrast autofocus at well {well_name}')
+                            await self.do_autofocus()
+                        
+                        # Update position after autofocus
+                        actual_x_mm, actual_y_mm, actual_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
+                        logging.info(f'Autofocus completed at well {well_name}, current position: ({actual_x_mm:.2f}, {actual_y_mm:.2f}, {actual_z_mm:.2f})')
+                    
                     # Move to well at high speed
                     await self._move_to_well_at_high_speed(well_name, stripe_start_x, stripe_start_y, 
                                                             HIGH_SPEED_VELOCITY_MM_PER_S, limit_y_neg, limit_y_pos)
@@ -1473,6 +1517,14 @@ class SquidController:
                         zarr_channel_idx, limit_y_neg, limit_y_pos)
                     
                     logging.info(f'Well {well_name} completed with {n_stripes} stripes, total frames: {total_frames}')
+                    
+                    # 3. After scanning for this well is done, move the z axis back to the remembered position
+                    if do_contrast_autofocus or do_reflection_af:
+                        logging.info(f'Restoring Z position to original: {original_z_mm:.3f}mm')
+                        self.navigationController.move_z_to(original_z_mm)
+                        while self.microcontroller.is_busy():
+                            await asyncio.sleep(0.005)
+                        
             
             logging.info('Quick scan with stitching completed')
             
