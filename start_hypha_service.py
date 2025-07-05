@@ -3327,6 +3327,8 @@ class Microscope:
                                       stripe_width_mm: float = Field(4.0, description="Length of each stripe inside a well in mm (default 4.0)"),
                                       dy_mm: float = Field(0.9, description="Y increment between stripes in mm (default 0.9)"),
                                       velocity_scan_mm_per_s: float = Field(7.0, description="Stage velocity during stripe scanning in mm/s (default 7.0)"),
+                                      do_contrast_autofocus: bool = Field(False, description="Whether to perform contrast-based autofocus"),
+                                      do_reflection_af: bool = Field(False, description="Whether to perform reflection-based autofocus"),
                                       context=None):
         """
         Perform a quick scan with live stitching to OME-Zarr canvas - brightfield only.
@@ -3343,6 +3345,8 @@ class Microscope:
             stripe_width_mm: Length of each stripe inside a well in mm (default 4.0)
             dy_mm: Y increment between stripes in mm (default 0.9)
             velocity_scan_mm_per_s: Stage velocity during stripe scanning in mm/s (default 7.0)
+            do_contrast_autofocus: Whether to perform contrast-based autofocus at each well
+            do_reflection_af: Whether to perform reflection-based autofocus at each well
             
         Returns:
             dict: Status of the scan with performance metrics
@@ -3379,7 +3383,9 @@ class Microscope:
                 n_stripes=n_stripes,
                 stripe_width_mm=stripe_width_mm,
                 dy_mm=dy_mm,
-                velocity_scan_mm_per_s=velocity_scan_mm_per_s
+                velocity_scan_mm_per_s=velocity_scan_mm_per_s,
+                do_contrast_autofocus=do_contrast_autofocus,
+                do_reflection_af=do_reflection_af
             )
             
             # Calculate performance metrics
@@ -3394,7 +3400,9 @@ class Microscope:
                 '384': {'rows': 16, 'cols': 24}
             }
             
-            config = wellplate_configs.get(wellplate_type, wellplate_configs['96'])
+            # Convert wellplate_type to string to avoid ObjectProxy issues
+            wellplate_type_str = str(wellplate_type)
+            config = wellplate_configs.get(wellplate_type_str, wellplate_configs['96'])
             total_wells = config['rows'] * config['cols']
             total_stripes = total_wells * n_stripes
             
@@ -3402,7 +3410,7 @@ class Microscope:
                 "success": True,
                 "message": f"Quick scan with stitching completed successfully",
                 "scan_parameters": {
-                    "wellplate_type": wellplate_type,
+                    "wellplate_type": wellplate_type_str,
                     "wells_scanned": total_wells,
                     "stripes_per_well": n_stripes,
                     "stripe_width_mm": stripe_width_mm,
