@@ -1473,6 +1473,15 @@ class SquidController:
             original_x_mm, original_y_mm, original_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
             logging.info(f'Original Z position before autofocus: {original_z_mm:.3f}mm')
             
+            if do_contrast_autofocus:
+                logging.info('Contrast autofocus enabled for quick scan')
+            if do_reflection_af:
+                logging.info('Reflection autofocus enabled for quick scan')
+            
+            # 1. Before starting scanning, read the position of z axis
+            original_x_mm, original_y_mm, original_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
+            logging.info(f'Original Z position before autofocus: {original_z_mm:.3f}mm')
+            
             # Set camera exposure time
             self.camera.set_exposure_time(exposure_time)
             
@@ -1542,8 +1551,17 @@ class SquidController:
                     if do_contrast_autofocus or do_reflection_af:
                         logging.info(f'Moving to well {well_name} center for autofocus')
                         
-                        # Move to well center using optimized async method
-                        await self.move_to_well_center_for_autofocus(row_letter, col_number, wellplate_type, HIGH_SPEED_VELOCITY_MM_PER_S)
+                        # Set high speed velocity for moving to well center
+                        velocity_result = self.set_stage_velocity(HIGH_SPEED_VELOCITY_MM_PER_S, HIGH_SPEED_VELOCITY_MM_PER_S)
+                        if not velocity_result['success']:
+                            logging.warning(f"Failed to set high-speed velocity for autofocus: {velocity_result['message']}")
+                        
+                        # Move to well center using move_to_well function
+                        self.move_to_well(row_letter, col_number, wellplate_type)
+                        
+                        # Wait for movement to complete
+                        while self.microcontroller.is_busy():
+                            await asyncio.sleep(0.005)
                         
                         # Perform autofocus
                         if do_reflection_af:
