@@ -3211,22 +3211,34 @@ class Microscope:
             output_format: Format for the output ('base64' for compressed image, 'array' for numpy array)
             
         Returns:
-            dict: Retrieved image data with metadata
+            dict: Retrieved image data with metadata, or None if zarr canvas is not initialized
         """
         try:
+            # Check if zarr canvas is initialized before attempting to get region
+            if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
+                logger.warning("Zarr canvas not initialized, returning None")
+                return None
+            
             # Calculate center coordinates for the underlying function
             center_x_mm = start_x_mm + width_mm / 2
             center_y_mm = start_y_mm + height_mm / 2
             
             # Get the region from the zarr canvas
-            region = self.squidController.get_stitched_region(
-                center_x_mm=center_x_mm,
-                center_y_mm=center_y_mm,
-                width_mm=width_mm,
-                height_mm=height_mm,
-                scale_level=scale_level,
-                channel_name=channel_name
-            )
+            try:
+                region = self.squidController.get_stitched_region(
+                    center_x_mm=center_x_mm,
+                    center_y_mm=center_y_mm,
+                    width_mm=width_mm,
+                    height_mm=height_mm,
+                    scale_level=scale_level,
+                    channel_name=channel_name
+                )
+            except RuntimeError as e:
+                if "Zarr canvas not initialized" in str(e):
+                    logger.warning("Zarr canvas not initialized, returning None")
+                    return None
+                else:
+                    raise e
             
             if output_format == 'base64':
                 # Convert to base64 encoded PNG
