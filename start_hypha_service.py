@@ -3331,40 +3331,59 @@ class Microscope:
             raise e
 
     @schema_function(skip_self=True)
-    async def quick_scan_with_stitching(self, wellplate_type: str = Field('96', description="Well plate type ('6', '12', '24', '96', '384')"),
-                                      exposure_time: float = Field(5, description="Camera exposure time in milliseconds (max 30ms)"),
-                                      intensity: float = Field(70, description="Brightfield LED intensity (0-100)"),
-                                      fps_target: int = Field(10, description="Target frame rate for acquisition (default 10fps)"),
-                                      action_ID: str = Field('quick_scan_stitching', description="Identifier for this scan"),
-                                      n_stripes: int = Field(4, description="Number of stripes per well (default 4)"),
-                                      stripe_width_mm: float = Field(4.0, description="Length of each stripe inside a well in mm (default 4.0)"),
-                                      dy_mm: float = Field(0.9, description="Y increment between stripes in mm (default 0.9)"),
-                                      velocity_scan_mm_per_s: float = Field(7.0, description="Stage velocity during stripe scanning in mm/s (default 7.0)"),
-                                      do_contrast_autofocus: bool = Field(False, description="Whether to perform contrast-based autofocus"),
-                                      do_reflection_af: bool = Field(False, description="Whether to perform reflection-based autofocus"),
-                                      context=None):
+    async def quick_scan_with_stitching(self, scan_parameters: dict = Field(..., description="Dictionary containing all scan parameters"), context=None):
         """
         Perform a quick scan with live stitching to OME-Zarr canvas - brightfield only.
         Uses 4-stripe × 4 mm scanning pattern with serpentine motion per well.
         Only supports brightfield channel with exposure time ≤ 30ms.
         
         Args:
-            wellplate_type: Well plate format ('6', '12', '24', '96', '384')
-            exposure_time: Camera exposure time in milliseconds (must be ≤ 30ms)
-            intensity: Brightfield LED intensity (0-100)
-            fps_target: Target frame rate for acquisition (default 10fps)
-            action_ID: Unique identifier for this scan
-            n_stripes: Number of stripes per well (default 4)
-            stripe_width_mm: Length of each stripe inside a well in mm (default 4.0)
-            dy_mm: Y increment between stripes in mm (default 0.9)
-            velocity_scan_mm_per_s: Stage velocity during stripe scanning in mm/s (default 7.0)
-            do_contrast_autofocus: Whether to perform contrast-based autofocus at each well
-            do_reflection_af: Whether to perform reflection-based autofocus at each well
+            scan_parameters: Dictionary containing all scan parameters:
+                - wellplate_type: Well plate format ('6', '12', '24', '96', '384')
+                - exposure_time: Camera exposure time in milliseconds (must be ≤ 30ms)
+                - intensity: Brightfield LED intensity (0-100)
+                - fps_target: Target frame rate for acquisition (default 10fps)
+                - action_ID: Unique identifier for this scan
+                - n_stripes: Number of stripes per well (default 4)
+                - stripe_width_mm: Length of each stripe inside a well in mm (default 4.0)
+                - dy_mm: Y increment between stripes in mm (default 0.9)
+                - velocity_scan_mm_per_s: Stage velocity during stripe scanning in mm/s (default 7.0)
+                - do_contrast_autofocus: Whether to perform contrast-based autofocus at each well
+                - do_reflection_af: Whether to perform reflection-based autofocus at each well
             
         Returns:
             dict: Status of the scan with performance metrics
         """
         try:
+            # Extract parameters from the scan_parameters object/dict
+            # Handle both dict and ObjectProxy cases
+            if hasattr(scan_parameters, '__getitem__'):
+                # It's a dict-like object
+                wellplate_type = scan_parameters.get('wellplate_type', '96')
+                exposure_time = scan_parameters.get('exposure_time', 5)
+                intensity = scan_parameters.get('intensity', 70)
+                fps_target = scan_parameters.get('fps_target', 10)
+                action_ID = scan_parameters.get('action_ID', 'quick_scan_stitching')
+                n_stripes = scan_parameters.get('n_stripes', 4)
+                stripe_width_mm = scan_parameters.get('stripe_width_mm', 4.0)
+                dy_mm = scan_parameters.get('dy_mm', 0.9)
+                velocity_scan_mm_per_s = scan_parameters.get('velocity_scan_mm_per_s', 7.0)
+                do_contrast_autofocus = scan_parameters.get('do_contrast_autofocus', False)
+                do_reflection_af = scan_parameters.get('do_reflection_af', False)
+            else:
+                # It's an ObjectProxy or similar object with attributes
+                wellplate_type = getattr(scan_parameters, 'wellplate_type', '96')
+                exposure_time = getattr(scan_parameters, 'exposure_time', 5)
+                intensity = getattr(scan_parameters, 'intensity', 70)
+                fps_target = getattr(scan_parameters, 'fps_target', 10)
+                action_ID = getattr(scan_parameters, 'action_ID', 'quick_scan_stitching')
+                n_stripes = getattr(scan_parameters, 'n_stripes', 4)
+                stripe_width_mm = getattr(scan_parameters, 'stripe_width_mm', 4.0)
+                dy_mm = getattr(scan_parameters, 'dy_mm', 0.9)
+                velocity_scan_mm_per_s = getattr(scan_parameters, 'velocity_scan_mm_per_s', 7.0)
+                do_contrast_autofocus = getattr(scan_parameters, 'do_contrast_autofocus', False)
+                do_reflection_af = getattr(scan_parameters, 'do_reflection_af', False)
+            
             # Validate exposure time early
             if exposure_time > 30:
                 raise ValueError(f"Quick scan exposure time must not exceed 30ms (got {exposure_time}ms)")
