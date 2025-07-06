@@ -547,6 +547,70 @@ class SquidController:
             while self.microcontroller.is_busy():
                 time.sleep(0.005)
 
+    async def move_to_well_async(self, row, column, wellplate_type='96'):
+        """
+        Async version of move_to_well that doesn't block the event loop.
+        
+        Args:
+            row: Row letter (e.g., 'A', 'B', 'C')
+            column: Column number (e.g., 1, 2, 3)
+            wellplate_type: Type of well plate ('6', '12', '24', '96', '384')
+        """
+        if wellplate_type == '6':
+            wellplate_format = WELLPLATE_FORMAT_6
+        elif wellplate_type == '12':
+            wellplate_format = WELLPLATE_FORMAT_12
+        elif wellplate_type == '24':
+            wellplate_format = WELLPLATE_FORMAT_24
+        elif wellplate_type == '96':
+            wellplate_format = WELLPLATE_FORMAT_96
+        elif wellplate_type == '384':
+            wellplate_format = WELLPLATE_FORMAT_384
+        else:
+            # Default to 96-well plate if unsupported type is provided
+            wellplate_format = WELLPLATE_FORMAT_96
+        
+        if column != 0 and column != None:
+            mm_per_ustep_X = CONFIG.SCREW_PITCH_X_MM/(self.navigationController.x_microstepping*CONFIG.FULLSTEPS_PER_REV_X)
+            if self.is_simulation:
+                x_mm = wellplate_format.A1_X_MM + (int(column)-1)*wellplate_format.WELL_SPACING_MM
+            else:
+                x_mm = wellplate_format.A1_X_MM + (int(column)-1)*wellplate_format.WELL_SPACING_MM + CONFIG.WELLPLATE_OFFSET_X_MM
+            x_usteps = CONFIG.STAGE_MOVEMENT_SIGN_X*round(x_mm/mm_per_ustep_X)
+            self.microcontroller.move_x_to_usteps(x_usteps)
+        if row != 0 and row != None:
+            mm_per_ustep_Y = CONFIG.SCREW_PITCH_Y_MM/(self.navigationController.y_microstepping*CONFIG.FULLSTEPS_PER_REV_Y)
+            if self.is_simulation:
+                y_mm = wellplate_format.A1_Y_MM + (ord(row) - ord('A'))*wellplate_format.WELL_SPACING_MM
+            else:
+                y_mm = wellplate_format.A1_Y_MM + (ord(row) - ord('A'))*wellplate_format.WELL_SPACING_MM + CONFIG.WELLPLATE_OFFSET_Y_MM
+            y_usteps = CONFIG.STAGE_MOVEMENT_SIGN_Y*round(y_mm/mm_per_ustep_Y)
+            self.microcontroller.move_y_to_usteps(y_usteps)
+            # Use async sleep to avoid blocking the event loop
+            while self.microcontroller.is_busy():
+                await asyncio.sleep(0.005)
+
+    async def move_to_well_center_for_autofocus(self, row, column, wellplate_type='96', velocity_mm_per_s=30.0):
+        """
+        Optimized method to move to well center for autofocus operations.
+        Sets velocity, moves to well center, and waits for completion.
+        
+        Args:
+            row: Row letter (e.g., 'A', 'B', 'C')
+            column: Column number (e.g., 1, 2, 3)
+            wellplate_type: Type of well plate ('6', '12', '24', '96', '384')
+            velocity_mm_per_s: Velocity for movement (default 30.0 mm/s)
+        """
+        # Set high speed velocity for moving to well center
+        velocity_result = self.set_stage_velocity(velocity_mm_per_s, velocity_mm_per_s)
+        if not velocity_result['success']:
+            logging.warning(f"Failed to set high-speed velocity for autofocus: {velocity_result['message']}")
+        
+        # Move to well center using async method
+        await self.move_to_well_async(row, column, wellplate_type)
+        
+        logging.info(f'Moved to well {row}{column} center for autofocus')
+
     def get_well_from_position(self, wellplate_type='96', x_pos_mm=None, y_pos_mm=None):
         """
         Calculate which well position corresponds to the given X,Y coordinates.
@@ -1473,18 +1537,8 @@ class SquidController:
                     if do_contrast_autofocus or do_reflection_af:
                         logging.info(f'Moving to well {well_name} center for autofocus')
                         
-                        
-                        # Set high speed velocity for moving to well center
-                        velocity_result = self.set_stage_velocity(HIGH_SPEED_VELOCITY_MM_PER_S, HIGH_SPEED_VELOCITY_MM_PER_S)
-                        if not velocity_result['success']:
-                            logging.warning(f"Failed to set high-speed velocity for autofocus: {velocity_result['message']}")
-                        
-                        # Move to well center using move_to_well function
-                        self.move_to_well(row_letter, col_number, wellplate_type)
-                        
-                        # Wait for movement to complete
-                        while self.microcontroller.is_busy():
-                            await asyncio.sleep(0.005)
+                        # Move to well center using optimized async method
+                        await self.move_to_well_center_for_autofocus(row_letter, col_number, wellplate_type, HIGH_SPEED_VELOCITY_MM_PER_S)
                         
                         # Perform autofocus
                         if do_reflection_af:
@@ -1501,7 +1555,7 @@ class SquidController:
                         actual_x_mm, actual_y_mm, actual_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
                         logging.info(f'Autofocus completed at well {well_name}, current position: ({actual_x_mm:.2f}, {actual_y_mm:.2f}, {actual_z_mm:.2f})')
                     
-                    # Move to well at high speed
+                    # Move to well stripe start position at high speed
                     await self._move_to_well_at_high_speed(well_name, stripe_start_x, stripe_start_y, 
                                                             HIGH_SPEED_VELOCITY_MM_PER_S, limit_y_neg, limit_y_pos)
                     
