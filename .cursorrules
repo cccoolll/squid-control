@@ -378,8 +378,8 @@ This serial communication system provides the foundation for precise, reliable, 
 ### API Design
 - Use Pydantic models for input validation (see BaseModel classes)
 - Include detailed Field descriptions for all parameters
-- Implement permission checks using `check_permission()`
 - Add schema validation with `@schema_function` decorator
+- If exception occurs, use raise.
 
 ### Configuration Management
 - Use INI files for hardware configuration

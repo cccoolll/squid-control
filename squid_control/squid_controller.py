@@ -1075,7 +1075,8 @@ class SquidController:
 
     async def normal_scan_with_stitching(self, start_x_mm, start_y_mm, Nx, Ny, dx_mm, dy_mm, 
                                         illumination_settings=None, do_contrast_autofocus=False, 
-                                        do_reflection_af=False, action_ID='normal_scan_stitching'):
+                                        do_reflection_af=False, action_ID='normal_scan_stitching',
+                                        timepoint=0):
         """
         Normal scan with live stitching to OME-Zarr canvas.
         
@@ -1090,6 +1091,7 @@ class SquidController:
             do_contrast_autofocus (bool): Whether to perform contrast-based autofocus
             do_reflection_af (bool): Whether to perform reflection-based autofocus
             action_ID (str): Identifier for this scan
+            timepoint (int): Timepoint index for the scan (default 0)
         """
         if illumination_settings is None:
             illumination_settings = [
@@ -1115,7 +1117,7 @@ class SquidController:
         try:
             self.is_busy = True
             self.scan_stop_requested = False  # Reset stop flag at start of scan
-            logging.info(f'Starting normal scan with stitching: {Nx}x{Ny} positions, dx={dx_mm}mm, dy={dy_mm}mm')
+            logging.info(f'Starting normal scan with stitching: {Nx}x{Ny} positions, dx={dx_mm}mm, dy={dy_mm}mm, timepoint={timepoint}')
             
             # Map channel names to indices
             channel_map = ChannelMapper.get_human_to_id_map()
@@ -1197,10 +1199,11 @@ class SquidController:
                         await self.zarr_canvas.add_image_async(
                             image, actual_x_mm, actual_y_mm, 
                             channel_idx=zarr_channel_idx,  # Use local zarr index
-                            z_idx=0
+                            z_idx=0,
+                            timepoint=timepoint  # Add timepoint parameter
                         )
                         
-                        logging.info(f'Added image at actual position ({actual_x_mm:.2f}, {actual_y_mm:.2f}) for channel {channel_name} (global_id: {global_channel_idx}, zarr_idx: {zarr_channel_idx}) (intended: {x_mm:.2f}, {y_mm:.2f})')
+                        logging.info(f'Added image at actual position ({actual_x_mm:.2f}, {actual_y_mm:.2f}) for channel {channel_name} (global_id: {global_channel_idx}, zarr_idx: {zarr_channel_idx}), timepoint={timepoint} (intended: {x_mm:.2f}, {y_mm:.2f})')
             
             logging.info('Normal scan with stitching completed')
             
@@ -1265,7 +1268,7 @@ class SquidController:
         logging.info(f'Channel to zarr index mapping: {self.zarr_canvas.channel_to_zarr_index}')
     
     def get_stitched_region(self, center_x_mm, center_y_mm, width_mm, height_mm, 
-                           scale_level=0, channel_name='BF LED matrix full'):
+                           scale_level=0, channel_name='BF LED matrix full', timepoint=0):
         """
         Get a region from the stitched canvas.
         
@@ -1276,6 +1279,7 @@ class SquidController:
             height_mm (float): Height of region in mm
             scale_level (int): Scale level (0=full res, 1=1/4, 2=1/16, etc)
             channel_name (str): Name of channel to retrieve
+            timepoint (int): Timepoint index (default 0)
             
         Returns:
             np.ndarray: The requested region
@@ -1286,11 +1290,11 @@ class SquidController:
         # Get the region using the new channel name method
         region = self.zarr_canvas.get_canvas_region_by_channel_name(
             center_x_mm, center_y_mm, width_mm, height_mm,
-            channel_name, scale=scale_level
+            channel_name, scale=scale_level, timepoint=timepoint
         )
         
         if region is None:
-            logging.warning(f"Failed to get region for channel {channel_name}")
+            logging.warning(f"Failed to get region for channel {channel_name}, timepoint {timepoint}")
             return None
         
         return region
@@ -1377,7 +1381,7 @@ class SquidController:
     async def quick_scan_with_stitching(self, wellplate_type='96', exposure_time=5, intensity=50, 
                                       fps_target=10, action_ID='quick_scan_stitching',
                                       n_stripes=4, stripe_width_mm=4.0, dy_mm=0.9, velocity_scan_mm_per_s=7.0,
-                                      do_contrast_autofocus=False, do_reflection_af=False):
+                                      do_contrast_autofocus=False, do_reflection_af=False, timepoint=0):
         """
         Quick scan with live stitching to OME-Zarr canvas - brightfield only.
         Uses 4-stripe × 4 mm scanning pattern with serpentine motion per well.
@@ -1394,6 +1398,7 @@ class SquidController:
             velocity_scan_mm_per_s (float): Stage velocity during stripe scanning in mm/s (default 7.0)
             do_contrast_autofocus (bool): Whether to perform contrast-based autofocus
             do_reflection_af (bool): Whether to perform reflection-based autofocus
+            timepoint (int): Timepoint index for the scan (default 0)
         """
         
         # Validate exposure time
@@ -1457,7 +1462,7 @@ class SquidController:
         try:
             self.is_busy = True
             self.scan_stop_requested = False  # Reset stop flag at start of scan
-            logging.info(f'Starting quick scan with stitching: {wellplate_type} well plate, {n_stripes} stripes × {stripe_width_mm}mm, dy={dy_mm}mm, scan_velocity={scan_velocity}mm/s, fps={fps_target}')
+            logging.info(f'Starting quick scan with stitching: {wellplate_type} well plate, {n_stripes} stripes × {stripe_width_mm}mm, dy={dy_mm}mm, scan_velocity={scan_velocity}mm/s, fps={fps_target}, timepoint={timepoint}')
             
             if do_contrast_autofocus:
                 logging.info('Contrast autofocus enabled for quick scan')
@@ -1568,7 +1573,7 @@ class SquidController:
                     total_frames = await self._scan_well_with_continuous_acquisition(
                         well_name, n_stripes, stripe_start_x, stripe_end_x, 
                         stripe_start_y, dy_mm, intensity, frame_interval, 
-                        zarr_channel_idx, limit_y_neg, limit_y_pos)
+                        zarr_channel_idx, limit_y_neg, limit_y_pos, timepoint=timepoint)
                     
                     logging.info(f'Well {well_name} completed with {n_stripes} stripes, total frames: {total_frames}')
                     
@@ -1621,7 +1626,7 @@ class SquidController:
     
     async def _scan_well_with_continuous_acquisition(self, well_name, n_stripes, stripe_start_x, stripe_end_x, 
                                                    stripe_start_y, dy_mm, intensity, frame_interval, 
-                                                   zarr_channel_idx, limit_y_neg, limit_y_pos):
+                                                   zarr_channel_idx, limit_y_neg, limit_y_pos, timepoint=0):
         """Scan all stripes within a well with continuous frame acquisition."""
         total_frames = 0
         
@@ -1681,7 +1686,7 @@ class SquidController:
                     
                     # Check if it's time for next frame
                     if current_time - last_frame_time >= frame_interval:
-                        frame_acquired = await self._acquire_and_process_frame(zarr_channel_idx)
+                        frame_acquired = await self._acquire_and_process_frame(zarr_channel_idx, timepoint)
                         if frame_acquired:
                             stripe_frames += 1
                             total_frames += 1
@@ -1748,7 +1753,7 @@ class SquidController:
         
         return frames_acquired
     
-    async def _acquire_and_process_frame(self, zarr_channel_idx):
+    async def _acquire_and_process_frame(self, zarr_channel_idx, timepoint=0):
         """Acquire a single frame and add it to the stitching queue."""
         # Get position before frame acquisition
         pos_before_x_mm, pos_before_y_mm, pos_before_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
@@ -1770,10 +1775,10 @@ class SquidController:
             
             await self._add_image_to_zarr_quick(
                 processed_img, avg_x_mm, avg_y_mm,
-                channel_idx=zarr_channel_idx, z_idx=0
+                channel_idx=zarr_channel_idx, z_idx=0, timepoint=timepoint
             )
             
-            logging.debug(f'Acquired frame at average position ({avg_x_mm:.2f}, {avg_y_mm:.2f})')
+            logging.debug(f'Acquired frame at average position ({avg_x_mm:.2f}, {avg_y_mm:.2f}), timepoint={timepoint}')
             return True
         
         return False
@@ -1823,7 +1828,7 @@ class SquidController:
         return {"success": True, "message": "Scan stop requested"}
     
     async def _add_image_to_zarr_quick(self, image: np.ndarray, x_mm: float, y_mm: float,
-                                     channel_idx: int = 0, z_idx: int = 0):
+                                     channel_idx: int = 0, z_idx: int = 0, timepoint: int = 0):
         """
         Add image to zarr canvas for quick scan - only updates scales 1-5 (skips scale 0).
         The input image should already be at scale1 resolution (1/4 of original).
@@ -1834,9 +1839,63 @@ class SquidController:
             'y_mm': y_mm,
             'channel_idx': channel_idx,
             'z_idx': z_idx,
+            'timepoint': timepoint,
             'timestamp': time.time(),
             'quick_scan': True  # Flag to indicate this is for quick scan (scales 1-5 only)
         })
+
+    # Add new methods for timepoint management
+    def get_zarr_timepoints(self):
+        """
+        Get available timepoints from the zarr canvas.
+        
+        Returns:
+            List[int]: List of available timepoint indices
+        """
+        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
+            logging.warning("Zarr canvas not initialized")
+            return []
+        
+        return self.zarr_canvas.get_available_timepoints()
+    
+    def create_zarr_timepoint(self, timepoint):
+        """
+        Create a new timepoint in the zarr canvas.
+        
+        Args:
+            timepoint (int): Timepoint index to create
+        """
+        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
+            raise RuntimeError("Zarr canvas not initialized")
+        
+        self.zarr_canvas.create_timepoint(timepoint)
+        logging.info(f"Created timepoint {timepoint} in zarr canvas")
+    
+    def remove_zarr_timepoint(self, timepoint):
+        """
+        Remove a timepoint from the zarr canvas.
+        
+        Args:
+            timepoint (int): Timepoint index to remove
+        """
+        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
+            raise RuntimeError("Zarr canvas not initialized")
+        
+        self.zarr_canvas.remove_timepoint(timepoint)
+        logging.info(f"Removed timepoint {timepoint} from zarr canvas")
+    
+    def clear_zarr_timepoint(self, timepoint):
+        """
+        Clear all data from a timepoint without removing it.
+        
+        Args:
+            timepoint (int): Timepoint index to clear
+        """
+        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
+            raise RuntimeError("Zarr canvas not initialized")
+        
+        self.zarr_canvas.clear_timepoint(timepoint)
+        logging.info(f"Cleared data from timepoint {timepoint} in zarr canvas")
 
 async def try_microscope():
     squid_controller = SquidController(is_simulation=False)
