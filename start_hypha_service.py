@@ -1896,7 +1896,7 @@ class Microscope:
             "do_laser_autofocus": self.do_laser_autofocus,
             "set_laser_reference": self.set_laser_reference,
             "get_status": self.get_status,
-            #"update_parameters_from_client": self.update_parameters_from_client,
+            "update_parameters_from_client": self.update_parameters_from_client,
             "get_chatbot_url": self.get_chatbot_url,
             #"get_task_status": self.get_task_status,
             "get_all_task_status": self.get_all_task_status,

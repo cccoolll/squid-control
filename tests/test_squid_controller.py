@@ -1474,6 +1474,7 @@ async def test_set_stage_velocity_error_handling(sim_controller_fixture):
         break
 
 @pytest.mark.timeout(180)
+@pytest.mark.integration
 async def test_zarr_upload_complete_workflow(sim_controller_fixture):
     """Test complete zarr upload workflow with real artifact manager: Initialize → Check Name → Create Data → Upload → List → Cleanup"""
     async for controller in sim_controller_fixture:
