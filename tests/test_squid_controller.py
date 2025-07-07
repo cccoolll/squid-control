@@ -1536,28 +1536,50 @@ async def test_zarr_upload_complete_workflow(sim_controller_fixture):
         
         print(f"   ✓ Mock zarr canvas created for testing")
         
-        # Step 2: Create hypha service instance to access upload methods
-        print("2. Initializing hypha service for real API access...")
+        # Step 2: Create microscope instance to access upload methods
+        print("2. Initializing microscope controller for real API access...")
         
-        # Import the hypha service class
+        # Import the microscope class
         import sys
         import os
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
         from start_hypha_service import Microscope
         
-        # Create service instance and replace its controller with our test controller
-        service = Microscope(is_simulation=True, is_local=False)
-        service.squidController = controller  # Replace with our test controller that has the mock zarr canvas
-        service.squid_controller = controller  # Add alias for methods that use underscore
-        service.service_id = "test-gallery"  # Use fixed test gallery name
+        # Create microscope instance and replace its controller with our test controller
+        microscope = Microscope(is_simulation=True, is_local=False)
+        microscope.squidController = controller  # Replace with our test controller that has the mock zarr canvas
+        microscope.squid_controller = controller  # Add alias for methods that use underscore
+        microscope.service_id = "test-gallery"  # Use fixed test gallery name
         
+        # Manually initialize zarr_artifact_manager if it doesn't exist
+        if not hasattr(microscope, 'zarr_artifact_manager') or microscope.zarr_artifact_manager is None:
+            print("   Initializing zarr_artifact_manager...")
+            from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
+            from hypha_rpc import connect_to_server
+            
+            microscope.zarr_artifact_manager = SquidArtifactManager()
+            
+            # Connect to agent-lens workspace for zarr uploads
+            zarr_token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+            if zarr_token:
+                zarr_server = await connect_to_server({
+                    "server_url": "https://hypha.aicell.io",
+                    "token": zarr_token,
+                    "workspace": "agent-lens",
+                    "ping_interval": None
+                })
+                await microscope.zarr_artifact_manager.connect_server(zarr_server)
+                print("   ✓ Zarr artifact manager initialized successfully")
+            else:
+                print("   Warning: AGENT_LENS_WORKSPACE_TOKEN not found")
+                microscope.zarr_artifact_manager = None
         
-        print(f"   ✓ Service initialized with ID: {service.service_id}")
+        print(f"   ✓ Microscope initialized with ID: {microscope.service_id}")
         
         # Step 3: Get upload info
         print("3. Getting zarr upload info...")
         
-        upload_info = await service.get_zarr_upload_info(context={"user": {"email": "test@example.com", "is_anonymous": False}})
+        upload_info = await microscope.get_zarr_upload_info(context={"user": {"email": "test@example.com", "is_anonymous": False}})
         
         print(f"   Upload info result: {upload_info}")
         assert upload_info["success"] == True, f"Failed to get upload info: {upload_info}"
@@ -1575,7 +1597,7 @@ async def test_zarr_upload_complete_workflow(sim_controller_fixture):
         # Include timestamp to avoid conflicts in fixed test gallery
         dataset_name = f"test-zarr-dataset-{int(time.time())}"
         
-        name_check = await service.check_zarr_dataset_name(
+        name_check = await microscope.check_zarr_dataset_name(
             dataset_name=dataset_name,
             context={"user": {"email": "test@example.com", "is_anonymous": False}}
         )
@@ -1594,7 +1616,7 @@ async def test_zarr_upload_complete_workflow(sim_controller_fixture):
         # Step 5: Upload the dataset
         print("5. Uploading zarr dataset...")
         
-        upload_result = await service.upload_zarr_dataset(
+        upload_result = await microscope.upload_zarr_dataset(
             dataset_name=dataset_name,
             description="Test dataset for automated testing",
             include_acquisition_settings=True,
@@ -1611,7 +1633,7 @@ async def test_zarr_upload_complete_workflow(sim_controller_fixture):
         # Step 6: List datasets to verify upload
         print("6. Listing microscope datasets to verify upload...")
         
-        datasets_list = await service.list_microscope_datasets(
+        datasets_list = await microscope.list_microscope_datasets(
             context={"user": {"email": "test@example.com", "is_anonymous": False}}
         )
         
@@ -1639,7 +1661,7 @@ async def test_zarr_upload_complete_workflow(sim_controller_fixture):
         cleanup_successful = False
         try:
             # Get the artifact manager service instance to clean up
-            artifact_manager_svc = service._zarr_artifact_manager._svc
+            artifact_manager_svc = microscope.zarr_artifact_manager._svc
             
             # Delete the test dataset using the artifact manager delete method
             await artifact_manager_svc.delete(artifact_id=dataset_id, delete_files=True)
