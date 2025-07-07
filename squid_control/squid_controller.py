@@ -1249,13 +1249,15 @@ class SquidController:
             'z_positive': 6     # mm
         }
         
-        # Create the canvas with ALL available channels
+        # Create the canvas with ALL available channels and optimized timepoint allocation
         self.zarr_canvas = ZarrCanvas(
             base_path=zarr_path,
             pixel_size_xy_um=self.pixel_size_xy,
             stage_limits=stage_limits,
             channels=all_channels,  # Use all channels from ChannelMapper
-            rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
+            rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG,
+            initial_timepoints=20,  # Pre-allocate 20 timepoints to avoid resize delays
+            timepoint_expansion_chunk=10  # Expand by 10 timepoints when needed
         )
         
         # Initialize the OME-Zarr structure
@@ -1351,13 +1353,15 @@ class SquidController:
             default_channels = ChannelMapper.get_all_human_names()
             logging.info(f'Initializing zarr canvas with channels from ChannelMapper: {len(default_channels)} channels')
             
-            # Create the canvas
+            # Create the canvas with optimized timepoint allocation
             self.zarr_canvas = ZarrCanvas(
                 base_path=zarr_path,
                 pixel_size_xy_um=self.pixel_size_xy,
                 stage_limits=stage_limits,
                 channels=default_channels,
-                rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
+                rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG,
+                initial_timepoints=20,  # Pre-allocate 20 timepoints to avoid resize delays
+                timepoint_expansion_chunk=10  # Expand by 10 timepoints when needed
             )
             
             # Initialize the OME-Zarr structure
@@ -1890,6 +1894,38 @@ class SquidController:
         
         self.zarr_canvas.clear_timepoint(timepoint)
         logging.info(f"Cleared data from timepoint {timepoint} in zarr canvas")
+    
+    def pre_allocate_timepoints(self, max_timepoint):
+        """
+        Pre-allocate zarr arrays to accommodate timepoints up to max_timepoint.
+        This is useful for time-lapse experiments where you know the number of timepoints in advance.
+        Performing this operation early avoids delays during scanning.
+        
+        Args:
+            max_timepoint (int): The maximum timepoint index to pre-allocate for
+            
+        Returns:
+            dict: Status information about the pre-allocation
+        """
+        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
+            raise RuntimeError("Zarr canvas not initialized")
+        
+        try:
+            start_time = time.time()
+            self.zarr_canvas.pre_allocate_timepoints(max_timepoint)
+            elapsed_time = time.time() - start_time
+            
+            logging.info(f"Pre-allocated zarr arrays for timepoints up to {max_timepoint} in {elapsed_time:.2f} seconds")
+            
+            return {
+                "success": True,
+                "message": f"Pre-allocated timepoints up to {max_timepoint}",
+                "max_timepoint": max_timepoint,
+                "elapsed_time_seconds": elapsed_time
+            }
+        except Exception as e:
+            logging.error(f"Failed to pre-allocate timepoints: {e}")
+            raise e
 
 async def try_microscope():
     squid_controller = SquidController(is_simulation=False)
