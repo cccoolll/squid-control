@@ -528,7 +528,7 @@ async def test_schema_methods(test_microscope_service):
     
     # Test navigate_to_well_schema
     config = Microscope.NavigateToWellInput(row='B', col=3, wellplate_type='96')
-    result = microscope.navigate_to_well_schema(config)
+    result = await microscope.navigate_to_well_schema(config)
     assert isinstance(result, str)
     assert "B,3" in result
     
@@ -862,12 +862,12 @@ async def test_additional_schema_methods(test_microscope_service):
     assert "auto-focus" in result.lower()
     
     # Test home_stage_schema
-    result = microscope.home_stage_schema()
+    result = await microscope.home_stage_schema()
     assert isinstance(result, dict)
     assert "result" in result
     
     # Test return_stage_schema
-    result = microscope.return_stage_schema()
+    result = await microscope.return_stage_schema()
     assert isinstance(result, dict)
     assert "result" in result
     
@@ -877,7 +877,7 @@ async def test_additional_schema_methods(test_microscope_service):
     assert "result" in result
     
     # Test set_laser_reference_schema
-    result = microscope.set_laser_reference_schema()
+    result = await microscope.set_laser_reference_schema()
     assert isinstance(result, dict)
     assert "result" in result
     
