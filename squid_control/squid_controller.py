@@ -1098,9 +1098,6 @@ class SquidController:
                 {'channel': 'BF LED matrix full', 'intensity': 50, 'exposure_time': 100}
             ]
         
-        # Initialize the Zarr canvas if not already done (with ALL channels)
-        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
-            await self._initialize_zarr_canvas()
         
         # Validate that all requested channels are available in the zarr canvas
         channel_map = ChannelMapper.get_human_to_id_map()
@@ -1433,9 +1430,6 @@ class SquidController:
             max_cols = 12
             wellplate_type = '96'
         
-        # Initialize the Zarr canvas if not already done (with ALL channels)
-        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
-            await self._initialize_zarr_canvas()
         
         # Validate that brightfield channel is available in the zarr canvas
         channel_name = 'BF LED matrix full'
