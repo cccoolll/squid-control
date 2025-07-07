@@ -91,7 +91,7 @@ class ZarrCanvas:
         self.is_stitching = False
         
         # Track available timepoints
-        self.available_timepoints = set([0])  # Start with timepoint 0
+        self.available_timepoints = [0]  # Start with timepoint 0 as a list
         
         logger.info(f"ZarrCanvas initialized: {self.canvas_width_px}x{self.canvas_height_px} px, "
                     f"{self.num_scales} scales, chunk_size={chunk_size}")
@@ -151,11 +151,13 @@ class ZarrCanvas:
             List[int]: Sorted list of available timepoint indices
         """
         with self.zarr_lock:
-            return sorted(list(self.available_timepoints))
+            return sorted(self.available_timepoints)
     
     def create_timepoint(self, timepoint: int):
         """
         Create a new timepoint in the zarr array.
+        This is now a lightweight operation that just adds to the available list.
+        Zarr array expansion happens lazily when actually writing data.
         
         Args:
             timepoint: The timepoint index to create
@@ -171,34 +173,18 @@ class ZarrCanvas:
                 logger.info(f"Timepoint {timepoint} already exists")
                 return
             
-            logger.info(f"Creating new timepoint {timepoint}")
+            logger.info(f"Creating new timepoint {timepoint} (lightweight)")
             
-            # For each scale, expand the time dimension if needed
-            for scale in range(self.num_scales):
-                if scale in self.zarr_arrays:
-                    zarr_array = self.zarr_arrays[scale]
-                    current_shape = zarr_array.shape
-                    
-                    # If the timepoint is beyond current array size, resize
-                    if timepoint >= current_shape[0]:
-                        new_shape = list(current_shape)
-                        new_shape[0] = timepoint + 1
-                        
-                        # Resize the array
-                        logger.info(f"Resizing scale {scale} from shape {current_shape} to {new_shape}")
-                        zarr_array.resize(new_shape)
-            
-            self.available_timepoints.add(timepoint)
+            # Simply add to available timepoints - zarr arrays will be expanded when needed
+            self.available_timepoints.append(timepoint)
+            self.available_timepoints.sort()  # Keep sorted for consistency
             
             # Update metadata
             self._update_timepoint_metadata()
     
     def remove_timepoint(self, timepoint: int):
         """
-        Remove a timepoint from the zarr array.
-        
-        Note: This doesn't physically remove the data from the array,
-        but marks it as unavailable and zeros out the data.
+        Remove a timepoint from the zarr array by deleting its chunk files.
         
         Args:
             timepoint: The timepoint index to remove
@@ -213,12 +199,12 @@ class ZarrCanvas:
             if len(self.available_timepoints) == 1:
                 raise ValueError("Cannot remove the last timepoint")
             
-            logger.info(f"Removing timepoint {timepoint}")
+            logger.info(f"Removing timepoint {timepoint} and deleting chunk files")
             
-            # Clear the data for this timepoint
-            self.clear_timepoint(timepoint)
+            # Delete chunk files for this timepoint
+            self._delete_timepoint_chunks(timepoint)
             
-            # Remove from available timepoints
+            # Remove from available timepoints list
             self.available_timepoints.remove(timepoint)
             
             # Update metadata
@@ -226,7 +212,7 @@ class ZarrCanvas:
     
     def clear_timepoint(self, timepoint: int):
         """
-        Clear all data from a specific timepoint without removing it.
+        Clear all data from a specific timepoint by deleting its chunk files.
         
         Args:
             timepoint: The timepoint index to clear
@@ -238,25 +224,83 @@ class ZarrCanvas:
             if timepoint not in self.available_timepoints:
                 raise ValueError(f"Timepoint {timepoint} does not exist")
             
-            logger.info(f"Clearing data from timepoint {timepoint}")
+            logger.info(f"Clearing data from timepoint {timepoint} by deleting chunk files")
             
-            # For each scale, zero out the data at this timepoint
+            # Delete chunk files for this timepoint
+            self._delete_timepoint_chunks(timepoint)
+    
+    def _delete_timepoint_chunks(self, timepoint: int):
+        """
+        Delete all chunk files for a specific timepoint across all scales.
+        This is much more efficient than zeroing out data.
+        
+        Args:
+            timepoint: The timepoint index to delete chunks for
+        """
+        try:
+            # For each scale, find and delete chunk files containing this timepoint
             for scale in range(self.num_scales):
-                if scale in self.zarr_arrays:
-                    zarr_array = self.zarr_arrays[scale]
-                    # Zero out all data for this timepoint
-                    zarr_array[timepoint, :, :, :, :] = 0
+                scale_path = self.zarr_path / str(scale)
+                if not scale_path.exists():
+                    continue
+                
+                # Zarr stores chunks in directories, timepoint is the first dimension
+                # Chunk filename format: "t.c.z.y.x" where t is timepoint
+                deleted_count = 0
+                
+                try:
+                    # Look for chunk files that start with this timepoint
+                    for chunk_file in scale_path.iterdir():
+                        if chunk_file.is_file() and chunk_file.name.startswith(f"{timepoint}."):
+                            try:
+                                chunk_file.unlink()  # Delete the file
+                                deleted_count += 1
+                            except OSError as e:
+                                logger.warning(f"Could not delete chunk file {chunk_file}: {e}")
+                
+                except OSError as e:
+                    logger.warning(f"Could not access scale directory {scale_path}: {e}")
+                
+                if deleted_count > 0:
+                    logger.debug(f"Deleted {deleted_count} chunk files for timepoint {timepoint} at scale {scale}")
+                    
+        except Exception as e:
+            logger.error(f"Error deleting timepoint chunks: {e}")
+    
+    def _ensure_timepoint_exists_in_zarr(self, timepoint: int):
+        """
+        Ensure that the zarr arrays are large enough to accommodate the given timepoint.
+        This is called lazily only when actually writing data.
+        
+        Args:
+            timepoint: The timepoint index that needs to exist in zarr
+        """
+        # Check if we need to expand any zarr arrays
+        for scale in range(self.num_scales):
+            if scale in self.zarr_arrays:
+                zarr_array = self.zarr_arrays[scale]
+                current_shape = zarr_array.shape
+                
+                # If the timepoint is beyond current array size, resize
+                if timepoint >= current_shape[0]:
+                    new_shape = list(current_shape)
+                    new_shape[0] = timepoint + 1
+                    
+                    # Resize the array
+                    logger.debug(f"Lazy resizing scale {scale} from shape {current_shape} to {new_shape}")
+                    zarr_array.resize(new_shape)
     
     def _update_timepoint_metadata(self):
         """Update the OME-Zarr metadata to reflect current timepoints."""
         if hasattr(self, 'zarr_root'):
             root = self.zarr_root
             if 'omero' in root.attrs:
-                root.attrs['omero']['rdefs']['defaultT'] = min(self.available_timepoints)
+                if self.available_timepoints:
+                    root.attrs['omero']['rdefs']['defaultT'] = min(self.available_timepoints)
             
             # Update custom metadata
             if 'squid_canvas' in root.attrs:
-                root.attrs['squid_canvas']['available_timepoints'] = sorted(list(self.available_timepoints))
+                root.attrs['squid_canvas']['available_timepoints'] = sorted(self.available_timepoints)
                 root.attrs['squid_canvas']['num_timepoints'] = len(self.available_timepoints)
     
     def initialize_canvas(self):
@@ -351,7 +395,7 @@ class ZarrCanvas:
                     "rotation_angle_deg": self.rotation_angle_deg,
                     "pixel_size_xy_um": self.pixel_size_xy_um,
                     "stage_limits": self.stage_limits,
-                    "available_timepoints": sorted(list(self.available_timepoints)),
+                    "available_timepoints": sorted(self.available_timepoints),
                     "num_timepoints": len(self.available_timepoints),
                     "version": "1.0"
                 }
@@ -474,7 +518,7 @@ class ZarrCanvas:
         Args:
             image: Image array (2D)
             x_mm: X position in millimeters
-            y_mm: Y position in millimeters  
+            y_mm: Y position in millimeters
             channel_idx: Local zarr channel index (0, 1, 2, etc.)
             z_idx: Z-slice index (default 0)
             timepoint: Timepoint index (default 0)
@@ -488,14 +532,21 @@ class ZarrCanvas:
             logger.error(f"Channel index {channel_idx} cannot be negative")
             return
         
-        # Ensure timepoint exists
+        # Ensure timepoint exists in our tracking list
         if timepoint not in self.available_timepoints:
-            self.create_timepoint(timepoint)
+            with self.zarr_lock:
+                if timepoint not in self.available_timepoints:
+                    self.available_timepoints.append(timepoint)
+                    self.available_timepoints.sort()
+                    self._update_timepoint_metadata()
         
         # Apply rotation and cropping first
         processed_image = self._rotate_and_crop_image(image)
         
         with self.zarr_lock:
+            # Ensure zarr arrays are sized correctly for this timepoint (lazy expansion)
+            self._ensure_timepoint_exists_in_zarr(timepoint)
+            
             for scale in range(self.num_scales):
                 scale_factor = 4 ** scale
                 
@@ -565,15 +616,22 @@ class ZarrCanvas:
             logger.error(f"Channel index {channel_idx} cannot be negative")
             return
         
-        # Ensure timepoint exists
+        # Ensure timepoint exists in our tracking list
         if timepoint not in self.available_timepoints:
-            self.create_timepoint(timepoint)
+            with self.zarr_lock:
+                if timepoint not in self.available_timepoints:
+                    self.available_timepoints.append(timepoint)
+                    self.available_timepoints.sort()
+                    self._update_timepoint_metadata()
         
         # For quick scan, we skip rotation to reduce computation pressure
         # The image should already be rotated and flipped by the caller
         processed_image = image
         
         with self.zarr_lock:
+            # Ensure zarr arrays are sized correctly for this timepoint (lazy expansion)
+            self._ensure_timepoint_exists_in_zarr(timepoint)
+            
             # Only process scales 1-5 (skip scale 0 for performance)
             for scale in range(1, min(self.num_scales, 6)):  # scales 1-5
                 scale_factor = 4 ** scale
@@ -663,6 +721,17 @@ class ZarrCanvas:
                 # Check if this is a quick scan
                 is_quick_scan = frame_data.get('quick_scan', False)
                 
+                # Extract timepoint
+                timepoint = frame_data.get('timepoint', 0)
+                
+                # Ensure timepoint exists in our tracking list
+                if timepoint not in self.available_timepoints:
+                    with self.zarr_lock:
+                        if timepoint not in self.available_timepoints:
+                            self.available_timepoints.append(timepoint)
+                            self.available_timepoints.sort()
+                            self._update_timepoint_metadata()
+                
                 # Process in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
                 if is_quick_scan:
@@ -674,7 +743,7 @@ class ZarrCanvas:
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
                         frame_data['z_idx'],
-                        frame_data['timepoint']
+                        timepoint
                     )
                 else:
                     await loop.run_in_executor(
@@ -685,7 +754,7 @@ class ZarrCanvas:
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
                         frame_data['z_idx'],
-                        frame_data['timepoint']
+                        timepoint
                     )
                 remaining_count += 1
                 
@@ -717,6 +786,14 @@ class ZarrCanvas:
                 
                 # Extract timepoint
                 timepoint = frame_data.get('timepoint', 0)
+                
+                # Ensure timepoint exists in our tracking list (do this in main thread)
+                if timepoint not in self.available_timepoints:
+                    with self.zarr_lock:
+                        if timepoint not in self.available_timepoints:
+                            self.available_timepoints.append(timepoint)
+                            self.available_timepoints.sort()
+                            self._update_timepoint_metadata()
                 
                 # Process in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
@@ -765,6 +842,14 @@ class ZarrCanvas:
                 
                 # Extract timepoint
                 timepoint = frame_data.get('timepoint', 0)
+                
+                # Ensure timepoint exists in our tracking list
+                if timepoint not in self.available_timepoints:
+                    with self.zarr_lock:
+                        if timepoint not in self.available_timepoints:
+                            self.available_timepoints.append(timepoint)
+                            self.available_timepoints.sort()
+                            self._update_timepoint_metadata()
                 
                 # Process in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
@@ -834,6 +919,15 @@ class ZarrCanvas:
                 return None
                 
             zarr_array = self.zarr_arrays[scale]
+            
+            # Check if timepoint exists in zarr array (it might not if we're reading before writing)
+            if timepoint >= zarr_array.shape[0]:
+                logger.warning(f"Timepoint {timepoint} not yet written to zarr array (shape: {zarr_array.shape})")
+                # Return zeros of the expected size
+                scale_factor = 4 ** scale
+                width_px = int(width_mm * 1000 / (self.pixel_size_xy_um * scale_factor))
+                height_px = int(height_mm * 1000 / (self.pixel_size_xy_um * scale_factor))
+                return np.zeros((height_px, width_px), dtype=zarr_array.dtype)
             
             # Double-check zarr array dimensions
             if channel_idx >= zarr_array.shape[1]:

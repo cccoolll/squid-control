@@ -3324,6 +3324,9 @@ class Microscope:
                 
                 # Clear the reference
                 self.squidController.zarr_canvas = None
+
+                # initialize the zarr canvas again
+                self.squidController._initialize_empty_canvas()
                 
                 logger.info("Stitching canvas reset successfully")
                 return {
