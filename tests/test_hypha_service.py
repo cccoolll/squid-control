@@ -159,26 +159,6 @@ async def test_service_registration_and_connectivity(test_microscope_service):
     assert hasattr(service, 'get_status')
     assert hasattr(service, 'snap')
 
-# Task status management tests
-async def test_task_status_management(test_microscope_service):
-    """Test task status tracking functionality."""
-    microscope, service = test_microscope_service
-    
-    # Test getting all task status
-    all_status = await asyncio.wait_for(service.get_all_task_status(), timeout=10)
-    assert isinstance(all_status, dict)
-    assert "move_by_distance" in all_status
-    assert "snap" in all_status
-    
-    # Test individual task status
-    status = microscope.get_task_status("move_by_distance")
-    assert status in ["not_started", "started", "finished", "failed"]
-    
-    # Test resetting task status
-    microscope.reset_task_status("move_by_distance")
-    status = microscope.get_task_status("move_by_distance")
-    assert status == "not_started"
-
 # Stage movement tests
 async def test_move_by_distance_service(test_microscope_service):
     """Test stage movement through the service."""

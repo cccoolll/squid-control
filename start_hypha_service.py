@@ -1903,7 +1903,7 @@ class Microscope:
             "get_all_task_status": self.get_all_task_status,
             #"reset_task_status": self.reset_task_status,
             "reset_all_task_status": self.reset_all_task_status,
-            #"adjust_video_frame": self.adjust_video_frame,
+            "adjust_video_frame": self.adjust_video_frame,
             "start_video_buffering": self.start_video_buffering_api,
             "stop_video_buffering": self.stop_video_buffering_api,
             "get_video_buffering_status": self.get_video_buffering_status,
