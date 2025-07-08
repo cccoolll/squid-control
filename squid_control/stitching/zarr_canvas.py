@@ -92,8 +92,8 @@ class ZarrCanvas:
         # Lock for thread-safe zarr access
         self.zarr_lock = threading.RLock()
         
-        # Queue for frame stitching
-        self.stitch_queue = asyncio.Queue(maxsize=100)
+        # Queue for frame stitching - increased size for stable FPS with non-blocking puts
+        self.stitch_queue = asyncio.Queue(maxsize=500)
         self.stitching_task = None
         self.is_stitching = False
         
