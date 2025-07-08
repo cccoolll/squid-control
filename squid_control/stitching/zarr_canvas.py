@@ -37,7 +37,8 @@ class ZarrCanvas:
     """
     
     def __init__(self, base_path: str, pixel_size_xy_um: float, stage_limits: Dict[str, float], 
-                 channels: List[str] = None, chunk_size: int = 256, rotation_angle_deg: float = 0.0):
+                 channels: List[str] = None, chunk_size: int = 256, rotation_angle_deg: float = 0.0,
+                 initial_timepoints: int = 20, timepoint_expansion_chunk: int = 10):
         """
         Initialize the Zarr canvas.
         
@@ -48,6 +49,8 @@ class ZarrCanvas:
             channels: List of channel names (human-readable names)
             chunk_size: Size of chunks in pixels (default 256)
             rotation_angle_deg: Rotation angle for stitching in degrees (positive=clockwise, negative=counterclockwise)
+            initial_timepoints: Number of timepoints to pre-allocate during initialization (default 20)
+            timepoint_expansion_chunk: Number of timepoints to add when expansion is needed (default 10)
         """
         self.base_path = Path(base_path)
         self.pixel_size_xy_um = pixel_size_xy_um
@@ -56,6 +59,10 @@ class ZarrCanvas:
         self.chunk_size = chunk_size
         self.rotation_angle_deg = rotation_angle_deg
         self.zarr_path = self.base_path / "live_stitching.zarr"
+        
+        # Timepoint allocation strategy
+        self.initial_timepoints = max(1, initial_timepoints)  # Ensure at least 1
+        self.timepoint_expansion_chunk = max(1, timepoint_expansion_chunk)  # Ensure at least 1
         
         # Create channel mapping: channel_name -> local_zarr_index
         self.channel_to_zarr_index = {channel_name: idx for idx, channel_name in enumerate(self.channels)}
@@ -85,8 +92,8 @@ class ZarrCanvas:
         # Lock for thread-safe zarr access
         self.zarr_lock = threading.RLock()
         
-        # Queue for frame stitching
-        self.stitch_queue = asyncio.Queue(maxsize=100)
+        # Queue for frame stitching - increased size for stable FPS with non-blocking puts
+        self.stitch_queue = asyncio.Queue(maxsize=500)
         self.stitching_task = None
         self.is_stitching = False
         
@@ -94,7 +101,8 @@ class ZarrCanvas:
         self.available_timepoints = [0]  # Start with timepoint 0 as a list
         
         logger.info(f"ZarrCanvas initialized: {self.canvas_width_px}x{self.canvas_height_px} px, "
-                    f"{self.num_scales} scales, chunk_size={chunk_size}")
+                    f"{self.num_scales} scales, chunk_size={chunk_size}, "
+                    f"initial_timepoints={self.initial_timepoints}, expansion_chunk={self.timepoint_expansion_chunk}")
     
     def _calculate_num_scales(self) -> int:
         """Calculate the number of pyramid levels needed."""
@@ -181,6 +189,44 @@ class ZarrCanvas:
             
             # Update metadata
             self._update_timepoint_metadata()
+    
+    def pre_allocate_timepoints(self, max_timepoint: int):
+        """
+        Pre-allocate zarr arrays to accommodate timepoints up to max_timepoint.
+        This is useful for time-lapse experiments where you know the number of timepoints in advance.
+        Performing this operation early avoids delays during scanning.
+        
+        Args:
+            max_timepoint: The maximum timepoint index to pre-allocate for
+            
+        Raises:
+            ValueError: If max_timepoint is negative
+        """
+        if max_timepoint < 0:
+            raise ValueError(f"Max timepoint must be non-negative, got {max_timepoint}")
+        
+        with self.zarr_lock:
+            logger.info(f"Pre-allocating zarr arrays for timepoints up to {max_timepoint}")
+            start_time = time.time()
+            
+            # Check if any arrays need expansion
+            expansion_needed = False
+            for scale in range(self.num_scales):
+                if scale in self.zarr_arrays:
+                    zarr_array = self.zarr_arrays[scale]
+                    if max_timepoint >= zarr_array.shape[0]:
+                        expansion_needed = True
+                        break
+            
+            if not expansion_needed:
+                logger.info(f"Zarr arrays already accommodate timepoint {max_timepoint}")
+                return
+                
+            # Expand all arrays to accommodate max_timepoint
+            self._ensure_timepoint_exists_in_zarr(max_timepoint)
+            
+            elapsed_time = time.time() - start_time
+            logger.info(f"Pre-allocation completed in {elapsed_time:.2f} seconds")
     
     def remove_timepoint(self, timepoint: int):
         """
@@ -271,6 +317,7 @@ class ZarrCanvas:
         """
         Ensure that the zarr arrays are large enough to accommodate the given timepoint.
         This is called lazily only when actually writing data.
+        Expands arrays in chunks to minimize expensive resize operations.
         
         Args:
             timepoint: The timepoint index that needs to exist in zarr
@@ -281,14 +328,24 @@ class ZarrCanvas:
                 zarr_array = self.zarr_arrays[scale]
                 current_shape = zarr_array.shape
                 
-                # If the timepoint is beyond current array size, resize
+                # If the timepoint is beyond current array size, resize in chunks
                 if timepoint >= current_shape[0]:
-                    new_shape = list(current_shape)
-                    new_shape[0] = timepoint + 1
+                    # Calculate new size with expansion chunk strategy
+                    # Round up to the next chunk boundary to minimize future resizes
+                    required_size = timepoint + 1
+                    chunks_needed = (required_size + self.timepoint_expansion_chunk - 1) // self.timepoint_expansion_chunk
+                    new_timepoint_count = chunks_needed * self.timepoint_expansion_chunk
                     
-                    # Resize the array
-                    logger.debug(f"Lazy resizing scale {scale} from shape {current_shape} to {new_shape}")
+                    new_shape = list(current_shape)
+                    new_shape[0] = new_timepoint_count
+                    
+                    # Resize the array with chunk-based expansion
+                    logger.info(f"Expanding zarr scale {scale} from {current_shape[0]} to {new_timepoint_count} timepoints "
+                               f"(required: {required_size}, chunk_size: {self.timepoint_expansion_chunk})")
+                    start_time = time.time()
                     zarr_array.resize(new_shape)
+                    elapsed_time = time.time() - start_time
+                    logger.info(f"Zarr scale {scale} resize completed in {elapsed_time:.2f} seconds")
     
     def _update_timepoint_metadata(self):
         """Update the OME-Zarr metadata to reflect current timepoints."""
@@ -408,10 +465,10 @@ class ZarrCanvas:
                 height = self.canvas_height_px // scale_factor
                 
                 # Create the array (T, C, Z, Y, X)
-                # Start with 1 timepoint, will be expanded as needed
+                # Pre-allocate initial timepoints to avoid frequent resizing
                 array = root.create_dataset(
                     str(scale),
-                    shape=(1, len(self.channels), 1, height, width),
+                    shape=(self.initial_timepoints, len(self.channels), 1, height, width),
                     chunks=(1, 1, 1, self.chunk_size, self.chunk_size),
                     dtype='uint8',
                     fill_value=0,

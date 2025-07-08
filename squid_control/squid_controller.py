@@ -1249,13 +1249,15 @@ class SquidController:
             'z_positive': 6     # mm
         }
         
-        # Create the canvas with ALL available channels
+        # Create the canvas with ALL available channels and optimized timepoint allocation
         self.zarr_canvas = ZarrCanvas(
             base_path=zarr_path,
             pixel_size_xy_um=self.pixel_size_xy,
             stage_limits=stage_limits,
             channels=all_channels,  # Use all channels from ChannelMapper
-            rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
+            rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG,
+            initial_timepoints=20,  # Pre-allocate 20 timepoints to avoid resize delays
+            timepoint_expansion_chunk=10  # Expand by 10 timepoints when needed
         )
         
         # Initialize the OME-Zarr structure
@@ -1351,13 +1353,15 @@ class SquidController:
             default_channels = ChannelMapper.get_all_human_names()
             logging.info(f'Initializing zarr canvas with channels from ChannelMapper: {len(default_channels)} channels')
             
-            # Create the canvas
+            # Create the canvas with optimized timepoint allocation
             self.zarr_canvas = ZarrCanvas(
                 base_path=zarr_path,
                 pixel_size_xy_um=self.pixel_size_xy,
                 stage_limits=stage_limits,
                 channels=default_channels,
-                rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
+                rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG,
+                initial_timepoints=20,  # Pre-allocate 20 timepoints to avoid resize delays
+                timepoint_expansion_chunk=10  # Expand by 10 timepoints when needed
             )
             
             # Initialize the OME-Zarr structure
@@ -1684,7 +1688,8 @@ class SquidController:
                         if frame_acquired:
                             stripe_frames += 1
                             total_frames += 1
-                        last_frame_time = current_time
+                        # Update timing AFTER frame acquisition completes, not before
+                        last_frame_time = time.time()
                     
                     # Small delay to prevent overwhelming the system
                     await asyncio.sleep(0.001)
@@ -1737,7 +1742,8 @@ class SquidController:
                 frame_acquired = await self._acquire_and_process_frame(zarr_channel_idx)
                 if frame_acquired:
                     frames_acquired += 1
-                last_frame_time = current_time
+                # Update timing AFTER frame acquisition completes, not before
+                last_frame_time = time.time()
             
             # Small delay to prevent overwhelming the system
             await asyncio.sleep(0.001)
@@ -1826,17 +1832,23 @@ class SquidController:
         """
         Add image to zarr canvas for quick scan - only updates scales 1-5 (skips scale 0).
         The input image should already be at scale1 resolution (1/4 of original).
+        Non-blocking queue operation to avoid FPS timing delays.
         """
-        await self.zarr_canvas.stitch_queue.put({
-            'image': image.copy(),
-            'x_mm': x_mm,
-            'y_mm': y_mm,
-            'channel_idx': channel_idx,
-            'z_idx': z_idx,
-            'timepoint': timepoint,
-            'timestamp': time.time(),
-            'quick_scan': True  # Flag to indicate this is for quick scan (scales 1-5 only)
-        })
+        try:
+            # Use put_nowait to avoid blocking the timing loop
+            self.zarr_canvas.stitch_queue.put_nowait({
+                'image': image.copy(),
+                'x_mm': x_mm,
+                'y_mm': y_mm,
+                'channel_idx': channel_idx,
+                'z_idx': z_idx,
+                'timepoint': timepoint,
+                'timestamp': time.time(),
+                'quick_scan': True  # Flag to indicate this is for quick scan (scales 1-5 only)
+            })
+        except asyncio.QueueFull:
+            # If queue is full, log warning but don't block timing
+            logging.warning(f"Zarr stitching queue full, dropping frame at ({x_mm:.2f}, {y_mm:.2f})")
 
     # Add new methods for timepoint management
     def get_zarr_timepoints(self):
@@ -1890,6 +1902,38 @@ class SquidController:
         
         self.zarr_canvas.clear_timepoint(timepoint)
         logging.info(f"Cleared data from timepoint {timepoint} in zarr canvas")
+    
+    def pre_allocate_timepoints(self, max_timepoint):
+        """
+        Pre-allocate zarr arrays to accommodate timepoints up to max_timepoint.
+        This is useful for time-lapse experiments where you know the number of timepoints in advance.
+        Performing this operation early avoids delays during scanning.
+        
+        Args:
+            max_timepoint (int): The maximum timepoint index to pre-allocate for
+            
+        Returns:
+            dict: Status information about the pre-allocation
+        """
+        if not hasattr(self, 'zarr_canvas') or self.zarr_canvas is None:
+            raise RuntimeError("Zarr canvas not initialized")
+        
+        try:
+            start_time = time.time()
+            self.zarr_canvas.pre_allocate_timepoints(max_timepoint)
+            elapsed_time = time.time() - start_time
+            
+            logging.info(f"Pre-allocated zarr arrays for timepoints up to {max_timepoint} in {elapsed_time:.2f} seconds")
+            
+            return {
+                "success": True,
+                "message": f"Pre-allocated timepoints up to {max_timepoint}",
+                "max_timepoint": max_timepoint,
+                "elapsed_time_seconds": elapsed_time
+            }
+        except Exception as e:
+            logging.error(f"Failed to pre-allocate timepoints: {e}")
+            raise e
 
 async def try_microscope():
     squid_controller = SquidController(is_simulation=False)
