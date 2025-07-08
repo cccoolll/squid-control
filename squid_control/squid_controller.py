@@ -1694,7 +1694,8 @@ class SquidController:
                         if frame_acquired:
                             stripe_frames += 1
                             total_frames += 1
-                        last_frame_time = current_time
+                        # Update timing AFTER frame acquisition completes, not before
+                        last_frame_time = time.time()
                     
                     # Small delay to prevent overwhelming the system
                     await asyncio.sleep(0.001)
@@ -1747,7 +1748,8 @@ class SquidController:
                 frame_acquired = await self._acquire_and_process_frame(zarr_channel_idx)
                 if frame_acquired:
                     frames_acquired += 1
-                last_frame_time = current_time
+                # Update timing AFTER frame acquisition completes, not before
+                last_frame_time = time.time()
             
             # Small delay to prevent overwhelming the system
             await asyncio.sleep(0.001)
@@ -1836,17 +1838,23 @@ class SquidController:
         """
         Add image to zarr canvas for quick scan - only updates scales 1-5 (skips scale 0).
         The input image should already be at scale1 resolution (1/4 of original).
+        Non-blocking queue operation to avoid FPS timing delays.
         """
-        await self.zarr_canvas.stitch_queue.put({
-            'image': image.copy(),
-            'x_mm': x_mm,
-            'y_mm': y_mm,
-            'channel_idx': channel_idx,
-            'z_idx': z_idx,
-            'timepoint': timepoint,
-            'timestamp': time.time(),
-            'quick_scan': True  # Flag to indicate this is for quick scan (scales 1-5 only)
-        })
+        try:
+            # Use put_nowait to avoid blocking the timing loop
+            self.zarr_canvas.stitch_queue.put_nowait({
+                'image': image.copy(),
+                'x_mm': x_mm,
+                'y_mm': y_mm,
+                'channel_idx': channel_idx,
+                'z_idx': z_idx,
+                'timepoint': timepoint,
+                'timestamp': time.time(),
+                'quick_scan': True  # Flag to indicate this is for quick scan (scales 1-5 only)
+            })
+        except asyncio.QueueFull:
+            # If queue is full, log warning but don't block timing
+            logging.warning(f"Zarr stitching queue full, dropping frame at ({x_mm:.2f}, {y_mm:.2f})")
 
     # Add new methods for timepoint management
     def get_zarr_timepoints(self):
