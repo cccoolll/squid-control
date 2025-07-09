@@ -21,6 +21,7 @@ from collections import deque
 import zarr
 import time
 import json
+import uuid
 
 dotenv.load_dotenv()  
 ENV_FILE = dotenv.find_dotenv()  
@@ -579,7 +580,7 @@ class ZarrImageManager:
             self.server_url = server_url.rstrip('/') # Ensure no trailing slash
 
             self.artifact_manager_server = await connect_to_server({
-                "name": "zarr-image-client",
+                "client_id": f"zarr-image-client-for-squid-{uuid.uuid4()}",
                 "server_url": server_url,
             })
             

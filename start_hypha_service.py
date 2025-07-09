@@ -42,7 +42,7 @@ dotenv.load_dotenv()
 ENV_FILE = dotenv.find_dotenv()  
 if ENV_FILE:  
     dotenv.load_dotenv(ENV_FILE)  
-
+import uuid
 # Set up logging
 
 def setup_logging(log_file="squid_control_service.log", max_bytes=100000, backup_count=3):
@@ -441,6 +441,7 @@ class Microscope:
                     logger.warning("Chatbot token not found, skipping chatbot health check")
                 else:
                     chatbot_server = await connect_to_server({
+                        "client_id": f"squid-chatbot-{self.service_id}-{uuid.uuid4()}",
                         "server_url": chatbot_server_url, 
                         "token": chatbot_token,
                         "ping_interval": None
@@ -2075,12 +2076,12 @@ class Microscope:
     async def connect_to_similarity_search_service(self):
         if self.is_local:
             similarity_search_server = await connect_to_server(
-                {"server_url": "http://192.168.2.1:9527", "token": os.environ.get("REEF_LOCAL_TOKEN"), "workspace": os.environ.get("REEF_LOCAL_WORKSPACE"), "ping_interval": None}
+                {"client_id": f"similarity-search-{self.service_id}-{uuid.uuid4()}", "server_url": "http://192.168.2.1:9527", "token": os.environ.get("REEF_LOCAL_TOKEN"), "workspace": os.environ.get("REEF_LOCAL_WORKSPACE"), "ping_interval": None}
             )
             similarity_search_svc = await similarity_search_server.get_service("image-text-similarity-search")
         else:
             similarity_search_server = await connect_to_server(
-                {"server_url": "https://hypha.aicell.io", "token": os.environ.get("AGENT_LENS_WORKSPACE_TOKEN"), "workspace": "agent-lens", "ping_interval": None}
+                {"client_id": f"similarity-search-{self.service_id}-{uuid.uuid4()}", "server_url": "https://hypha.aicell.io", "token": os.environ.get("AGENT_LENS_WORKSPACE_TOKEN"), "workspace": "agent-lens", "ping_interval": None}
             )
             similarity_search_svc = await similarity_search_server.get_service("image-text-similarity-search")
         return similarity_search_svc
@@ -2098,7 +2099,7 @@ class Microscope:
             remote_workspace = "squid-control"
             
         remote_server = await connect_to_server(
-                {"server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": remote_workspace, "ping_interval": None}
+                {"client_id": f"squid-remote-server-{self.service_id}-{uuid.uuid4()}", "server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": remote_workspace, "ping_interval": None}
             )
         if not self.service_id:
             raise ValueError("MICROSCOPE_SERVICE_ID is not set in the environment variables.")
@@ -2106,7 +2107,7 @@ class Microscope:
             token = os.environ.get("REEF_LOCAL_TOKEN")
             workspace = os.environ.get("REEF_LOCAL_WORKSPACE")
             server = await connect_to_server(
-                {"server_url": self.server_url, "token": token, "workspace": workspace, "ping_interval": None}
+                {"client_id": f"squid-local-server-{self.service_id}-{uuid.uuid4()}", "server_url": self.server_url, "token": token, "workspace": workspace, "ping_interval": None}
             )
         else:
             # Determine workspace and token based on simulation mode
@@ -2124,7 +2125,7 @@ class Microscope:
                 workspace = "squid-control"
             
             server = await connect_to_server(
-                {"server_url": self.server_url, "token": token, "workspace": workspace,  "ping_interval": None}
+                {"client_id": f"squid-control-server-{self.service_id}-{uuid.uuid4()}", "server_url": self.server_url, "token": token, "workspace": workspace,  "ping_interval": None}
             )
         
         self.server = server
@@ -2176,7 +2177,7 @@ class Microscope:
             chatbot_token= os.environ.get("WORKSPACE_TOKEN_CHATBOT")
         except:
             chatbot_token = await login({"server_url": chatbot_server_url})
-        chatbot_server = await connect_to_server({"server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
+        chatbot_server = await connect_to_server({"client_id": f"squid-chatbot-{self.service_id}-{uuid.uuid4()}", "server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
         await self.start_chatbot_service(chatbot_server, chatbot_id)
         webrtc_id = f"video-track-{self.service_id}"
         if not self.is_local: # only start webrtc service in remote mode
