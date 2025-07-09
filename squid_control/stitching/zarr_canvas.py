@@ -1222,3 +1222,396 @@ class ZarrCanvas:
                 "error": str(e),
                 "export_feasible": False
             } 
+
+class ZarrCanvasManager:
+    """
+    Manages multiple OME-Zarr canvas filesets for organizing scanning data.
+    Each fileset is a separate OME-Zarr structure that can contain multiple timepoints.
+    
+    Example usage:
+        manager = ZarrCanvasManager(base_path="/tmp/zarr", pixel_size_xy_um=0.33, stage_limits={...})
+        
+        # Create a new fileset
+        manager.create_fileset("experiment_1", channels=['BF LED matrix full'])
+        
+        # Add images to a specific fileset
+        canvas = manager.get_fileset("experiment_1")
+        canvas.add_image_sync(image, x_mm=10.0, y_mm=15.0, channel_idx=0)
+        
+        # List all filesets
+        filesets = manager.list_filesets()
+    """
+    
+    def __init__(self, base_path: str, pixel_size_xy_um: float, stage_limits: Dict[str, float], 
+                 chunk_size: int = 256, rotation_angle_deg: float = 0.0,
+                 initial_timepoints: int = 20, timepoint_expansion_chunk: int = 10):
+        """
+        Initialize the Zarr canvas manager.
+        
+        Args:
+            base_path: Base directory for zarr storage
+            pixel_size_xy_um: Pixel size in micrometers
+            stage_limits: Dictionary with x_positive, x_negative, y_positive, y_negative in mm
+            chunk_size: Size of chunks in pixels (default 256)
+            rotation_angle_deg: Rotation angle for stitching in degrees
+            initial_timepoints: Number of timepoints to pre-allocate during initialization
+            timepoint_expansion_chunk: Number of timepoints to add when expansion is needed
+        """
+        self.base_path = Path(base_path)
+        self.pixel_size_xy_um = pixel_size_xy_um
+        self.stage_limits = stage_limits
+        self.chunk_size = chunk_size
+        self.rotation_angle_deg = rotation_angle_deg
+        self.initial_timepoints = initial_timepoints
+        self.timepoint_expansion_chunk = timepoint_expansion_chunk
+        
+        # Dictionary to store active ZarrCanvas instances
+        self._filesets: Dict[str, ZarrCanvas] = {}
+        self._active_fileset = None
+        
+        # Create base directory if it doesn't exist
+        self.base_path.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"ZarrCanvasManager initialized at {self.base_path}")
+    
+    def create_fileset(self, fileset_name: str, channels: List[str] = None, 
+                       overwrite: bool = False) -> ZarrCanvas:
+        """
+        Create a new OME-Zarr fileset.
+        
+        Args:
+            fileset_name: Name of the fileset (will be used as directory name)
+            channels: List of channel names for this fileset
+            overwrite: Whether to overwrite existing fileset
+            
+        Returns:
+            ZarrCanvas: The created canvas instance
+            
+        Raises:
+            ValueError: If fileset already exists and overwrite=False
+        """
+        if not fileset_name:
+            raise ValueError("Fileset name cannot be empty")
+        
+        # Sanitize fileset name for filesystem
+        safe_name = "".join(c for c in fileset_name if c.isalnum() or c in ('-', '_', '.')).strip()
+        if not safe_name:
+            raise ValueError("Fileset name must contain at least one alphanumeric character")
+        
+        fileset_path = self.base_path / safe_name
+        
+        # Check if fileset already exists
+        if fileset_name in self._filesets:
+            if not overwrite:
+                raise ValueError(f"Fileset '{fileset_name}' already exists. Use overwrite=True to replace it.")
+            else:
+                # Close and remove existing fileset
+                self.remove_fileset(fileset_name)
+        
+        # Check if directory already exists
+        zarr_path = fileset_path / "live_stitching.zarr"
+        if zarr_path.exists() and not overwrite:
+            raise ValueError(f"Fileset directory '{fileset_path}' already exists. Use overwrite=True to replace it.")
+        
+        # Remove existing directory if overwrite is True
+        if zarr_path.exists() and overwrite:
+            import shutil
+            shutil.rmtree(zarr_path)
+            logger.info(f"Removed existing fileset directory: {zarr_path}")
+        
+        # Use default channels if none provided
+        if channels is None:
+            # Import ChannelMapper here to avoid circular imports
+            try:
+                from squid_control.control.config import ChannelMapper
+                channels = ChannelMapper.get_all_human_names()
+            except ImportError:
+                channels = ['BF LED matrix full']  # Fallback
+        
+        # Create new ZarrCanvas instance
+        canvas = ZarrCanvas(
+            base_path=str(fileset_path),
+            pixel_size_xy_um=self.pixel_size_xy_um,
+            stage_limits=self.stage_limits,
+            channels=channels,
+            chunk_size=self.chunk_size,
+            rotation_angle_deg=self.rotation_angle_deg,
+            initial_timepoints=self.initial_timepoints,
+            timepoint_expansion_chunk=self.timepoint_expansion_chunk
+        )
+        
+        # Initialize the canvas
+        canvas.initialize_canvas()
+        
+        # Store in filesets dictionary
+        self._filesets[fileset_name] = canvas
+        
+        # Set as active fileset if it's the first one
+        if self._active_fileset is None:
+            self._active_fileset = fileset_name
+        
+        logger.info(f"Created fileset '{fileset_name}' with {len(channels)} channels at {fileset_path}")
+        return canvas
+    
+    def list_filesets(self) -> List[Dict[str, any]]:
+        """
+        List all available filesets with their metadata.
+        
+        Returns:
+            List of dictionaries containing fileset information
+        """
+        filesets = []
+        
+        # Scan base directory for existing zarr directories
+        if self.base_path.exists():
+            for item in self.base_path.iterdir():
+                if item.is_dir():
+                    zarr_path = item / "live_stitching.zarr"
+                    if zarr_path.exists():
+                        fileset_name = item.name
+                        
+                        # Get metadata if canvas is loaded
+                        if fileset_name in self._filesets:
+                            canvas = self._filesets[fileset_name]
+                            channels = canvas.channels
+                            num_timepoints = len(canvas.get_available_timepoints())
+                            is_active = (fileset_name == self._active_fileset)
+                            canvas_size = {
+                                'width_px': canvas.canvas_width_px,
+                                'height_px': canvas.canvas_height_px
+                            }
+                        else:
+                            # Try to read metadata from zarr file
+                            try:
+                                store = zarr.DirectoryStore(str(zarr_path))
+                                root = zarr.open_group(store=store, mode='r')
+                                
+                                # Get channels from metadata
+                                omero_channels = root.attrs.get('omero', {}).get('channels', [])
+                                channels = [ch.get('label', f'Channel_{i}') for i, ch in enumerate(omero_channels)]
+                                
+                                # Get timepoints from custom metadata
+                                squid_canvas = root.attrs.get('squid_canvas', {})
+                                num_timepoints = squid_canvas.get('num_timepoints', 'unknown')
+                                
+                                # Get canvas dimensions
+                                multiscales = root.attrs.get('multiscales', [{}])[0]
+                                datasets = multiscales.get('datasets', [])
+                                if datasets and '0' in root:
+                                    shape = root['0'].shape
+                                    canvas_size = {
+                                        'width_px': shape[-1] if len(shape) >= 2 else 'unknown',
+                                        'height_px': shape[-2] if len(shape) >= 2 else 'unknown'
+                                    }
+                                else:
+                                    canvas_size = {'width_px': 'unknown', 'height_px': 'unknown'}
+                                
+                                is_active = False
+                                
+                            except Exception as e:
+                                logger.warning(f"Could not read metadata for fileset '{fileset_name}': {e}")
+                                channels = ['unknown']
+                                num_timepoints = 'unknown'
+                                is_active = False
+                                canvas_size = {'width_px': 'unknown', 'height_px': 'unknown'}
+                        
+                        # Get file size
+                        try:
+                            total_size = sum(f.stat().st_size for f in zarr_path.rglob('*') if f.is_file())
+                            size_mb = total_size / (1024 * 1024)
+                        except Exception:
+                            size_mb = 'unknown'
+                        
+                        # Get creation time
+                        try:
+                            creation_time = datetime.fromtimestamp(zarr_path.stat().st_ctime)
+                            creation_time_str = creation_time.strftime("%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            creation_time_str = 'unknown'
+                        
+                        filesets.append({
+                            'name': fileset_name,
+                            'path': str(item),
+                            'channels': channels,
+                            'num_channels': len(channels) if isinstance(channels, list) else 'unknown',
+                            'num_timepoints': num_timepoints,
+                            'size_mb': size_mb,
+                            'created': creation_time_str,
+                            'is_active': is_active,
+                            'is_loaded': fileset_name in self._filesets,
+                            'canvas_size': canvas_size
+                        })
+        
+        # Sort by creation time (newest first)
+        filesets.sort(key=lambda x: x['created'], reverse=True)
+        return filesets
+    
+    def remove_fileset(self, fileset_name: str, delete_files: bool = True) -> bool:
+        """
+        Remove a fileset.
+        
+        Args:
+            fileset_name: Name of the fileset to remove
+            delete_files: Whether to delete the zarr files from disk
+            
+        Returns:
+            bool: True if successfully removed
+            
+        Raises:
+            ValueError: If fileset doesn't exist
+        """
+        # Check if fileset exists in memory
+        if fileset_name not in self._filesets:
+            # Check if it exists on disk
+            fileset_path = self.base_path / fileset_name
+            zarr_path = fileset_path / "live_stitching.zarr"
+            if not zarr_path.exists():
+                raise ValueError(f"Fileset '{fileset_name}' does not exist")
+        
+        # Close canvas if it's loaded
+        if fileset_name in self._filesets:
+            canvas = self._filesets[fileset_name]
+            canvas.close()
+            del self._filesets[fileset_name]
+            logger.info(f"Closed and removed fileset '{fileset_name}' from memory")
+        
+        # Reset active fileset if it was the one being removed
+        if self._active_fileset == fileset_name:
+            remaining_filesets = list(self._filesets.keys())
+            self._active_fileset = remaining_filesets[0] if remaining_filesets else None
+        
+        # Delete files if requested
+        if delete_files:
+            fileset_path = self.base_path / fileset_name
+            if fileset_path.exists():
+                import shutil
+                shutil.rmtree(fileset_path)
+                logger.info(f"Deleted fileset directory: {fileset_path}")
+        
+        return True
+    
+    def get_fileset(self, fileset_name: str) -> ZarrCanvas:
+        """
+        Get a specific fileset canvas, loading it if necessary.
+        
+        Args:
+            fileset_name: Name of the fileset
+            
+        Returns:
+            ZarrCanvas: The canvas instance
+            
+        Raises:
+            ValueError: If fileset doesn't exist
+        """
+        # Return if already loaded
+        if fileset_name in self._filesets:
+            return self._filesets[fileset_name]
+        
+        # Try to load from disk
+        fileset_path = self.base_path / fileset_name
+        zarr_path = fileset_path / "live_stitching.zarr"
+        
+        if not zarr_path.exists():
+            raise ValueError(f"Fileset '{fileset_name}' does not exist at {fileset_path}")
+        
+        # Load existing zarr canvas
+        try:
+            # Read metadata to get channels
+            store = zarr.DirectoryStore(str(zarr_path))
+            root = zarr.open_group(store=store, mode='r')
+            
+            # Get channels from metadata
+            squid_canvas = root.attrs.get('squid_canvas', {})
+            channels = list(squid_canvas.get('zarr_index_mapping', {}).values())
+            
+            if not channels:
+                # Fallback: get from omero metadata
+                omero_channels = root.attrs.get('omero', {}).get('channels', [])
+                channels = [ch.get('label', f'Channel_{i}') for i, ch in enumerate(omero_channels)]
+            
+            # Create canvas instance
+            canvas = ZarrCanvas(
+                base_path=str(fileset_path),
+                pixel_size_xy_um=self.pixel_size_xy_um,
+                stage_limits=self.stage_limits,
+                channels=channels,
+                chunk_size=self.chunk_size,
+                rotation_angle_deg=self.rotation_angle_deg,
+                initial_timepoints=self.initial_timepoints,
+                timepoint_expansion_chunk=self.timepoint_expansion_chunk
+            )
+            
+            # Load existing zarr arrays instead of initializing new ones
+            canvas.zarr_path = zarr_path
+            canvas.zarr_root = root
+            canvas.zarr_arrays = {}
+            
+            # Load existing arrays
+            for scale in range(canvas.num_scales):
+                if str(scale) in root:
+                    canvas.zarr_arrays[scale] = root[str(scale)]
+            
+            # Load available timepoints from metadata
+            available_timepoints = squid_canvas.get('available_timepoints', [0])
+            canvas.available_timepoints = available_timepoints
+            
+            # Store in filesets dictionary
+            self._filesets[fileset_name] = canvas
+            
+            logger.info(f"Loaded existing fileset '{fileset_name}' with {len(channels)} channels")
+            return canvas
+            
+        except Exception as e:
+            logger.error(f"Failed to load fileset '{fileset_name}': {e}")
+            raise ValueError(f"Could not load fileset '{fileset_name}': {e}")
+    
+    def get_active_fileset(self) -> Optional[ZarrCanvas]:
+        """
+        Get the currently active fileset canvas.
+        
+        Returns:
+            ZarrCanvas or None: The active canvas instance
+        """
+        if self._active_fileset is None:
+            return None
+        return self.get_fileset(self._active_fileset)
+    
+    def set_active_fileset(self, fileset_name: str) -> ZarrCanvas:
+        """
+        Set the active fileset.
+        
+        Args:
+            fileset_name: Name of the fileset to make active
+            
+        Returns:
+            ZarrCanvas: The active canvas instance
+            
+        Raises:
+            ValueError: If fileset doesn't exist
+        """
+        canvas = self.get_fileset(fileset_name)  # This will raise if fileset doesn't exist
+        self._active_fileset = fileset_name
+        logger.info(f"Set active fileset to '{fileset_name}'")
+        return canvas
+    
+    def get_active_fileset_name(self) -> Optional[str]:
+        """
+        Get the name of the currently active fileset.
+        
+        Returns:
+            str or None: The active fileset name
+        """
+        return self._active_fileset
+    
+    def close_all(self):
+        """Close all loaded filesets."""
+        for name, canvas in self._filesets.items():
+            try:
+                canvas.close()
+                logger.info(f"Closed fileset '{name}'")
+            except Exception as e:
+                logger.error(f"Error closing fileset '{name}': {e}")
+        
+        self._filesets.clear()
+        self._active_fileset = None
+        logger.info("All filesets closed") 

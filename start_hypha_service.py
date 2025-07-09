@@ -3116,6 +3116,7 @@ class Microscope:
                                        do_reflection_af: bool = Field(False, description="Whether to perform reflection-based autofocus"),
                                        action_ID: str = Field('normal_scan_stitching', description="Identifier for this scan"),
                                        timepoint: int = Field(0, description="Timepoint index for this scan (default 0)"),
+                                       fileset_name: str = Field('default', description="Name of the fileset to scan into"),
                                        context=None):
         """
         Perform a normal scan with live stitching to OME-Zarr canvas.
@@ -3167,7 +3168,8 @@ class Microscope:
                 do_contrast_autofocus=do_contrast_autofocus,
                 do_reflection_af=do_reflection_af,
                 action_ID=action_ID,
-                timepoint=timepoint
+                timepoint=timepoint,
+                fileset_name=fileset_name
             )
             
             return {
@@ -3195,8 +3197,9 @@ class Microscope:
                            height_mm: float = Field(5.0, description="Height of region in millimeters"),
                            scale_level: int = Field(0, description="Scale level (0=full resolution, 1=1/4, 2=1/16, etc)"),
                            channel_name: str = Field('BF LED matrix full', description="Name of channel to retrieve"),
-                           timepoint: int = Field(0, description="Timepoint index to retrieve (default 0)"),
                            output_format: str = Field('base64', description="Output format: 'base64' or 'array'"),
+                           timepoint: int = Field(0, description="Timepoint index to retrieve (default 0)"),
+                           fileset_name: str = Field('default', description="Name of the fileset to retrieve from"),
                            context=None):
         """
         Get a region from the stitched canvas.
@@ -3235,7 +3238,8 @@ class Microscope:
                     height_mm=height_mm,
                     scale_level=scale_level,
                     channel_name=channel_name,
-                    timepoint=timepoint
+                    timepoint=timepoint,
+                    fileset_name=fileset_name
                 )
             except RuntimeError as e:
                 if "Zarr canvas not initialized" in str(e):
@@ -3298,43 +3302,24 @@ class Microscope:
             raise e
     
     @schema_function(skip_self=True)
-    def reset_stitching_canvas(self, context=None):
+    def reset_stitching_canvas(self, fileset_name: str = Field('default', description="Name of the fileset to reset"), context=None):
         """
         Reset the stitching canvas, clearing all stored images.
         
-        This will delete the existing zarr canvas and prepare for a new scan.
+        This will delete the existing zarr fileset and prepare for a new scan.
+        
+        Args:
+            fileset_name: Name of the fileset to reset
         
         Returns:
             dict: Status of the reset operation
         """
         try:
-            if hasattr(self.squidController, 'zarr_canvas') and self.squidController.zarr_canvas is not None:
-                # Close the existing canvas
-                self.squidController.zarr_canvas.close()
-                
-                # Delete the zarr directory
-                import shutil
-                if self.squidController.zarr_canvas.zarr_path.exists():
-                    shutil.rmtree(self.squidController.zarr_canvas.zarr_path)
-                
-                # Clear the reference
-                self.squidController.zarr_canvas = None
-
-                # initialize the zarr canvas again
-                self.squidController._initialize_empty_canvas()
-                
-                logger.info("Stitching canvas reset successfully")
-                return {
-                    "success": True,
-                    "message": "Stitching canvas has been reset"
-                }
-            else:
-                return {
-                    "success": True,
-                    "message": "No stitching canvas to reset"
-                }
+            result = self.squidController.reset_stitching_canvas(fileset_name)
+            logger.info(f"Stitching canvas reset for fileset '{fileset_name}': {result['message']}")
+            return result
         except Exception as e:
-            logger.error(f"Failed to reset stitching canvas: {e}")
+            logger.error(f"Failed to reset stitching canvas for fileset '{fileset_name}': {e}")
             raise e
 
     @schema_function(skip_self=True)
@@ -3358,6 +3343,7 @@ class Microscope:
                 - do_contrast_autofocus: Whether to perform contrast-based autofocus at each well
                 - do_reflection_af: Whether to perform reflection-based autofocus at each well
                 - timepoint: Timepoint index for this scan (default 0)
+                - fileset_name: Name of the fileset to scan into (default 'default')
             
         Returns:
             dict: Status of the scan with performance metrics
@@ -3379,6 +3365,7 @@ class Microscope:
                 do_contrast_autofocus = scan_parameters.get('do_contrast_autofocus', False)
                 do_reflection_af = scan_parameters.get('do_reflection_af', False)
                 timepoint = scan_parameters.get('timepoint', 0)
+                fileset_name = scan_parameters.get('fileset_name', 'default')
             else:
                 # It's an ObjectProxy or similar object with attributes
                 wellplate_type = getattr(scan_parameters, 'wellplate_type', '96')
@@ -3393,6 +3380,7 @@ class Microscope:
                 do_contrast_autofocus = getattr(scan_parameters, 'do_contrast_autofocus', False)
                 do_reflection_af = getattr(scan_parameters, 'do_reflection_af', False)
                 timepoint = getattr(scan_parameters, 'timepoint', 0)
+                fileset_name = getattr(scan_parameters, 'fileset_name', 'default')
             
             # Validate exposure time early
             if exposure_time > 30:
@@ -3428,7 +3416,8 @@ class Microscope:
                 velocity_scan_mm_per_s=velocity_scan_mm_per_s,
                 do_contrast_autofocus=do_contrast_autofocus,
                 do_reflection_af=do_reflection_af,
-                timepoint=timepoint
+                timepoint=timepoint,
+                fileset_name=fileset_name
             )
             
             # Calculate performance metrics
