@@ -1,4 +1,5 @@
 import os 
+import shutil
 # app specific libraries
 import squid_control.control.core_reef as core
 import squid_control.control.microcontroller as microcontroller
@@ -355,8 +356,13 @@ class SquidController:
         self.sample_data_alias = "agent-lens/20250506-scan-time-lapse-2025-05-06_17-56-38"
         self.get_pixel_size()
 
-        # Initialize empty zarr canvas for stitching
-        self._initialize_empty_canvas()
+        # Initialize multi-fileset tracking
+        self.zarr_canvases = {}  # Dictionary to track multiple zarr canvases by name
+        self.active_canvas_name = None  # Track the currently active canvas
+        self.zarr_canvas = None  # Keep for backward compatibility - will point to active canvas
+        
+        # Clean up ZARR_PATH directory on startup
+        self._cleanup_zarr_directory()
 
     def get_pixel_size(self):
         """Calculate pixel size based on imaging parameters."""
@@ -1076,7 +1082,7 @@ class SquidController:
     async def normal_scan_with_stitching(self, start_x_mm, start_y_mm, Nx, Ny, dx_mm, dy_mm, 
                                         illumination_settings=None, do_contrast_autofocus=False, 
                                         do_reflection_af=False, action_ID='normal_scan_stitching',
-                                        timepoint=0):
+                                        timepoint=0, fileset_name=None):
         """
         Normal scan with live stitching to OME-Zarr canvas.
         
@@ -1092,6 +1098,7 @@ class SquidController:
             do_reflection_af (bool): Whether to perform reflection-based autofocus
             action_ID (str): Identifier for this scan
             timepoint (int): Timepoint index for the scan (default 0)
+            fileset_name (str, optional): Name of the zarr fileset to use. If None, uses active fileset
         """
         if illumination_settings is None:
             illumination_settings = [
@@ -1099,17 +1106,26 @@ class SquidController:
             ]
         
         
+        # Switch to specified fileset if provided
+        if fileset_name:
+            self.set_active_zarr_fileset(fileset_name)
+        
+        # Ensure we have an active canvas
+        canvas = self.get_active_canvas()
+        if canvas is None:
+            raise RuntimeError("No zarr canvas available for stitching")
+        
         # Validate that all requested channels are available in the zarr canvas
         channel_map = ChannelMapper.get_human_to_id_map()
         for settings in illumination_settings:
             channel_name = settings['channel']
-            if channel_name not in self.zarr_canvas.channel_to_zarr_index:
+            if channel_name not in canvas.channel_to_zarr_index:
                 logging.error(f"Requested channel '{channel_name}' not found in zarr canvas!")
-                logging.error(f"Available channels: {list(self.zarr_canvas.channel_to_zarr_index.keys())}")
+                logging.error(f"Available channels: {list(canvas.channel_to_zarr_index.keys())}")
                 raise ValueError(f"Channel '{channel_name}' not available in zarr canvas")
         
         # Start the background stitching task
-        await self.zarr_canvas.start_stitching()
+        await canvas.start_stitching()
         
         try:
             self.is_busy = True
@@ -1176,7 +1192,7 @@ class SquidController:
                         
                         # Get local zarr channel index (0, 1, 2, etc.)
                         try:
-                            zarr_channel_idx = self.zarr_canvas.get_zarr_channel_index(channel_name)
+                            zarr_channel_idx = canvas.get_zarr_channel_index(channel_name)
                         except ValueError as e:
                             logging.error(f"Channel mapping error: {e}")
                             continue
@@ -1193,7 +1209,7 @@ class SquidController:
                                 image = image.astype(np.uint8)
                         
                         # Add to stitching queue using actual stage position and local zarr index
-                        await self.zarr_canvas.add_image_async(
+                        await canvas.add_image_async(
                             image, actual_x_mm, actual_y_mm, 
                             channel_idx=zarr_channel_idx,  # Use local zarr index
                             z_idx=0,
@@ -1219,7 +1235,7 @@ class SquidController:
         finally:
             self.is_busy = False
             # Stop the stitching task (this will now process all remaining images)
-            await self.zarr_canvas.stop_stitching()
+            await canvas.stop_stitching()
     
     async def _initialize_zarr_canvas(self):
         """Initialize the Zarr canvas for stitching with all available channels."""
@@ -1308,8 +1324,12 @@ class SquidController:
             await self._initialize_zarr_canvas()
             logging.info("Zarr canvas pre-initialized with all available channels")
 
-    def _initialize_empty_canvas(self):
-        """Initialize an empty zarr canvas when the microscope starts up."""
+    def _initialize_empty_canvas(self, fileset_name="default"):
+        """Initialize an empty zarr canvas with a specific name.
+        
+        Args:
+            fileset_name: Name for the zarr fileset (default: "default")
+        """
         try:
             # Get the base path from environment variable
             zarr_path = os.getenv('ZARR_PATH', '/tmp/zarr_canvas')
@@ -1319,8 +1339,8 @@ class SquidController:
             # Check if the directory is writable
             zarr_dir = Path(zarr_path)
             
-            # The actual zarr file will be at zarr_path/live_stitching.zarr
-            actual_zarr_path = zarr_dir / "live_stitching.zarr"
+            # The actual zarr file will be at zarr_path/{fileset_name}.zarr
+            actual_zarr_path = zarr_dir / f"{fileset_name}.zarr"
             logging.info(f'Zarr file will be created at: {actual_zarr_path}')
             
             if not zarr_dir.exists():
@@ -1354,35 +1374,40 @@ class SquidController:
             logging.info(f'Initializing zarr canvas with channels from ChannelMapper: {len(default_channels)} channels')
             
             # Create the canvas with optimized timepoint allocation
-            self.zarr_canvas = ZarrCanvas(
+            canvas = ZarrCanvas(
                 base_path=zarr_path,
                 pixel_size_xy_um=self.pixel_size_xy,
                 stage_limits=stage_limits,
                 channels=default_channels,
                 rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG,
                 initial_timepoints=20,  # Pre-allocate 20 timepoints to avoid resize delays
-                timepoint_expansion_chunk=10  # Expand by 10 timepoints when needed
+                timepoint_expansion_chunk=10,  # Expand by 10 timepoints when needed
+                fileset_name=fileset_name  # Use the provided fileset name
             )
             
             # Initialize the OME-Zarr structure
-            self.zarr_canvas.initialize_canvas()
-            logging.info(f'Successfully initialized Zarr canvas at {actual_zarr_path} with ALL channels: {len(default_channels)} channels')
+            canvas.initialize_canvas()
+            
+            # Add to tracking dictionary and set as active
+            self.zarr_canvases[fileset_name] = canvas
+            self.active_canvas_name = fileset_name
+            self.zarr_canvas = canvas  # For backward compatibility
+            
+            logging.info(f'Successfully initialized Zarr canvas "{fileset_name}" at {canvas.zarr_path} with ALL channels: {len(default_channels)} channels')
             logging.info(f'Available channels: {default_channels}')
             logging.info(f'Pixel size: {self.pixel_size_xy:.3f} µm')
             
         except Exception as e:
-            logging.error(f'Failed to initialize zarr canvas with all channels: {e}')
-            logging.info('Canvas will be initialized later when needed for scanning')
+            logging.error(f'Failed to initialize zarr canvas "{fileset_name}": {e}')
             logging.info('To fix this, either:')
             logging.info('  1. Set ZARR_PATH environment variable to a writable directory (e.g., export ZARR_PATH=/tmp/zarr_canvas)')
             logging.info('  2. Create the directory and set proper permissions')
             logging.info('  3. Run the application with appropriate permissions')
-            self.zarr_canvas = None
 
     async def quick_scan_with_stitching(self, wellplate_type='96', exposure_time=5, intensity=50, 
                                       fps_target=10, action_ID='quick_scan_stitching',
                                       n_stripes=4, stripe_width_mm=4.0, dy_mm=0.9, velocity_scan_mm_per_s=7.0,
-                                      do_contrast_autofocus=False, do_reflection_af=False, timepoint=0):
+                                      do_contrast_autofocus=False, do_reflection_af=False, timepoint=0, fileset_name=None):
         """
         Quick scan with live stitching to OME-Zarr canvas - brightfield only.
         Uses 4-stripe × 4 mm scanning pattern with serpentine motion per well.
@@ -1400,6 +1425,7 @@ class SquidController:
             do_contrast_autofocus (bool): Whether to perform contrast-based autofocus
             do_reflection_af (bool): Whether to perform reflection-based autofocus
             timepoint (int): Timepoint index for the scan (default 0)
+            fileset_name (str, optional): Name of the zarr fileset to use. If None, uses active fileset
         """
         
         # Validate exposure time
@@ -1435,18 +1461,27 @@ class SquidController:
             wellplate_type = '96'
         
         
+        # Switch to specified fileset if provided
+        if fileset_name:
+            self.set_active_zarr_fileset(fileset_name)
+        
+        # Ensure we have an active canvas
+        canvas = self.get_active_canvas()
+        if canvas is None:
+            raise RuntimeError("No zarr canvas available for stitching")
+        
         # Validate that brightfield channel is available in the zarr canvas
         channel_name = 'BF LED matrix full'
-        if channel_name not in self.zarr_canvas.channel_to_zarr_index:
+        if channel_name not in canvas.channel_to_zarr_index:
             logging.error(f"Brightfield channel '{channel_name}' not found in zarr canvas!")
-            logging.error(f"Available channels: {list(self.zarr_canvas.channel_to_zarr_index.keys())}")
+            logging.error(f"Available channels: {list(canvas.channel_to_zarr_index.keys())}")
             raise ValueError(f"Channel '{channel_name}' not available in zarr canvas")
         
         # Get zarr channel index for brightfield
-        zarr_channel_idx = self.zarr_canvas.get_zarr_channel_index(channel_name)
+        zarr_channel_idx = canvas.get_zarr_channel_index(channel_name)
         
         # Start the background stitching task
-        await self.zarr_canvas.start_stitching()
+        await canvas.start_stitching()
         
         # Store original velocity settings for restoration
         original_velocity_result = self.set_stage_velocity()
@@ -1849,6 +1884,212 @@ class SquidController:
         except asyncio.QueueFull:
             # If queue is full, log warning but don't block timing
             logging.warning(f"Zarr stitching queue full, dropping frame at ({x_mm:.2f}, {y_mm:.2f})")
+
+    def _cleanup_zarr_directory(self):
+        # Clean up ZARR_PATH directory on startup
+        zarr_path = os.getenv('ZARR_PATH', '/tmp/zarr_canvas')
+        if os.path.exists(zarr_path):
+            try:
+                shutil.rmtree(zarr_path)
+                logging.info(f'Cleaned up ZARR_PATH directory: {zarr_path}')
+            except Exception as e:
+                logging.error(f'Failed to clean up ZARR_PATH directory: {e}')
+
+    def create_zarr_fileset(self, fileset_name):
+        """Create a new zarr fileset with the given name.
+        
+        Args:
+            fileset_name: Name for the new fileset
+            
+        Returns:
+            dict: Information about the created fileset
+            
+        Raises:
+            ValueError: If fileset already exists
+            RuntimeError: If fileset creation fails
+        """
+        if fileset_name in self.zarr_canvases:
+            raise ValueError(f"Fileset '{fileset_name}' already exists")
+        
+        try:
+            # Initialize new canvas
+            self._initialize_empty_canvas(fileset_name)
+            
+            return {
+                "fileset_name": fileset_name,
+                "is_active": self.active_canvas_name == fileset_name,
+                "message": f"Created new zarr fileset '{fileset_name}'"
+            }
+            
+        except Exception as e:
+            logging.error(f"Failed to create zarr fileset '{fileset_name}': {e}")
+            raise RuntimeError(f"Failed to create fileset '{fileset_name}': {str(e)}") from e
+    
+    def list_zarr_filesets(self):
+        """List all available zarr filesets.
+        
+        Returns:
+            dict: List of filesets and their status
+            
+        Raises:
+            RuntimeError: If listing filesets fails
+        """
+        try:
+            zarr_path = os.getenv('ZARR_PATH', '/tmp/zarr_canvas')
+            zarr_dir = Path(zarr_path)
+            
+            filesets = []
+            
+            # List from memory (already loaded)
+            for name, canvas in self.zarr_canvases.items():
+                filesets.append({
+                    "name": name,
+                    "is_active": name == self.active_canvas_name,
+                    "loaded": True,
+                    "path": str(canvas.zarr_path),
+                    "channels": len(canvas.channels),
+                    "timepoints": len(canvas.available_timepoints)
+                })
+            
+            # Also check disk for any zarr directories not in memory
+            if zarr_dir.exists():
+                for item in zarr_dir.iterdir():
+                    if item.is_dir() and item.suffix == '.zarr':
+                        name = item.stem
+                        if name not in self.zarr_canvases:
+                            filesets.append({
+                                "name": name,
+                                "is_active": False,
+                                "loaded": False,
+                                "path": str(item)
+                            })
+            
+            return {
+                "filesets": filesets,
+                "active_fileset": self.active_canvas_name,
+                "total_count": len(filesets)
+            }
+            
+        except Exception as e:
+            logging.error(f"Failed to list zarr filesets: {e}")
+            raise RuntimeError(f"Failed to list filesets: {str(e)}") from e
+    
+    def set_active_zarr_fileset(self, fileset_name):
+        """Set the active zarr fileset for operations.
+        
+        Args:
+            fileset_name: Name of the fileset to activate
+            
+        Returns:
+            dict: Information about the activated fileset
+            
+        Raises:
+            ValueError: If fileset not found
+            RuntimeError: If activation fails
+        """
+        try:
+            # Check if already active
+            if self.active_canvas_name == fileset_name:
+                return {
+                    "message": f"Fileset '{fileset_name}' is already active",
+                    "fileset_name": fileset_name,
+                    "was_already_active": True
+                }
+            
+            # Check if fileset exists in memory
+            if fileset_name in self.zarr_canvases:
+                self.active_canvas_name = fileset_name
+                self.zarr_canvas = self.zarr_canvases[fileset_name]
+                return {
+                    "message": f"Activated fileset '{fileset_name}'",
+                    "fileset_name": fileset_name,
+                    "was_already_active": False
+                }
+            
+            # Try to load from disk
+            zarr_path = os.getenv('ZARR_PATH', '/tmp/zarr_canvas')
+            zarr_dir = Path(zarr_path)
+            fileset_path = zarr_dir / f"{fileset_name}.zarr"
+            
+            if fileset_path.exists():
+                # Load the existing zarr canvas
+                # Note: This is a simplified loading - you might need to properly restore the canvas
+                self._initialize_empty_canvas(fileset_name)
+                return {
+                    "message": f"Loaded and activated fileset '{fileset_name}' from disk",
+                    "fileset_name": fileset_name,
+                    "was_already_active": False
+                }
+            
+            raise ValueError(f"Fileset '{fileset_name}' not found")
+            
+        except Exception as e:
+            logging.error(f"Failed to set active zarr fileset '{fileset_name}': {e}")
+            if isinstance(e, ValueError):
+                raise
+            raise RuntimeError(f"Failed to activate fileset '{fileset_name}': {str(e)}") from e
+    
+    def remove_zarr_fileset(self, fileset_name):
+        """Remove a zarr fileset.
+        
+        Args:
+            fileset_name: Name of the fileset to remove
+            
+        Returns:
+            dict: Information about the removed fileset
+            
+        Raises:
+            ValueError: If trying to remove active fileset
+            RuntimeError: If removal fails
+        """
+        # Can't remove active fileset
+        if self.active_canvas_name == fileset_name:
+            raise ValueError(f"Cannot remove active fileset '{fileset_name}'. Please switch to another fileset first.")
+        
+        try:
+            removed_from_memory = False
+            removed_from_disk = False
+            
+            # Remove from memory if loaded
+            if fileset_name in self.zarr_canvases:
+                canvas = self.zarr_canvases[fileset_name]
+                canvas.close()
+                del self.zarr_canvases[fileset_name]
+                removed_from_memory = True
+            
+            # Remove from disk
+            zarr_path = os.getenv('ZARR_PATH', '/tmp/zarr_canvas')
+            zarr_dir = Path(zarr_path)
+            fileset_path = zarr_dir / f"{fileset_name}.zarr"
+            
+            if fileset_path.exists():
+                shutil.rmtree(fileset_path)
+                logging.info(f"Removed zarr fileset '{fileset_name}' from disk")
+                removed_from_disk = True
+            
+            return {
+                "message": f"Removed zarr fileset '{fileset_name}'",
+                "fileset_name": fileset_name,
+                "removed_from_memory": removed_from_memory,
+                "removed_from_disk": removed_from_disk
+            }
+            
+        except Exception as e:
+            logging.error(f"Failed to remove zarr fileset '{fileset_name}': {e}")
+            raise RuntimeError(f"Failed to remove fileset '{fileset_name}': {str(e)}") from e
+    
+    def get_active_canvas(self):
+        """Get the currently active zarr canvas, ensuring one exists.
+        
+        Returns:
+            ZarrCanvas: The active canvas, or None if no canvas is active
+        """
+        if self.zarr_canvas is None and self.active_canvas_name is None:
+            # No canvas exists, create default one
+            logging.info("No active zarr canvas, creating default fileset")
+            self.create_zarr_fileset("default")
+        
+        return self.zarr_canvas
 
 async def try_microscope():
     squid_controller = SquidController(is_simulation=False)
