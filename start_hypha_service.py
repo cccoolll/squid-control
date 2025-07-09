@@ -2098,7 +2098,7 @@ class Microscope:
             remote_workspace = "squid-control"
             
         remote_server = await connect_to_server(
-                {"client_id": f"squid-server-{self.service_id}", "server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": remote_workspace, "ping_interval": None}
+                {"client_id": f"squid-remote-server-{self.service_id}", "server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": remote_workspace, "ping_interval": None}
             )
         if not self.service_id:
             raise ValueError("MICROSCOPE_SERVICE_ID is not set in the environment variables.")
@@ -2106,7 +2106,7 @@ class Microscope:
             token = os.environ.get("REEF_LOCAL_TOKEN")
             workspace = os.environ.get("REEF_LOCAL_WORKSPACE")
             server = await connect_to_server(
-                {"client_id": f"squid-server-{self.service_id}", "server_url": self.server_url, "token": token, "workspace": workspace, "ping_interval": None}
+                {"client_id": f"squid-local-server-{self.service_id}", "server_url": self.server_url, "token": token, "workspace": workspace, "ping_interval": None}
             )
         else:
             # Determine workspace and token based on simulation mode
@@ -2124,7 +2124,7 @@ class Microscope:
                 workspace = "squid-control"
             
             server = await connect_to_server(
-                {"client_id": f"squid-server-{self.service_id}", "server_url": self.server_url, "token": token, "workspace": workspace,  "ping_interval": None}
+                {"client_id": f"squid-control-server-{self.service_id}", "server_url": self.server_url, "token": token, "workspace": workspace,  "ping_interval": None}
             )
         
         self.server = server
