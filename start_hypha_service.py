@@ -1920,12 +1920,7 @@ class Microscope:
             "get_zarr_upload_info": self.get_zarr_upload_info,
             "check_zarr_dataset_name": self.check_zarr_dataset_name,
             "upload_zarr_dataset": self.upload_zarr_dataset,
-            "list_microscope_datasets": self.list_microscope_datasets,
-            # Timepoint management functions
-            "get_zarr_timepoints": self.get_zarr_timepoints,
-            "create_zarr_timepoint": self.create_zarr_timepoint,
-            "remove_zarr_timepoint": self.remove_zarr_timepoint,
-            "clear_zarr_timepoint": self.clear_zarr_timepoint,
+            "list_microscope_datasets": self.list_microscope_datasets
         }
         
         # Only register get_canvas_chunk when not in local mode
@@ -3523,122 +3518,6 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Failed to stop scan and stitching: {e}")
-            raise e
-
-    @schema_function(skip_self=True)
-    async def get_zarr_timepoints(self, context=None):
-        """
-        Get the available timepoints of the current zarr canvas.
-        
-        Returns:
-            dict: Information about timepoints in the zarr canvas
-        """
-        try:
-            # Check if zarr canvas exists
-            if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
-                raise Exception("No zarr canvas available. Start a scanning operation first to create data.")
-            
-            # Get available timepoints from zarr canvas
-            timepoints = self.squidController.get_zarr_timepoints()
-            
-            return {
-                "success": True,
-                "available_timepoints": timepoints,
-                "num_timepoints": len(timepoints)
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting zarr timepoints: {e}")
-            raise e
-
-    @schema_function(skip_self=True)
-    async def create_zarr_timepoint(self, timepoint: int = Field(..., description="Timepoint index to create"), context=None):
-        """
-        Create a new timepoint in the current zarr canvas.
-        
-        Args:
-            timepoint: Timepoint index to create (must be non-negative integer)
-            
-        Returns:
-            dict: Status of the timepoint creation
-        """
-        try:
-            # Check if zarr canvas exists
-            if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
-                raise Exception("No zarr canvas available. Start a scanning operation first to create data.")
-            
-            # Create new timepoint in zarr canvas
-            self.squidController.create_zarr_timepoint(timepoint)
-            
-            logger.info(f"Timepoint {timepoint} created successfully")
-            return {
-                "success": True,
-                "message": f"Timepoint {timepoint} created successfully",
-                "timepoint": timepoint
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to create zarr timepoint: {e}")
-            raise e
-
-    @schema_function(skip_self=True)
-    async def remove_zarr_timepoint(self, timepoint: int = Field(..., description="Timepoint index to remove"), context=None):
-        """
-        Remove a timepoint from the current zarr canvas.
-        
-        Args:
-            timepoint: Timepoint index to remove
-            
-        Returns:
-            dict: Status of the timepoint removal
-        """
-        try:
-            # Check if zarr canvas exists
-            if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
-                raise Exception("No zarr canvas available. Start a scanning operation first to create data.")
-            
-            # Remove timepoint from zarr canvas
-            self.squidController.remove_zarr_timepoint(timepoint)
-            
-            logger.info(f"Timepoint {timepoint} removed successfully")
-            return {
-                "success": True,
-                "message": f"Timepoint {timepoint} removed successfully",
-                "timepoint": timepoint
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to remove zarr timepoint: {e}")
-            raise e
-
-    @schema_function(skip_self=True)
-    async def clear_zarr_timepoint(self, timepoint: int = Field(..., description="Timepoint index to clear"), context=None):
-        """
-        Clear the data of a specific timepoint in the current zarr canvas.
-        
-        Args:
-            timepoint: Timepoint index to clear
-            
-        Returns:
-            dict: Status of the timepoint clearing
-        """
-        try:
-            # Check if zarr canvas exists
-            if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
-                raise Exception("No zarr canvas available. Start a scanning operation first to create data.")
-            
-            # Clear timepoint data in zarr canvas
-            self.squidController.clear_zarr_timepoint(timepoint)
-            
-            logger.info(f"Timepoint {timepoint} cleared successfully")
-            return {
-                "success": True,
-                "message": f"Timepoint {timepoint} cleared successfully",
-                "timepoint": timepoint
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to clear zarr timepoint: {e}")
             raise e
 
 # Define a signal handler for graceful shutdown
