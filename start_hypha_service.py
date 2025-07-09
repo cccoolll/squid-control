@@ -445,15 +445,15 @@ class Microscope:
             # Check if chatbot_server is initialized before trying to use it
             if self.chatbot_server is None:
                 return {"status": "ok", "message": "Chatbot server not yet initialized - service may still be starting up"}
+            else:
+                chatbot_server_url = "https://chat.bioimage.io"
+                chatbot_service = await self.chatbot_server.get_service(chatbot_id)
+                if chatbot_service is None:
+                    raise RuntimeError("Chatbot service not found")
             
-            chatbot_server_url = "https://chat.bioimage.io"
-            chatbot_service = await self.chatbot_server.get_service(chatbot_id)
-            if chatbot_service is None:
-                raise RuntimeError("Chatbot service not found")
-            
-            ping_result = await chatbot_service.ping()
-            if ping_result != "pong":
-                raise RuntimeError("Chatbot service not responding correctly")
+                ping_result = await chatbot_service.ping()
+                if ping_result != "pong":
+                    raise RuntimeError("Chatbot service not responding correctly")
             
             try:
                 if self.similarity_search_svc is None:
