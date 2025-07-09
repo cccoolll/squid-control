@@ -364,6 +364,7 @@ class Microscope:
         # Server related attributes
         self.chatbot_server = None
         self.server = None
+        self.setup_complete = False  # Track if setup has completed
         
         # Add task status tracking
         self.task_status = {
@@ -426,6 +427,10 @@ class Microscope:
     async def is_service_healthy(self, context=None):
         """Check if all services are healthy"""
         try:
+            # Check if setup is complete before proceeding
+            if not self.setup_complete:
+                raise RuntimeError("Service setup not yet complete - initialization still in progress")
+            
             microscope_svc = await self.server.get_service(self.service_id)
             if microscope_svc is None:
                 raise RuntimeError("Microscope service not found")
@@ -441,11 +446,18 @@ class Microscope:
             
             chatbot_id = f"squid-chatbot-{'simu' if self.is_simulation else 'real'}-{self.service_id}"
             
+            # Check if chatbot_server is initialized before trying to use it
+            if self.chatbot_server is None:
+                return {"status": "ok", "message": "Chatbot server not yet initialized - service may still be starting up"}
+            
             chatbot_server_url = "https://chat.bioimage.io"
             chatbot_service = await self.chatbot_server.get_service(chatbot_id)
+            if chatbot_service is None:
+                raise RuntimeError("Chatbot service not found")
+            
             ping_result = await chatbot_service.ping()
             if ping_result != "pong":
-                raise RuntimeError("Chatbot service not found")
+                raise RuntimeError("Chatbot service not responding correctly")
             
             try:
                 if self.similarity_search_svc is None:
@@ -2150,6 +2162,10 @@ class Microscope:
         webrtc_id = f"video-track-{self.service_id}"
         if not self.is_local: # only start webrtc service in remote mode
             await self.start_webrtc_service(self.server, webrtc_id)
+        
+        # Mark setup as complete
+        self.setup_complete = True
+        logger.info("Microscope service setup completed successfully")
 
 
     async def initialize_zarr_manager(self, camera):
