@@ -1920,7 +1920,12 @@ class Microscope:
             "get_zarr_upload_info": self.get_zarr_upload_info,
             "check_zarr_dataset_name": self.check_zarr_dataset_name,
             "upload_zarr_dataset": self.upload_zarr_dataset,
-            "list_microscope_datasets": self.list_microscope_datasets
+            "list_microscope_datasets": self.list_microscope_datasets,
+            # Zarr fileset management
+            "create_zarr_fileset": self.create_zarr_fileset,
+            "list_zarr_filesets": self.list_zarr_filesets,
+            "remove_zarr_fileset": self.remove_zarr_fileset,
+            "set_active_zarr_fileset": self.set_active_zarr_fileset
         }
         
         # Only register get_canvas_chunk when not in local mode
@@ -3508,6 +3513,154 @@ class Microscope:
         except Exception as e:
             logger.error(f"Failed to stop scan and stitching: {e}")
             raise e
+
+    @schema_function(skip_self=True)
+    def create_zarr_fileset(self, 
+                           fileset_name: str = Field(..., description="Name for the new OME-Zarr fileset"),
+                           channels: List[str] = Field(..., description="List of channel names for the fileset"),
+                           overwrite: bool = Field(False, description="Whether to overwrite existing fileset"),
+                           context=None):
+        """
+        Create a new OME-Zarr fileset for storing microscopy images
+        
+        Args:
+            fileset_name: Name for the new fileset (will be sanitized)
+            channels: List of channel names (e.g., ['BF LED matrix full', 'Fluorescence 488 nm Ex'])
+            overwrite: Whether to overwrite if fileset already exists
+            
+        Returns:
+            dict: Creation status and fileset information
+        """
+        try:
+            user = self.check_permission(context)
+            logger.info(f"User {user} creating zarr fileset: {fileset_name}")
+            
+            # Create the fileset using the controller's zarr manager
+            result = self.squidController.create_zarr_fileset(
+                fileset_name=fileset_name,
+                channels=channels,
+                overwrite=overwrite
+            )
+            
+            if result['success']:
+                logger.info(f"Successfully created zarr fileset: {result['fileset_name']}")
+            else:
+                logger.warning(f"Failed to create zarr fileset: {result.get('error', 'Unknown error')}")
+                
+            return result
+            
+        except Exception as e:
+            error_msg = f"Error creating zarr fileset: {str(e)}"
+            logger.error(error_msg)
+            return {
+                'success': False,
+                'error': error_msg
+            }
+
+    @schema_function(skip_self=True)
+    def list_zarr_filesets(self, context=None):
+        """
+        List all available OME-Zarr filesets with their metadata
+        
+        Returns:
+            dict: List of filesets with metadata including active status, channels, size, creation time
+        """
+        try:
+            user = self.check_permission(context)
+            logger.info(f"User {user} listing zarr filesets")
+            
+            # Get the fileset list from the controller's zarr manager
+            filesets = self.squidController.list_zarr_filesets()
+            
+            logger.info(f"Listed {len(filesets)} zarr filesets")
+            return {
+                'success': True,
+                'filesets': filesets
+            }
+            
+        except Exception as e:
+            error_msg = f"Error listing zarr filesets: {str(e)}"
+            logger.error(error_msg)
+            return {
+                'success': False,
+                'error': error_msg,
+                'filesets': []
+            }
+
+    @schema_function(skip_self=True)
+    def remove_zarr_fileset(self, 
+                           fileset_name: str = Field(..., description="Name of the fileset to remove"),
+                           delete_files: bool = Field(False, description="Whether to delete the actual zarr files on disk"),
+                           context=None):
+        """
+        Remove an OME-Zarr fileset from the system
+        
+        Args:
+            fileset_name: Name of the fileset to remove
+            delete_files: Whether to delete the actual zarr files on disk (default: False)
+            
+        Returns:
+            dict: Removal status
+        """
+        try:
+            user = self.check_permission(context)
+            logger.info(f"User {user} removing zarr fileset: {fileset_name} (delete_files={delete_files})")
+            
+            # Remove the fileset using the controller's zarr manager
+            result = self.squidController.remove_zarr_fileset(
+                fileset_name=fileset_name,
+                delete_files=delete_files
+            )
+            
+            if result['success']:
+                logger.info(f"Successfully removed zarr fileset: {fileset_name}")
+            else:
+                logger.warning(f"Failed to remove zarr fileset: {result.get('error', 'Unknown error')}")
+                
+            return result
+            
+        except Exception as e:
+            error_msg = f"Error removing zarr fileset: {str(e)}"
+            logger.error(error_msg)
+            return {
+                'success': False,
+                'error': error_msg
+            }
+
+    @schema_function(skip_self=True)
+    def set_active_zarr_fileset(self, 
+                               fileset_name: str = Field(..., description="Name of the fileset to set as active"),
+                               context=None):
+        """
+        Set the active OME-Zarr fileset for new operations
+        
+        Args:
+            fileset_name: Name of the fileset to set as active
+            
+        Returns:
+            dict: Operation status and active fileset information
+        """
+        try:
+            user = self.check_permission(context)
+            logger.info(f"User {user} setting active zarr fileset: {fileset_name}")
+            
+            # Set the active fileset using the controller's zarr manager
+            result = self.squidController.set_active_zarr_fileset(fileset_name)
+            
+            if result['success']:
+                logger.info(f"Successfully set active zarr fileset: {fileset_name}")
+            else:
+                logger.warning(f"Failed to set active zarr fileset: {result.get('error', 'Unknown error')}")
+                
+            return result
+            
+        except Exception as e:
+            error_msg = f"Error setting active zarr fileset: {str(e)}"
+            logger.error(error_msg)
+            return {
+                'success': False,
+                'error': error_msg
+            }
 
 # Define a signal handler for graceful shutdown
 def signal_handler(sig, frame):
