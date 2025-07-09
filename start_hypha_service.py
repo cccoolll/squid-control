@@ -1920,7 +1920,12 @@ class Microscope:
             "get_zarr_upload_info": self.get_zarr_upload_info,
             "check_zarr_dataset_name": self.check_zarr_dataset_name,
             "upload_zarr_dataset": self.upload_zarr_dataset,
-            "list_microscope_datasets": self.list_microscope_datasets
+            "list_microscope_datasets": self.list_microscope_datasets,
+            # Zarr fileset management functions
+            "create_zarr_fileset": self.create_zarr_fileset,
+            "list_zarr_filesets": self.list_zarr_filesets,
+            "set_active_zarr_fileset": self.set_active_zarr_fileset,
+            "remove_zarr_fileset": self.remove_zarr_fileset
         }
         
         # Only register get_canvas_chunk when not in local mode
@@ -3095,6 +3100,79 @@ class Microscope:
             
         except Exception as e:
             logger.error(f"Error listing microscope datasets: {e}")
+            raise e
+
+    @schema_function(skip_self=True)
+    def create_zarr_fileset(self, fileset_name: str = Field(..., description="Name for the new zarr fileset"), context=None):
+        """
+        Create a new zarr fileset with the given name.
+        
+        Args:
+            fileset_name: Name for the new fileset
+            
+        Returns:
+            dict: Information about the created fileset
+        """
+        try:
+            result = self.squidController.create_zarr_fileset(fileset_name)
+            logger.info(f"Created zarr fileset: {fileset_name}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to create zarr fileset: {e}")
+            raise e
+
+    @schema_function(skip_self=True)
+    def list_zarr_filesets(self, context=None):
+        """
+        List all available zarr filesets.
+        
+        Returns:
+            dict: List of filesets and their status
+        """
+        try:
+            result = self.squidController.list_zarr_filesets()
+            logger.info(f"Listed zarr filesets: {result['total_count']} found")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to list zarr filesets: {e}")
+            raise e
+
+    @schema_function(skip_self=True)
+    def set_active_zarr_fileset(self, fileset_name: str = Field(..., description="Name of the fileset to activate"), context=None):
+        """
+        Set the active zarr fileset for operations.
+        
+        Args:
+            fileset_name: Name of the fileset to activate
+            
+        Returns:
+            dict: Information about the activated fileset
+        """
+        try:
+            result = self.squidController.set_active_zarr_fileset(fileset_name)
+            logger.info(f"Set active zarr fileset: {fileset_name}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to set active zarr fileset: {e}")
+            raise e
+
+    @schema_function(skip_self=True)
+    def remove_zarr_fileset(self, fileset_name: str = Field(..., description="Name of the fileset to remove"), context=None):
+        """
+        Remove a zarr fileset.
+        
+        Args:
+            fileset_name: Name of the fileset to remove
+            
+        Returns:
+            dict: Information about the removed fileset
+        """
+        try:
+            result = self.squidController.remove_zarr_fileset(fileset_name)
+            logger.info(f"Removed zarr fileset: {fileset_name}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to remove zarr fileset: {e}")
             raise e
 
     def get_microscope_configuration_schema(self, config: GetMicroscopeConfigurationInput, context=None):

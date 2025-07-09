@@ -38,7 +38,7 @@ class ZarrCanvas:
     
     def __init__(self, base_path: str, pixel_size_xy_um: float, stage_limits: Dict[str, float], 
                  channels: List[str] = None, chunk_size: int = 256, rotation_angle_deg: float = 0.0,
-                 initial_timepoints: int = 20, timepoint_expansion_chunk: int = 10):
+                 initial_timepoints: int = 20, timepoint_expansion_chunk: int = 10, fileset_name: str = "live_stitching"):
         """
         Initialize the Zarr canvas.
         
@@ -51,6 +51,7 @@ class ZarrCanvas:
             rotation_angle_deg: Rotation angle for stitching in degrees (positive=clockwise, negative=counterclockwise)
             initial_timepoints: Number of timepoints to pre-allocate during initialization (default 20)
             timepoint_expansion_chunk: Number of timepoints to add when expansion is needed (default 10)
+            fileset_name: Name of the zarr fileset (default 'live_stitching')
         """
         self.base_path = Path(base_path)
         self.pixel_size_xy_um = pixel_size_xy_um
@@ -58,7 +59,8 @@ class ZarrCanvas:
         self.channels = channels or ['BF LED matrix full']
         self.chunk_size = chunk_size
         self.rotation_angle_deg = rotation_angle_deg
-        self.zarr_path = self.base_path / "live_stitching.zarr"
+        self.fileset_name = fileset_name
+        self.zarr_path = self.base_path / f"{fileset_name}.zarr"
         
         # Timepoint allocation strategy
         self.initial_timepoints = max(1, initial_timepoints)  # Ensure at least 1
@@ -433,12 +435,12 @@ class ZarrCanvas:
                         {"name": "x", "type": "space", "unit": "micrometer"}
                     ],
                     "datasets": [],
-                    "name": "live_stitching",
+                    "name": self.fileset_name,
                     "version": "0.4"
                 }],
                 "omero": {
                     "id": 1,
-                    "name": "Squid Microscope Live Stitching",
+                    "name": f"Squid Microscope Live Stitching ({self.fileset_name})",
                     "channels": omero_channels,
                     "rdefs": {
                         "defaultT": 0,
@@ -454,7 +456,8 @@ class ZarrCanvas:
                     "stage_limits": self.stage_limits,
                     "available_timepoints": sorted(self.available_timepoints),
                     "num_timepoints": len(self.available_timepoints),
-                    "version": "1.0"
+                    "version": "1.0",
+                    "fileset_name": self.fileset_name
                 }
             }
             

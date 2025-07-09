@@ -446,7 +446,7 @@ This serial communication system provides the foundation for precise, reliable, 
 ### API Development
 - Follow existing schema patterns
 - Add input validation with Pydantic
-- Implement proper error responses
+- Implement proper error responses using `raise` instead of return JSON for failures
 - Include detailed API documentation
 
 ### GUI Development
