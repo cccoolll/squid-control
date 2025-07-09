@@ -19,26 +19,10 @@ class ZarrCanvas:
     """
     Manages an OME-Zarr canvas for live microscope image stitching.
     Creates and maintains a multi-scale pyramid structure for efficient viewing.
-    
-    Example usage with zarr upload:
-        # Create and initialize canvas
-        canvas = ZarrCanvas(base_path="/tmp/zarr", pixel_size_xy_um=0.33, stage_limits={...})
-        canvas.initialize_canvas()
-        
-        # Add images during scanning
-        canvas.add_image_sync(image, x_mm=10.0, y_mm=15.0, channel_idx=0, timepoint=0)
-        
-        # Check export feasibility
-        export_info = canvas.get_export_info()
-        if export_info["export_feasible"]:
-            # Export for upload to artifact manager
-            zip_content = canvas.export_as_zip()
-            # Use the zip_content with the microscope service upload_zarr_dataset API
     """
     
     def __init__(self, base_path: str, pixel_size_xy_um: float, stage_limits: Dict[str, float], 
-                 channels: List[str] = None, chunk_size: int = 256, rotation_angle_deg: float = 0.0,
-                 initial_timepoints: int = 20, timepoint_expansion_chunk: int = 10):
+                 channels: List[str] = None, chunk_size: int = 256, rotation_angle_deg: float = 0.0):
         """
         Initialize the Zarr canvas.
         
@@ -49,20 +33,14 @@ class ZarrCanvas:
             channels: List of channel names (human-readable names)
             chunk_size: Size of chunks in pixels (default 256)
             rotation_angle_deg: Rotation angle for stitching in degrees (positive=clockwise, negative=counterclockwise)
-            initial_timepoints: Number of timepoints to pre-allocate during initialization (default 20)
-            timepoint_expansion_chunk: Number of timepoints to add when expansion is needed (default 10)
         """
         self.base_path = Path(base_path)
         self.pixel_size_xy_um = pixel_size_xy_um
         self.stage_limits = stage_limits
-        self.channels = channels or ['BF LED matrix full']
+        self.channels = channels or ['BF_LED_matrix_full']
         self.chunk_size = chunk_size
         self.rotation_angle_deg = rotation_angle_deg
         self.zarr_path = self.base_path / "live_stitching.zarr"
-        
-        # Timepoint allocation strategy
-        self.initial_timepoints = max(1, initial_timepoints)  # Ensure at least 1
-        self.timepoint_expansion_chunk = max(1, timepoint_expansion_chunk)  # Ensure at least 1
         
         # Create channel mapping: channel_name -> local_zarr_index
         self.channel_to_zarr_index = {channel_name: idx for idx, channel_name in enumerate(self.channels)}
@@ -92,17 +70,13 @@ class ZarrCanvas:
         # Lock for thread-safe zarr access
         self.zarr_lock = threading.RLock()
         
-        # Queue for frame stitching - increased size for stable FPS with non-blocking puts
-        self.stitch_queue = asyncio.Queue(maxsize=500)
+        # Queue for frame stitching
+        self.stitch_queue = asyncio.Queue(maxsize=100)
         self.stitching_task = None
         self.is_stitching = False
         
-        # Track available timepoints
-        self.available_timepoints = [0]  # Start with timepoint 0 as a list
-        
         logger.info(f"ZarrCanvas initialized: {self.canvas_width_px}x{self.canvas_height_px} px, "
-                    f"{self.num_scales} scales, chunk_size={chunk_size}, "
-                    f"initial_timepoints={self.initial_timepoints}, expansion_chunk={self.timepoint_expansion_chunk}")
+                    f"{self.num_scales} scales, chunk_size={chunk_size}")
     
     def _calculate_num_scales(self) -> int:
         """Calculate the number of pyramid levels needed."""
@@ -151,215 +125,6 @@ class ZarrCanvas:
             raise ValueError(f"Zarr index {zarr_index} not found. Available indices: {list(self.zarr_index_to_channel.keys())}")
         return self.zarr_index_to_channel[zarr_index]
     
-    def get_available_timepoints(self) -> List[int]:
-        """
-        Get a list of available timepoints in the zarr array.
-        
-        Returns:
-            List[int]: Sorted list of available timepoint indices
-        """
-        with self.zarr_lock:
-            return sorted(self.available_timepoints)
-    
-    def create_timepoint(self, timepoint: int):
-        """
-        Create a new timepoint in the zarr array.
-        This is now a lightweight operation that just adds to the available list.
-        Zarr array expansion happens lazily when actually writing data.
-        
-        Args:
-            timepoint: The timepoint index to create
-            
-        Raises:
-            ValueError: If timepoint already exists or is negative
-        """
-        if timepoint < 0:
-            raise ValueError(f"Timepoint must be non-negative, got {timepoint}")
-            
-        with self.zarr_lock:
-            if timepoint in self.available_timepoints:
-                logger.info(f"Timepoint {timepoint} already exists")
-                return
-            
-            logger.info(f"Creating new timepoint {timepoint} (lightweight)")
-            
-            # Simply add to available timepoints - zarr arrays will be expanded when needed
-            self.available_timepoints.append(timepoint)
-            self.available_timepoints.sort()  # Keep sorted for consistency
-            
-            # Update metadata
-            self._update_timepoint_metadata()
-    
-    def pre_allocate_timepoints(self, max_timepoint: int):
-        """
-        Pre-allocate zarr arrays to accommodate timepoints up to max_timepoint.
-        This is useful for time-lapse experiments where you know the number of timepoints in advance.
-        Performing this operation early avoids delays during scanning.
-        
-        Args:
-            max_timepoint: The maximum timepoint index to pre-allocate for
-            
-        Raises:
-            ValueError: If max_timepoint is negative
-        """
-        if max_timepoint < 0:
-            raise ValueError(f"Max timepoint must be non-negative, got {max_timepoint}")
-        
-        with self.zarr_lock:
-            logger.info(f"Pre-allocating zarr arrays for timepoints up to {max_timepoint}")
-            start_time = time.time()
-            
-            # Check if any arrays need expansion
-            expansion_needed = False
-            for scale in range(self.num_scales):
-                if scale in self.zarr_arrays:
-                    zarr_array = self.zarr_arrays[scale]
-                    if max_timepoint >= zarr_array.shape[0]:
-                        expansion_needed = True
-                        break
-            
-            if not expansion_needed:
-                logger.info(f"Zarr arrays already accommodate timepoint {max_timepoint}")
-                return
-                
-            # Expand all arrays to accommodate max_timepoint
-            self._ensure_timepoint_exists_in_zarr(max_timepoint)
-            
-            elapsed_time = time.time() - start_time
-            logger.info(f"Pre-allocation completed in {elapsed_time:.2f} seconds")
-    
-    def remove_timepoint(self, timepoint: int):
-        """
-        Remove a timepoint from the zarr array by deleting its chunk files.
-        
-        Args:
-            timepoint: The timepoint index to remove
-            
-        Raises:
-            ValueError: If timepoint doesn't exist or is the last remaining timepoint
-        """
-        with self.zarr_lock:
-            if timepoint not in self.available_timepoints:
-                raise ValueError(f"Timepoint {timepoint} does not exist")
-            
-            if len(self.available_timepoints) == 1:
-                raise ValueError("Cannot remove the last timepoint")
-            
-            logger.info(f"Removing timepoint {timepoint} and deleting chunk files")
-            
-            # Delete chunk files for this timepoint
-            self._delete_timepoint_chunks(timepoint)
-            
-            # Remove from available timepoints list
-            self.available_timepoints.remove(timepoint)
-            
-            # Update metadata
-            self._update_timepoint_metadata()
-    
-    def clear_timepoint(self, timepoint: int):
-        """
-        Clear all data from a specific timepoint by deleting its chunk files.
-        
-        Args:
-            timepoint: The timepoint index to clear
-            
-        Raises:
-            ValueError: If timepoint doesn't exist
-        """
-        with self.zarr_lock:
-            if timepoint not in self.available_timepoints:
-                raise ValueError(f"Timepoint {timepoint} does not exist")
-            
-            logger.info(f"Clearing data from timepoint {timepoint} by deleting chunk files")
-            
-            # Delete chunk files for this timepoint
-            self._delete_timepoint_chunks(timepoint)
-    
-    def _delete_timepoint_chunks(self, timepoint: int):
-        """
-        Delete all chunk files for a specific timepoint across all scales.
-        This is much more efficient than zeroing out data.
-        
-        Args:
-            timepoint: The timepoint index to delete chunks for
-        """
-        try:
-            # For each scale, find and delete chunk files containing this timepoint
-            for scale in range(self.num_scales):
-                scale_path = self.zarr_path / str(scale)
-                if not scale_path.exists():
-                    continue
-                
-                # Zarr stores chunks in directories, timepoint is the first dimension
-                # Chunk filename format: "t.c.z.y.x" where t is timepoint
-                deleted_count = 0
-                
-                try:
-                    # Look for chunk files that start with this timepoint
-                    for chunk_file in scale_path.iterdir():
-                        if chunk_file.is_file() and chunk_file.name.startswith(f"{timepoint}."):
-                            try:
-                                chunk_file.unlink()  # Delete the file
-                                deleted_count += 1
-                            except OSError as e:
-                                logger.warning(f"Could not delete chunk file {chunk_file}: {e}")
-                
-                except OSError as e:
-                    logger.warning(f"Could not access scale directory {scale_path}: {e}")
-                
-                if deleted_count > 0:
-                    logger.debug(f"Deleted {deleted_count} chunk files for timepoint {timepoint} at scale {scale}")
-                    
-        except Exception as e:
-            logger.error(f"Error deleting timepoint chunks: {e}")
-    
-    def _ensure_timepoint_exists_in_zarr(self, timepoint: int):
-        """
-        Ensure that the zarr arrays are large enough to accommodate the given timepoint.
-        This is called lazily only when actually writing data.
-        Expands arrays in chunks to minimize expensive resize operations.
-        
-        Args:
-            timepoint: The timepoint index that needs to exist in zarr
-        """
-        # Check if we need to expand any zarr arrays
-        for scale in range(self.num_scales):
-            if scale in self.zarr_arrays:
-                zarr_array = self.zarr_arrays[scale]
-                current_shape = zarr_array.shape
-                
-                # If the timepoint is beyond current array size, resize in chunks
-                if timepoint >= current_shape[0]:
-                    # Calculate new size with expansion chunk strategy
-                    # Round up to the next chunk boundary to minimize future resizes
-                    required_size = timepoint + 1
-                    chunks_needed = (required_size + self.timepoint_expansion_chunk - 1) // self.timepoint_expansion_chunk
-                    new_timepoint_count = chunks_needed * self.timepoint_expansion_chunk
-                    
-                    new_shape = list(current_shape)
-                    new_shape[0] = new_timepoint_count
-                    
-                    # Resize the array with chunk-based expansion
-                    logger.info(f"Expanding zarr scale {scale} from {current_shape[0]} to {new_timepoint_count} timepoints "
-                               f"(required: {required_size}, chunk_size: {self.timepoint_expansion_chunk})")
-                    start_time = time.time()
-                    zarr_array.resize(new_shape)
-                    elapsed_time = time.time() - start_time
-                    logger.info(f"Zarr scale {scale} resize completed in {elapsed_time:.2f} seconds")
-    
-    def _update_timepoint_metadata(self):
-        """Update the OME-Zarr metadata to reflect current timepoints."""
-        if hasattr(self, 'zarr_root'):
-            root = self.zarr_root
-            if 'omero' in root.attrs:
-                if self.available_timepoints:
-                    root.attrs['omero']['rdefs']['defaultT'] = min(self.available_timepoints)
-            
-            # Update custom metadata
-            if 'squid_canvas' in root.attrs:
-                root.attrs['squid_canvas']['available_timepoints'] = sorted(self.available_timepoints)
-                root.attrs['squid_canvas']['num_timepoints'] = len(self.available_timepoints)
-    
     def initialize_canvas(self):
         """Initialize the OME-Zarr structure with proper metadata."""
         logger.info(f"Initializing OME-Zarr canvas at {self.zarr_path}")
@@ -377,7 +142,6 @@ class ZarrCanvas:
             # Create the root group
             store = zarr.DirectoryStore(str(self.zarr_path))
             root = zarr.open_group(store=store, mode='w')
-            self.zarr_root = root  # Store reference for metadata updates
             
             # Import ChannelMapper for better metadata
             from squid_control.control.config import ChannelMapper
@@ -452,8 +216,6 @@ class ZarrCanvas:
                     "rotation_angle_deg": self.rotation_angle_deg,
                     "pixel_size_xy_um": self.pixel_size_xy_um,
                     "stage_limits": self.stage_limits,
-                    "available_timepoints": sorted(self.available_timepoints),
-                    "num_timepoints": len(self.available_timepoints),
                     "version": "1.0"
                 }
             }
@@ -465,10 +227,10 @@ class ZarrCanvas:
                 height = self.canvas_height_px // scale_factor
                 
                 # Create the array (T, C, Z, Y, X)
-                # Pre-allocate initial timepoints to avoid frequent resizing
+                # For now: 1 timepoint, len(channels) channels, 1 z-slice
                 array = root.create_dataset(
                     str(scale),
-                    shape=(self.initial_timepoints, len(self.channels), 1, height, width),
+                    shape=(1, len(self.channels), 1, height, width),
                     chunks=(1, 1, 1, self.chunk_size, self.chunk_size),
                     dtype='uint8',
                     fill_value=0,
@@ -552,24 +314,25 @@ class ZarrCanvas:
         
         # Crop to 95% of original size to remove black borders
         crop_factor = 0.96
-        image_size = min(int(height * crop_factor), int(width * crop_factor))
+        new_height = int(height * crop_factor)
+        new_width = int(width * crop_factor)
         
         # Calculate crop bounds (center crop)
-        y_start = (height - image_size) // 2
-        y_end = y_start + image_size
-        x_start = (width - image_size) // 2
-        x_end = x_start + image_size
+        y_start = (height - new_height) // 2
+        y_end = y_start + new_height
+        x_start = (width - new_width) // 2
+        x_end = x_start + new_width
         
         cropped = rotated[y_start:y_end, x_start:x_end]
         
-        logger.debug(f"Rotated image by {self.rotation_angle_deg}° and cropped from {width}x{height} to {image_size}x{image_size}")
+        logger.debug(f"Rotated image by {self.rotation_angle_deg}° and cropped from {width}x{height} to {new_width}x{new_height}")
         
         return cropped
     
     def add_image_sync(self, image: np.ndarray, x_mm: float, y_mm: float, 
-                       channel_idx: int = 0, z_idx: int = 0, timepoint: int = 0):
+                       channel_idx: int = 0, z_idx: int = 0):
         """
-        Synchronously add an image to the canvas at the specified position and timepoint.
+        Synchronously add an image to the canvas at the specified position.
         Updates all pyramid levels.
         
         Args:
@@ -578,7 +341,6 @@ class ZarrCanvas:
             y_mm: Y position in millimeters
             channel_idx: Local zarr channel index (0, 1, 2, etc.)
             z_idx: Z-slice index (default 0)
-            timepoint: Timepoint index (default 0)
         """
         # Validate channel index
         if channel_idx >= len(self.channels):
@@ -589,21 +351,10 @@ class ZarrCanvas:
             logger.error(f"Channel index {channel_idx} cannot be negative")
             return
         
-        # Ensure timepoint exists in our tracking list
-        if timepoint not in self.available_timepoints:
-            with self.zarr_lock:
-                if timepoint not in self.available_timepoints:
-                    self.available_timepoints.append(timepoint)
-                    self.available_timepoints.sort()
-                    self._update_timepoint_metadata()
-        
         # Apply rotation and cropping first
         processed_image = self._rotate_and_crop_image(image)
         
         with self.zarr_lock:
-            # Ensure zarr arrays are sized correctly for this timepoint (lazy expansion)
-            self._ensure_timepoint_exists_in_zarr(timepoint)
-            
             for scale in range(self.num_scales):
                 scale_factor = 4 ** scale
                 
@@ -637,20 +388,20 @@ class ZarrCanvas:
                 img_x_start = max(0, -x_px + scaled_image.shape[1] // 2)
                 img_x_end = img_x_start + (x_end - x_start)
                 
-                # Write to zarr at the specified timepoint
+                # Write to zarr
                 if y_end > y_start and x_end > x_start:
                     try:
-                        zarr_array[timepoint, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
+                        zarr_array[0, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
                             scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
-                        logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx}, timepoint {timepoint}")
+                        logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx}")
                     except IndexError as e:
-                        logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
-                        logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access timepoint {timepoint}")
+                        logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}: {e}")
+                        logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access channel {channel_idx}")
                     except Exception as e:
-                        logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
+                        logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}: {e}")
     
     def add_image_sync_quick(self, image: np.ndarray, x_mm: float, y_mm: float, 
-                           channel_idx: int = 0, z_idx: int = 0, timepoint: int = 0):
+                           channel_idx: int = 0, z_idx: int = 0):
         """
         Synchronously add an image to the canvas for quick scan mode.
         Only updates scales 1-5 (skips scale 0 for performance).
@@ -662,7 +413,6 @@ class ZarrCanvas:
             y_mm: Y position in millimeters
             channel_idx: Local zarr channel index (0, 1, 2, etc.)
             z_idx: Z-slice index (default 0)
-            timepoint: Timepoint index (default 0)
         """
         # Validate channel index
         if channel_idx >= len(self.channels):
@@ -673,22 +423,11 @@ class ZarrCanvas:
             logger.error(f"Channel index {channel_idx} cannot be negative")
             return
         
-        # Ensure timepoint exists in our tracking list
-        if timepoint not in self.available_timepoints:
-            with self.zarr_lock:
-                if timepoint not in self.available_timepoints:
-                    self.available_timepoints.append(timepoint)
-                    self.available_timepoints.sort()
-                    self._update_timepoint_metadata()
-        
         # For quick scan, we skip rotation to reduce computation pressure
         # The image should already be rotated and flipped by the caller
         processed_image = image
         
         with self.zarr_lock:
-            # Ensure zarr arrays are sized correctly for this timepoint (lazy expansion)
-            self._ensure_timepoint_exists_in_zarr(timepoint)
-            
             # Only process scales 1-5 (skip scale 0 for performance)
             for scale in range(1, min(self.num_scales, 6)):  # scales 1-5
                 scale_factor = 4 ** scale
@@ -728,20 +467,20 @@ class ZarrCanvas:
                 img_x_start = max(0, -x_px + scaled_image.shape[1] // 2)
                 img_x_end = img_x_start + (x_end - x_start)
                 
-                # Write to zarr at the specified timepoint
+                # Write to zarr
                 if y_end > y_start and x_end > x_start:
                     try:
-                        zarr_array[timepoint, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
+                        zarr_array[0, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
                             scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
-                        logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx}, timepoint {timepoint} (quick scan)")
+                        logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx} (quick scan)")
                     except IndexError as e:
-                        logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
-                        logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access timepoint {timepoint}")
+                        logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}: {e}")
+                        logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access channel {channel_idx}")
                     except Exception as e:
-                        logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
+                        logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}: {e}")
     
     async def add_image_async(self, image: np.ndarray, x_mm: float, y_mm: float,
-                              channel_idx: int = 0, z_idx: int = 0, timepoint: int = 0):
+                              channel_idx: int = 0, z_idx: int = 0):
         """Add image to the stitching queue for asynchronous processing."""
         await self.stitch_queue.put({
             'image': image.copy(),
@@ -749,7 +488,6 @@ class ZarrCanvas:
             'y_mm': y_mm,
             'channel_idx': channel_idx,
             'z_idx': z_idx,
-            'timepoint': timepoint,
             'timestamp': time.time()
         })
     
@@ -778,17 +516,6 @@ class ZarrCanvas:
                 # Check if this is a quick scan
                 is_quick_scan = frame_data.get('quick_scan', False)
                 
-                # Extract timepoint
-                timepoint = frame_data.get('timepoint', 0)
-                
-                # Ensure timepoint exists in our tracking list
-                if timepoint not in self.available_timepoints:
-                    with self.zarr_lock:
-                        if timepoint not in self.available_timepoints:
-                            self.available_timepoints.append(timepoint)
-                            self.available_timepoints.sort()
-                            self._update_timepoint_metadata()
-                
                 # Process in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
                 if is_quick_scan:
@@ -799,8 +526,7 @@ class ZarrCanvas:
                         frame_data['x_mm'],
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
-                        frame_data['z_idx'],
-                        timepoint
+                        frame_data['z_idx']
                     )
                 else:
                     await loop.run_in_executor(
@@ -810,8 +536,7 @@ class ZarrCanvas:
                         frame_data['x_mm'],
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
-                        frame_data['z_idx'],
-                        timepoint
+                        frame_data['z_idx']
                     )
                 remaining_count += 1
                 
@@ -841,17 +566,6 @@ class ZarrCanvas:
                 # Check if this is a quick scan (only updates scales 1-5)
                 is_quick_scan = frame_data.get('quick_scan', False)
                 
-                # Extract timepoint
-                timepoint = frame_data.get('timepoint', 0)
-                
-                # Ensure timepoint exists in our tracking list (do this in main thread)
-                if timepoint not in self.available_timepoints:
-                    with self.zarr_lock:
-                        if timepoint not in self.available_timepoints:
-                            self.available_timepoints.append(timepoint)
-                            self.available_timepoints.sort()
-                            self._update_timepoint_metadata()
-                
                 # Process in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
                 if is_quick_scan:
@@ -863,8 +577,7 @@ class ZarrCanvas:
                         frame_data['x_mm'],
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
-                        frame_data['z_idx'],
-                        timepoint
+                        frame_data['z_idx']
                     )
                 else:
                     # Use normal method that updates all scales
@@ -875,8 +588,7 @@ class ZarrCanvas:
                         frame_data['x_mm'],
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
-                        frame_data['z_idx'],
-                        timepoint
+                        frame_data['z_idx']
                     )
                 
             except asyncio.TimeoutError:
@@ -897,17 +609,6 @@ class ZarrCanvas:
                 # Check if this is a quick scan
                 is_quick_scan = frame_data.get('quick_scan', False)
                 
-                # Extract timepoint
-                timepoint = frame_data.get('timepoint', 0)
-                
-                # Ensure timepoint exists in our tracking list
-                if timepoint not in self.available_timepoints:
-                    with self.zarr_lock:
-                        if timepoint not in self.available_timepoints:
-                            self.available_timepoints.append(timepoint)
-                            self.available_timepoints.sort()
-                            self._update_timepoint_metadata()
-                
                 # Process in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
                 if is_quick_scan:
@@ -918,8 +619,7 @@ class ZarrCanvas:
                         frame_data['x_mm'],
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
-                        frame_data['z_idx'],
-                        timepoint
+                        frame_data['z_idx']
                     )
                 else:
                     await loop.run_in_executor(
@@ -929,8 +629,7 @@ class ZarrCanvas:
                         frame_data['x_mm'],
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
-                        frame_data['z_idx'],
-                        timepoint
+                        frame_data['z_idx']
                     )
                 final_count += 1
                 
@@ -943,7 +642,7 @@ class ZarrCanvas:
             logger.info(f"Stitching loop processed {final_count} final images before exiting")
     
     def get_canvas_region(self, x_mm: float, y_mm: float, width_mm: float, height_mm: float,
-                          scale: int = 0, channel_idx: int = 0, timepoint: int = 0) -> np.ndarray:
+                          scale: int = 0, channel_idx: int = 0) -> np.ndarray:
         """
         Get a region from the canvas by zarr channel index.
         
@@ -954,7 +653,6 @@ class ZarrCanvas:
             height_mm: Height in millimeters
             scale: Scale level to retrieve from
             channel_idx: Local zarr channel index (0, 1, 2, etc.)
-            timepoint: Timepoint index (default 0)
             
         Returns:
             Retrieved image region as numpy array
@@ -964,11 +662,6 @@ class ZarrCanvas:
             logger.error(f"Channel index {channel_idx} out of bounds. Available channels: {len(self.channels)} (indices 0-{len(self.channels)-1})")
             return None
         
-        # Validate timepoint
-        if timepoint not in self.available_timepoints:
-            logger.error(f"Timepoint {timepoint} not available. Available timepoints: {sorted(self.available_timepoints)}")
-            return None
-        
         with self.zarr_lock:
             # Validate zarr arrays exist
             if not hasattr(self, 'zarr_arrays') or scale not in self.zarr_arrays:
@@ -976,15 +669,6 @@ class ZarrCanvas:
                 return None
                 
             zarr_array = self.zarr_arrays[scale]
-            
-            # Check if timepoint exists in zarr array (it might not if we're reading before writing)
-            if timepoint >= zarr_array.shape[0]:
-                logger.warning(f"Timepoint {timepoint} not yet written to zarr array (shape: {zarr_array.shape})")
-                # Return zeros of the expected size
-                scale_factor = 4 ** scale
-                width_px = int(width_mm * 1000 / (self.pixel_size_xy_um * scale_factor))
-                height_px = int(height_mm * 1000 / (self.pixel_size_xy_um * scale_factor))
-                return np.zeros((height_px, width_px), dtype=zarr_array.dtype)
             
             # Double-check zarr array dimensions
             if channel_idx >= zarr_array.shape[1]:
@@ -1006,19 +690,19 @@ class ZarrCanvas:
             
             # Read from zarr
             try:
-                region = zarr_array[timepoint, channel_idx, 0, y_start:y_end, x_start:x_end]
-                logger.debug(f"Successfully retrieved region from zarr at scale {scale}, channel {channel_idx}, timepoint {timepoint}")
+                region = zarr_array[0, channel_idx, 0, y_start:y_end, x_start:x_end]
+                logger.debug(f"Successfully retrieved region from zarr at scale {scale}, channel {channel_idx}")
                 return region
             except IndexError as e:
-                logger.error(f"IndexError reading from zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
-                logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access timepoint {timepoint}")
+                logger.error(f"IndexError reading from zarr array at scale {scale}, channel {channel_idx}: {e}")
+                logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access channel {channel_idx}")
                 return None
             except Exception as e:
-                logger.error(f"Error reading from zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
+                logger.error(f"Error reading from zarr array at scale {scale}, channel {channel_idx}: {e}")
                 return None
     
     def get_canvas_region_by_channel_name(self, x_mm: float, y_mm: float, width_mm: float, height_mm: float,
-                                         channel_name: str, scale: int = 0, timepoint: int = 0) -> np.ndarray:
+                                         channel_name: str, scale: int = 0) -> np.ndarray:
         """
         Get a region from the canvas by channel name.
         
@@ -1029,7 +713,6 @@ class ZarrCanvas:
             height_mm: Height in millimeters
             channel_name: Human-readable channel name
             scale: Scale level to retrieve from
-            timepoint: Timepoint index (default 0)
             
         Returns:
             Retrieved image region as numpy array
@@ -1041,7 +724,7 @@ class ZarrCanvas:
             logger.error(f"Channel not found: {e}")
             return None
             
-        return self.get_canvas_region(x_mm, y_mm, width_mm, height_mm, scale, channel_idx, timepoint)
+        return self.get_canvas_region(x_mm, y_mm, width_mm, height_mm, scale, channel_idx)
     
     def close(self):
         """Clean up resources."""
@@ -1049,569 +732,64 @@ class ZarrCanvas:
         logger.info("ZarrCanvas closed")
     
     def save_preview(self, action_ID: str = "canvas_preview"):
-        """Save a preview image of the canvas at different scales."""
-        try:
-            preview_dir = self.base_path / "previews"
-            preview_dir.mkdir(exist_ok=True)
-            
-            for scale in range(min(2, self.num_scales)):  # Save first 2 scales
-                if scale in self.zarr_arrays:
-                    # Get the first channel (usually brightfield)
-                    array = self.zarr_arrays[scale]
-                    if array.shape[1] > 0:  # Check if we have channels
-                        # Get the image data (T=0, C=0, Z=0, :, :)
-                        image_data = array[0, 0, 0, :, :]
-                        
-                        # Convert to PIL Image and save
-                        if image_data.max() > image_data.min():  # Only save if there's actual data
-                            # Normalize to 0-255
-                            normalized = ((image_data - image_data.min()) / 
-                                        (image_data.max() - image_data.min()) * 255).astype(np.uint8)
-                            image = Image.fromarray(normalized)
-                            preview_path = preview_dir / f"{action_ID}_scale{scale}.png"
-                            image.save(preview_path)
-                            logger.info(f"Saved preview: {preview_path}")
-                        
-        except Exception as e:
-            logger.warning(f"Failed to save preview: {e}")
-    
-    def export_as_zip(self) -> bytes:
-        """
-        Export the entire zarr canvas as a zip file for upload to artifact manager.
-        
-        Returns:
-            bytes: The zip file content containing the entire zarr directory structure
-        """
-        import zipfile
-        import io
-        
-        zip_buffer = io.BytesIO()
-        
-        try:
-            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zip_file:
-                # Walk through the entire zarr directory
-                for root, dirs, files in os.walk(self.zarr_path):
-                    for file in files:
-                        file_path = Path(root) / file
-                        # Create relative path within the zip
-                        arcname = file_path.relative_to(self.zarr_path.parent)
-                        zip_file.write(file_path, arcname=str(arcname))
-                        logger.debug(f"Added to zip: {arcname}")
-                
-                # Add a metadata file with canvas information
-                metadata = {
-                    "canvas_info": {
-                        "pixel_size_xy_um": self.pixel_size_xy_um,
-                        "rotation_angle_deg": self.rotation_angle_deg,
-                        "stage_limits": self.stage_limits,
-                        "channels": self.channels,
-                        "num_scales": self.num_scales,
-                        "canvas_size_px": {
-                            "width": self.canvas_width_px,
-                            "height": self.canvas_height_px
-                        },
-                        "export_timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
-                        "squid_canvas_version": "1.0"
-                    }
-                }
-                
-                import json
-                metadata_json = json.dumps(metadata, indent=2)
-                zip_file.writestr("squid_canvas_metadata.json", metadata_json)
-                
-            zip_buffer.seek(0)
-            zip_content = zip_buffer.getvalue()
-            zip_size_mb = len(zip_content) / (1024 * 1024)
-            
-            logger.info(f"Exported zarr canvas as zip: {zip_size_mb:.2f} MB")
-            return zip_content
-            
-        except Exception as e:
-            logger.error(f"Failed to export zarr canvas as zip: {e}")
-            raise RuntimeError(f"Cannot export zarr canvas: {e}")
-        finally:
-            zip_buffer.close()
-    
-    def get_export_info(self) -> dict:
-        """
-        Get information about the current canvas for export planning.
-        
-        Returns:
-            dict: Information about canvas size, data, and export feasibility
-        """
-        try:
-            # Calculate actual disk usage instead of theoretical array size
-            total_size_bytes = 0
-            data_arrays = 0
-            file_count = 0
-            
-            # Get actual file size on disk by walking the zarr directory
-            if self.zarr_path.exists():
-                try:
-                    for file_path in self.zarr_path.rglob('*'):
-                        if file_path.is_file():
-                            try:
-                                size = file_path.stat().st_size
-                                total_size_bytes += size
-                                file_count += 1
-                            except (OSError, PermissionError) as e:
-                                logger.warning(f"Could not read size of {file_path}: {e}")
-                except Exception as e:
-                    logger.error(f"Error walking zarr directory {self.zarr_path}: {e}")
-                    # Fallback: try to get directory size using os.path.getsize
-                    try:
-                        import os
-                        total_size_bytes = sum(os.path.getsize(os.path.join(dirpath, filename))
-                                             for dirpath, dirnames, filenames in os.walk(self.zarr_path)
-                                             for filename in filenames)
-                    except Exception as fallback_e:
-                        logger.error(f"Fallback size calculation also failed: {fallback_e}")
-                        total_size_bytes = 0
-            else:
-                logger.warning(f"Zarr path does not exist: {self.zarr_path}")
-            
-            # Check which arrays have actual data
-            for scale in range(self.num_scales):
-                if scale in self.zarr_arrays:
-                    array = self.zarr_arrays[scale]
-                    
-                    # Check if array has any data (non-zero values)
-                    if array.size > 0:
-                        try:
-                            # Sample a small region to check for data
-                            sample_size = min(100, array.shape[3], array.shape[4])
-                            sample = array[0, 0, 0, :sample_size, :sample_size]
-                            if sample.max() > 0:
-                                data_arrays += 1
-                        except Exception as e:
-                            logger.warning(f"Could not sample array at scale {scale}: {e}")
-            
-            # For empty arrays, estimate zip size based on actual disk usage
-            # Zarr metadata and empty arrays compress very well
-            if data_arrays == 0:
-                # Empty zarr structures are mostly metadata, compress to ~10% of disk size
-                estimated_zip_size_mb = (total_size_bytes * 0.1) / (1024 * 1024)
-            else:
-                # Arrays with data compress moderately (20-40% depending on content)
-                estimated_zip_size_mb = (total_size_bytes * 0.3) / (1024 * 1024)
-            
-            logger.info(f"Export info: {total_size_bytes / (1024*1024):.1f} MB on disk ({file_count} files), "
-                       f"{data_arrays} arrays with data, estimated zip: {estimated_zip_size_mb:.1f} MB")
-            
-            return {
-                "canvas_path": str(self.zarr_path),
-                "total_size_bytes": total_size_bytes,
-                "total_size_mb": total_size_bytes / (1024 * 1024),
-                "estimated_zip_size_mb": estimated_zip_size_mb,
-                "file_count": file_count,
-                "num_scales": self.num_scales,
-                "num_channels": len(self.channels),
-                "channels": self.channels,
-                "arrays_with_data": data_arrays,
-                "canvas_dimensions": {
-                    "width_px": self.canvas_width_px,
-                    "height_px": self.canvas_height_px,
-                    "pixel_size_um": self.pixel_size_xy_um
-                },
-                "export_feasible": estimated_zip_size_mb < 1000  # Reasonable limit
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to get export info: {e}")
-            return {
-                "error": str(e),
-                "export_feasible": False
-            } 
-
-class ZarrCanvasManager:
-    """
-    Manages multiple OME-Zarr canvas filesets for organizing scanning data.
-    Each fileset is a separate OME-Zarr structure that can contain multiple timepoints.
-    
-    Example usage:
-        manager = ZarrCanvasManager(base_path="/tmp/zarr", pixel_size_xy_um=0.33, stage_limits={...})
-        
-        # Create a new fileset
-        manager.create_fileset("experiment_1", channels=['BF LED matrix full'])
-        
-        # Add images to a specific fileset
-        canvas = manager.get_fileset("experiment_1")
-        canvas.add_image_sync(image, x_mm=10.0, y_mm=15.0, channel_idx=0)
-        
-        # List all filesets
-        filesets = manager.list_filesets()
-    """
-    
-    def __init__(self, base_path: str, pixel_size_xy_um: float, stage_limits: Dict[str, float], 
-                 chunk_size: int = 256, rotation_angle_deg: float = 0.0,
-                 initial_timepoints: int = 20, timepoint_expansion_chunk: int = 10):
-        """
-        Initialize the Zarr canvas manager.
-        
-        Args:
-            base_path: Base directory for zarr storage
-            pixel_size_xy_um: Pixel size in micrometers
-            stage_limits: Dictionary with x_positive, x_negative, y_positive, y_negative in mm
-            chunk_size: Size of chunks in pixels (default 256)
-            rotation_angle_deg: Rotation angle for stitching in degrees
-            initial_timepoints: Number of timepoints to pre-allocate during initialization
-            timepoint_expansion_chunk: Number of timepoints to add when expansion is needed
-        """
-        self.base_path = Path(base_path)
-        self.pixel_size_xy_um = pixel_size_xy_um
-        self.stage_limits = stage_limits
-        self.chunk_size = chunk_size
-        self.rotation_angle_deg = rotation_angle_deg
-        self.initial_timepoints = initial_timepoints
-        self.timepoint_expansion_chunk = timepoint_expansion_chunk
-        
-        # Dictionary to store active ZarrCanvas instances
-        self._filesets: Dict[str, ZarrCanvas] = {}
-        self._active_fileset = None
-        
-        # Create base directory if it doesn't exist
-        self.base_path.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"ZarrCanvasManager initialized at {self.base_path}")
-    
-    def create_fileset(self, fileset_name: str, channels: List[str] = None, 
-                       overwrite: bool = False) -> ZarrCanvas:
-        """
-        Create a new OME-Zarr fileset.
-        
-        Args:
-            fileset_name: Name of the fileset (will be used as directory name)
-            channels: List of channel names for this fileset
-            overwrite: Whether to overwrite existing fileset
-            
-        Returns:
-            ZarrCanvas: The created canvas instance
-            
-        Raises:
-            ValueError: If fileset already exists and overwrite=False
-        """
-        if not fileset_name:
-            raise ValueError("Fileset name cannot be empty")
-        
-        # Sanitize fileset name for filesystem
-        safe_name = "".join(c for c in fileset_name if c.isalnum() or c in ('-', '_', '.')).strip()
-        if not safe_name:
-            raise ValueError("Fileset name must contain at least one alphanumeric character")
-        
-        fileset_path = self.base_path / safe_name
-        
-        # Check if fileset already exists
-        if fileset_name in self._filesets:
-            if not overwrite:
-                raise ValueError(f"Fileset '{fileset_name}' already exists. Use overwrite=True to replace it.")
-            else:
-                # Close and remove existing fileset
-                self.remove_fileset(fileset_name)
-        
-        # Check if directory already exists
-        zarr_path = fileset_path / "live_stitching.zarr"
-        if zarr_path.exists() and not overwrite:
-            raise ValueError(f"Fileset directory '{fileset_path}' already exists. Use overwrite=True to replace it.")
-        
-        # Remove existing directory if overwrite is True
-        if zarr_path.exists() and overwrite:
-            import shutil
-            shutil.rmtree(zarr_path)
-            logger.info(f"Removed existing fileset directory: {zarr_path}")
-        
-        # Use default channels if none provided
-        if channels is None:
-            # Import ChannelMapper here to avoid circular imports
-            try:
-                from squid_control.control.config import ChannelMapper
-                channels = ChannelMapper.get_all_human_names()
-            except ImportError:
-                channels = ['BF LED matrix full']  # Fallback
-        
-        # Create new ZarrCanvas instance
-        canvas = ZarrCanvas(
-            base_path=str(fileset_path),
-            pixel_size_xy_um=self.pixel_size_xy_um,
-            stage_limits=self.stage_limits,
-            channels=channels,
-            chunk_size=self.chunk_size,
-            rotation_angle_deg=self.rotation_angle_deg,
-            initial_timepoints=self.initial_timepoints,
-            timepoint_expansion_chunk=self.timepoint_expansion_chunk
-        )
-        
-        # Initialize the canvas
-        canvas.initialize_canvas()
-        
-        # Store in filesets dictionary
-        self._filesets[fileset_name] = canvas
-        
-        # Set as active fileset if it's the first one
-        if self._active_fileset is None:
-            self._active_fileset = fileset_name
-        
-        logger.info(f"Created fileset '{fileset_name}' with {len(channels)} channels at {fileset_path}")
-        return canvas
-    
-    def list_filesets(self) -> List[Dict[str, any]]:
-        """
-        List all available filesets with their metadata.
-        
-        Returns:
-            List of dictionaries containing fileset information
-        """
-        filesets = []
-        
-        # Scan base directory for existing zarr directories
-        if self.base_path.exists():
-            for item in self.base_path.iterdir():
-                if item.is_dir():
-                    zarr_path = item / "live_stitching.zarr"
-                    if zarr_path.exists():
-                        fileset_name = item.name
-                        
-                        # Get metadata if canvas is loaded
-                        if fileset_name in self._filesets:
-                            canvas = self._filesets[fileset_name]
-                            channels = canvas.channels
-                            num_timepoints = len(canvas.get_available_timepoints())
-                            is_active = (fileset_name == self._active_fileset)
-                            canvas_size = {
-                                'width_px': canvas.canvas_width_px,
-                                'height_px': canvas.canvas_height_px
-                            }
-                        else:
-                            # Try to read metadata from zarr file
-                            try:
-                                store = zarr.DirectoryStore(str(zarr_path))
-                                root = zarr.open_group(store=store, mode='r')
-                                
-                                # Get channels from metadata
-                                omero_channels = root.attrs.get('omero', {}).get('channels', [])
-                                channels = [ch.get('label', f'Channel_{i}') for i, ch in enumerate(omero_channels)]
-                                
-                                # Get timepoints from custom metadata
-                                squid_canvas = root.attrs.get('squid_canvas', {})
-                                num_timepoints = squid_canvas.get('num_timepoints', 'unknown')
-                                
-                                # Get canvas dimensions
-                                multiscales = root.attrs.get('multiscales', [{}])[0]
-                                datasets = multiscales.get('datasets', [])
-                                if datasets and '0' in root:
-                                    shape = root['0'].shape
-                                    canvas_size = {
-                                        'width_px': shape[-1] if len(shape) >= 2 else 'unknown',
-                                        'height_px': shape[-2] if len(shape) >= 2 else 'unknown'
-                                    }
-                                else:
-                                    canvas_size = {'width_px': 'unknown', 'height_px': 'unknown'}
-                                
-                                is_active = False
-                                
-                            except Exception as e:
-                                logger.warning(f"Could not read metadata for fileset '{fileset_name}': {e}")
-                                channels = ['unknown']
-                                num_timepoints = 'unknown'
-                                is_active = False
-                                canvas_size = {'width_px': 'unknown', 'height_px': 'unknown'}
-                        
-                        # Get file size
-                        try:
-                            total_size = sum(f.stat().st_size for f in zarr_path.rglob('*') if f.is_file())
-                            size_mb = total_size / (1024 * 1024)
-                        except Exception:
-                            size_mb = 'unknown'
-                        
-                        # Get creation time
-                        try:
-                            creation_time = datetime.fromtimestamp(zarr_path.stat().st_ctime)
-                            creation_time_str = creation_time.strftime("%Y-%m-%d %H:%M:%S")
-                        except Exception:
-                            creation_time_str = 'unknown'
-                        
-                        filesets.append({
-                            'name': fileset_name,
-                            'path': str(item),
-                            'channels': channels,
-                            'num_channels': len(channels) if isinstance(channels, list) else 'unknown',
-                            'num_timepoints': num_timepoints,
-                            'size_mb': size_mb,
-                            'created': creation_time_str,
-                            'is_active': is_active,
-                            'is_loaded': fileset_name in self._filesets,
-                            'canvas_size': canvas_size
-                        })
-        
-        # Sort by creation time (newest first)
-        filesets.sort(key=lambda x: x['created'], reverse=True)
-        return filesets
-    
-    def remove_fileset(self, fileset_name: str, delete_files: bool = True) -> bool:
-        """
-        Remove a fileset.
-        
-        Args:
-            fileset_name: Name of the fileset to remove
-            delete_files: Whether to delete the zarr files from disk
-            
-        Returns:
-            bool: True if successfully removed
-            
-        Raises:
-            ValueError: If fileset doesn't exist
-        """
-        # Check if fileset exists in memory
-        if fileset_name not in self._filesets:
-            # Check if it exists on disk
-            fileset_path = self.base_path / fileset_name
-            zarr_path = fileset_path / "live_stitching.zarr"
-            if not zarr_path.exists():
-                raise ValueError(f"Fileset '{fileset_name}' does not exist")
-        
-        # Close canvas if it's loaded
-        if fileset_name in self._filesets:
-            canvas = self._filesets[fileset_name]
-            canvas.close()
-            del self._filesets[fileset_name]
-            logger.info(f"Closed and removed fileset '{fileset_name}' from memory")
-        
-        # Reset active fileset if it was the one being removed
-        if self._active_fileset == fileset_name:
-            remaining_filesets = list(self._filesets.keys())
-            self._active_fileset = remaining_filesets[0] if remaining_filesets else None
-        
-        # Delete files if requested
-        if delete_files:
-            fileset_path = self.base_path / fileset_name
-            if fileset_path.exists():
-                import shutil
-                shutil.rmtree(fileset_path)
-                logger.info(f"Deleted fileset directory: {fileset_path}")
-        
-        return True
-    
-    def get_fileset(self, fileset_name: str) -> ZarrCanvas:
-        """
-        Get a specific fileset canvas, loading it if necessary.
-        
-        Args:
-            fileset_name: Name of the fileset
-            
-        Returns:
-            ZarrCanvas: The canvas instance
-            
-        Raises:
-            ValueError: If fileset doesn't exist
-        """
-        # Return if already loaded
-        if fileset_name in self._filesets:
-            return self._filesets[fileset_name]
-        
-        # Try to load from disk
-        fileset_path = self.base_path / fileset_name
-        zarr_path = fileset_path / "live_stitching.zarr"
-        
-        if not zarr_path.exists():
-            raise ValueError(f"Fileset '{fileset_name}' does not exist at {fileset_path}")
-        
-        # Load existing zarr canvas
-        try:
-            # Read metadata to get channels
-            store = zarr.DirectoryStore(str(zarr_path))
-            root = zarr.open_group(store=store, mode='r')
-            
-            # Get channels from metadata
-            squid_canvas = root.attrs.get('squid_canvas', {})
-            channels = list(squid_canvas.get('zarr_index_mapping', {}).values())
-            
-            if not channels:
-                # Fallback: get from omero metadata
-                omero_channels = root.attrs.get('omero', {}).get('channels', [])
-                channels = [ch.get('label', f'Channel_{i}') for i, ch in enumerate(omero_channels)]
-            
-            # Create canvas instance
-            canvas = ZarrCanvas(
-                base_path=str(fileset_path),
-                pixel_size_xy_um=self.pixel_size_xy_um,
-                stage_limits=self.stage_limits,
-                channels=channels,
-                chunk_size=self.chunk_size,
-                rotation_angle_deg=self.rotation_angle_deg,
-                initial_timepoints=self.initial_timepoints,
-                timepoint_expansion_chunk=self.timepoint_expansion_chunk
-            )
-            
-            # Load existing zarr arrays instead of initializing new ones
-            canvas.zarr_path = zarr_path
-            canvas.zarr_root = root
-            canvas.zarr_arrays = {}
-            
-            # Load existing arrays
-            for scale in range(canvas.num_scales):
-                if str(scale) in root:
-                    canvas.zarr_arrays[scale] = root[str(scale)]
-            
-            # Load available timepoints from metadata
-            available_timepoints = squid_canvas.get('available_timepoints', [0])
-            canvas.available_timepoints = available_timepoints
-            
-            # Store in filesets dictionary
-            self._filesets[fileset_name] = canvas
-            
-            logger.info(f"Loaded existing fileset '{fileset_name}' with {len(channels)} channels")
-            return canvas
-            
-        except Exception as e:
-            logger.error(f"Failed to load fileset '{fileset_name}': {e}")
-            raise ValueError(f"Could not load fileset '{fileset_name}': {e}")
-    
-    def get_active_fileset(self) -> Optional[ZarrCanvas]:
-        """
-        Get the currently active fileset canvas.
-        
-        Returns:
-            ZarrCanvas or None: The active canvas instance
-        """
-        if self._active_fileset is None:
+        """Save a preview image of the entire canvas from the lowest resolution scale."""
+        if not hasattr(self, 'zarr_arrays') or not self.zarr_arrays:
+            logger.warning('No zarr arrays available for preview generation')
             return None
-        return self.get_fileset(self._active_fileset)
-    
-    def set_active_fileset(self, fileset_name: str) -> ZarrCanvas:
-        """
-        Set the active fileset.
         
-        Args:
-            fileset_name: Name of the fileset to make active
+        try:
+            # Use the highest scale level (lowest resolution)
+            scale_level = self.num_scales - 1
             
-        Returns:
-            ZarrCanvas: The active canvas instance
+            logger.info(f'Generating preview image from scale{scale_level} for entire canvas')
             
-        Raises:
-            ValueError: If fileset doesn't exist
-        """
-        canvas = self.get_fileset(fileset_name)  # This will raise if fileset doesn't exist
-        self._active_fileset = fileset_name
-        logger.info(f"Set active fileset to '{fileset_name}'")
-        return canvas
-    
-    def get_active_fileset_name(self) -> Optional[str]:
-        """
-        Get the name of the currently active fileset.
-        
-        Returns:
-            str or None: The active fileset name
-        """
-        return self._active_fileset
-    
-    def close_all(self):
-        """Close all loaded filesets."""
-        for name, canvas in self._filesets.items():
-            try:
-                canvas.close()
-                logger.info(f"Closed fileset '{name}'")
-            except Exception as e:
-                logger.error(f"Error closing fileset '{name}': {e}")
-        
-        self._filesets.clear()
-        self._active_fileset = None
-        logger.info("All filesets closed") 
+            # Get the entire canvas at the lowest resolution
+            with self.zarr_lock:
+                zarr_array = self.zarr_arrays[scale_level]
+                # Get the entire array for the first channel (T=0, C=0, Z=0, all Y, all X)
+                preview_region = zarr_array[0, 0, 0, :, :]
+            
+            if preview_region.size == 0:
+                logger.warning('Preview region is empty, skipping preview generation')
+                return None
+            
+            # Convert to PIL Image
+            from PIL import Image
+            from datetime import datetime
+            
+            # Ensure data is uint8
+            if preview_region.dtype != np.uint8:
+                # Scale to 8-bit
+                if preview_region.max() > 0:
+                    preview_region = (preview_region / preview_region.max() * 255).astype(np.uint8)
+                else:
+                    preview_region = preview_region.astype(np.uint8)
+            
+            # Create PIL image
+            preview_img = Image.fromarray(preview_region)
+            
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            preview_filename = f'{action_ID}_preview.png'
+            
+            # Save in the same directory as the zarr canvas
+            preview_path = self.base_path / preview_filename
+            
+            # Save the image
+            preview_img.save(preview_path, 'PNG')
+            
+            # Calculate physical dimensions
+            scale_factor = 4 ** scale_level
+            pixel_size_at_scale = self.pixel_size_xy_um * scale_factor
+            width_mm = preview_region.shape[1] * pixel_size_at_scale / 1000
+            height_mm = preview_region.shape[0] * pixel_size_at_scale / 1000
+            
+            logger.info(f'Saved canvas preview image: {preview_path}')
+            logger.info(f'Preview image size: {preview_region.shape[1]}x{preview_region.shape[0]} pixels, '
+                        f'covering {width_mm:.1f}x{height_mm:.1f}mm canvas area')
+            
+            return str(preview_path)
+            
+        except Exception as e:
+            logger.error(f'Error generating canvas preview: {e}')
+            return None 
