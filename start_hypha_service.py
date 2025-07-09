@@ -164,7 +164,8 @@ class MicroscopeVideoTrack(MediaStreamTrack):
         self.frame_width = 750
         self.frame_height = 750
         logger.info(f"MicroscopeVideoTrack initialized with FPS: {self.fps}")
-
+        self.chatbot_server = None
+        self.server = None
     def draw_crosshair(self, img, center_x, center_y, size=20, color=[255, 255, 255]):
         """Draw a crosshair on the image"""
         import cv2
@@ -438,22 +439,10 @@ class Microscope:
             chatbot_id = f"squid-chatbot-{'simu' if self.is_simulation else 'real'}-{self.service_id}"
             
             chatbot_server_url = "https://chat.bioimage.io"
-            try:
-                chatbot_token = os.environ.get("WORKSPACE_TOKEN_CHATBOT")
-                if not chatbot_token:
-                    logger.warning("Chatbot token not found, skipping chatbot health check")
-                else:
-                    chatbot_server = await connect_to_server({
-                        "client_id": f"squid-chatbot-{self.service_id}-{uuid.uuid4()}",
-                        "server_url": chatbot_server_url, 
-                        "token": chatbot_token,
-                        "ping_interval": None
-                    })
-                    chatbot_svc = await asyncio.wait_for(chatbot_server.get_service(chatbot_id), 10)
-                    if chatbot_svc is None:
-                        raise RuntimeError("Chatbot service not found")
-            except Exception as chatbot_error:
-                raise RuntimeError(f"Chatbot service health check failed: {str(chatbot_error)}")
+            chatbot_service = await self.chatbot_server.get_service(chatbot_id)
+            ping_result = await chatbot_service.ping()
+            if ping_result != "pong":
+                raise RuntimeError("Chatbot service not found")
             
             try:
                 if self.similarity_search_svc is None:
@@ -2153,8 +2142,8 @@ class Microscope:
             chatbot_token= os.environ.get("WORKSPACE_TOKEN_CHATBOT")
         except:
             chatbot_token = await login({"server_url": chatbot_server_url})
-        chatbot_server = await connect_to_server({"client_id": f"squid-chatbot-{self.service_id}-{uuid.uuid4()}", "server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
-        await self.start_chatbot_service(chatbot_server, chatbot_id)
+        self.chatbot_server = await connect_to_server({"client_id": f"squid-chatbot-{self.service_id}-{uuid.uuid4()}", "server_url": chatbot_server_url, "token": chatbot_token,  "ping_interval": None})
+        await self.start_chatbot_service(self.chatbot_server, chatbot_id)
         webrtc_id = f"video-track-{self.service_id}"
         if not self.is_local: # only start webrtc service in remote mode
             await self.start_webrtc_service(self.server, webrtc_id)
