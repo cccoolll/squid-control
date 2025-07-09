@@ -364,7 +364,6 @@ class Microscope:
         # Server related attributes
         self.chatbot_server = None
         self.server = None
-        self.setup_complete = False  # Track if setup has completed
         
         # Add task status tracking
         self.task_status = {
@@ -427,9 +426,6 @@ class Microscope:
     async def is_service_healthy(self, context=None):
         """Check if all services are healthy"""
         try:
-            # Check if setup is complete before proceeding
-            if not self.setup_complete:
-                raise RuntimeError("Service setup not yet complete - initialization still in progress")
             
             microscope_svc = await self.server.get_service(self.service_id)
             if microscope_svc is None:
@@ -2163,11 +2159,6 @@ class Microscope:
         if not self.is_local: # only start webrtc service in remote mode
             await self.start_webrtc_service(self.server, webrtc_id)
         
-        # Mark setup as complete
-        self.setup_complete = True
-        logger.info("Microscope service setup completed successfully")
-
-
     async def initialize_zarr_manager(self, camera):
         from squid_control.hypha_tools.artifact_manager.artifact_manager import ZarrImageManager
         
