@@ -164,8 +164,7 @@ class MicroscopeVideoTrack(MediaStreamTrack):
         self.frame_width = 750
         self.frame_height = 750
         logger.info(f"MicroscopeVideoTrack initialized with FPS: {self.fps}")
-        self.chatbot_server = None
-        self.server = None
+
     def draw_crosshair(self, img, center_x, center_y, size=20, color=[255, 255, 255]):
         """Draw a crosshair on the image"""
         import cv2
@@ -362,6 +361,10 @@ class Microscope:
         # Scanning control attributes
         self.scanning_in_progress = False  # Flag to prevent video buffering during scans
 
+        # Server related attributes
+        self.chatbot_server = None
+        self.server = None
+        
         # Add task status tracking
         self.task_status = {
             "move_by_distance": "not_started",
