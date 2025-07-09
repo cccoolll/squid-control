@@ -1886,14 +1886,29 @@ class SquidController:
             logging.warning(f"Zarr stitching queue full, dropping frame at ({x_mm:.2f}, {y_mm:.2f})")
 
     def _cleanup_zarr_directory(self):
-        # Clean up ZARR_PATH directory on startup
+        # Clean up .zarr folders within ZARR_PATH directory on startup
         zarr_path = os.getenv('ZARR_PATH', '/tmp/zarr_canvas')
         if os.path.exists(zarr_path):
             try:
-                shutil.rmtree(zarr_path)
-                logging.info(f'Cleaned up ZARR_PATH directory: {zarr_path}')
+                # Only delete .zarr folders, not the entire directory
+                deleted_count = 0
+                for item in os.listdir(zarr_path):
+                    item_path = os.path.join(zarr_path, item)
+                    if os.path.isdir(item_path) and item.endswith('.zarr'):
+                        try:
+                            shutil.rmtree(item_path)
+                            deleted_count += 1
+                            logging.info(f'Cleaned up zarr folder: {item_path}')
+                        except Exception as e:
+                            logging.warning(f'Failed to clean up zarr folder {item_path}: {e}')
+                
+                if deleted_count > 0:
+                    logging.info(f'Cleaned up {deleted_count} zarr folders in {zarr_path}')
+                else:
+                    logging.info(f'No zarr folders found to clean up in {zarr_path}')
+                    
             except Exception as e:
-                logging.error(f'Failed to clean up ZARR_PATH directory: {e}')
+                logging.error(f'Failed to access ZARR_PATH directory {zarr_path}: {e}')
 
     def create_zarr_fileset(self, fileset_name):
         """Create a new zarr fileset with the given name.
