@@ -1098,22 +1098,36 @@ class SquidController:
             do_reflection_af (bool): Whether to perform reflection-based autofocus
             action_ID (str): Identifier for this scan
             timepoint (int): Timepoint index for the scan (default 0)
-            fileset_name (str, optional): Name of the zarr fileset to use. If None, uses active fileset
+            fileset_name (str, optional): Name of the zarr fileset to use. If None, uses active fileset or "default" as fallback
         """
         if illumination_settings is None:
             illumination_settings = [
                 {'channel': 'BF LED matrix full', 'intensity': 50, 'exposure_time': 100}
             ]
         
+        # Determine which fileset to use
+        target_fileset = fileset_name
+        if target_fileset is None:
+            # Use active canvas name as default, fall back to "default" if no active canvas
+            target_fileset = self.active_canvas_name if self.active_canvas_name is not None else "default"
+            logging.info(f"No fileset specified, using active canvas: '{target_fileset}'")
         
-        # Switch to specified fileset if provided
-        if fileset_name:
-            self.set_active_zarr_fileset(fileset_name)
+        # Switch to specified fileset if provided or if different from current active
+        if target_fileset != self.active_canvas_name:
+            try:
+                self.set_active_zarr_fileset(target_fileset)
+            except ValueError:
+                # If the target fileset doesn't exist, create it
+                logging.info(f"Fileset '{target_fileset}' not found, creating new fileset")
+                self.create_zarr_fileset(target_fileset)
         
         # Ensure we have an active canvas
         canvas = self.get_active_canvas()
         if canvas is None:
             raise RuntimeError("No zarr canvas available for stitching")
+        
+        # Log which fileset is being used
+        logging.info(f"Normal scan with stitching using fileset: '{self.active_canvas_name}'")
         
         # Validate that all requested channels are available in the zarr canvas
         channel_map = ChannelMapper.get_human_to_id_map()
@@ -1419,7 +1433,7 @@ class SquidController:
             do_contrast_autofocus (bool): Whether to perform contrast-based autofocus
             do_reflection_af (bool): Whether to perform reflection-based autofocus
             timepoint (int): Timepoint index for the scan (default 0)
-            fileset_name (str, optional): Name of the zarr fileset to use. If None, uses active fileset
+            fileset_name (str, optional): Name of the zarr fileset to use. If None, uses active fileset or "default" as fallback
         """
         
         # Validate exposure time
@@ -1454,15 +1468,29 @@ class SquidController:
             max_cols = 12
             wellplate_type = '96'
         
+        # Determine which fileset to use
+        target_fileset = fileset_name
+        if target_fileset is None:
+            # Use active canvas name as default, fall back to "default" if no active canvas
+            target_fileset = self.active_canvas_name if self.active_canvas_name is not None else "default"
+            logging.info(f"No fileset specified, using active canvas: '{target_fileset}'")
         
-        # Switch to specified fileset if provided
-        if fileset_name:
-            self.set_active_zarr_fileset(fileset_name)
+        # Switch to specified fileset if provided or if different from current active
+        if target_fileset != self.active_canvas_name:
+            try:
+                self.set_active_zarr_fileset(target_fileset)
+            except ValueError:
+                # If the target fileset doesn't exist, create it
+                logging.info(f"Fileset '{target_fileset}' not found, creating new fileset")
+                self.create_zarr_fileset(target_fileset)
         
         # Ensure we have an active canvas
         canvas = self.get_active_canvas()
         if canvas is None:
             raise RuntimeError("No zarr canvas available for stitching")
+        
+        # Log which fileset is being used
+        logging.info(f"Quick scan with stitching using fileset: '{self.active_canvas_name}'")
         
         # Validate that brightfield channel is available in the zarr canvas
         channel_name = 'BF LED matrix full'

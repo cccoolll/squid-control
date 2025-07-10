@@ -3200,6 +3200,7 @@ class Microscope:
                                        do_reflection_af: bool = Field(False, description="Whether to perform reflection-based autofocus"),
                                        action_ID: str = Field('normal_scan_stitching', description="Identifier for this scan"),
                                        timepoint: int = Field(0, description="Timepoint index for this scan (default 0)"),
+                                       fileset_name: Optional[str] = Field(None, description="Name of the zarr fileset to use. If None, uses active fileset or 'default' as fallback"),
                                        context=None):
         """
         Perform a normal scan with live stitching to OME-Zarr canvas.
@@ -3216,6 +3217,8 @@ class Microscope:
             do_contrast_autofocus: Enable contrast-based autofocus
             do_reflection_af: Enable reflection-based autofocus
             action_ID: Unique identifier for this scan
+            timepoint: Timepoint index for this scan (default 0)
+            fileset_name: Name of the zarr fileset to use. If None, uses active fileset or 'default' as fallback
             
         Returns:
             dict: Status of the scan
@@ -3251,7 +3254,8 @@ class Microscope:
                 do_contrast_autofocus=do_contrast_autofocus,
                 do_reflection_af=do_reflection_af,
                 action_ID=action_ID,
-                timepoint=timepoint
+                timepoint=timepoint,
+                fileset_name=fileset_name  # Pass the fileset_name parameter
             )
             
             return {
@@ -3261,7 +3265,8 @@ class Microscope:
                     "start_position": {"x_mm": start_x_mm, "y_mm": start_y_mm},
                     "grid_size": {"nx": Nx, "ny": Ny},
                     "step_size": {"dx_mm": dx_mm, "dy_mm": dy_mm},
-                    "total_area_mm2": (Nx * dx_mm) * (Ny * dy_mm)
+                    "total_area_mm2": (Nx * dx_mm) * (Ny * dy_mm),
+                    "fileset_name": self.squidController.active_canvas_name  # Include the actual fileset used
                 }
             }
         except Exception as e:
@@ -3442,6 +3447,7 @@ class Microscope:
                 - do_contrast_autofocus: Whether to perform contrast-based autofocus at each well
                 - do_reflection_af: Whether to perform reflection-based autofocus at each well
                 - timepoint: Timepoint index for this scan (default 0)
+                - fileset_name: Name of the zarr fileset to use. If None, uses active fileset or 'default' as fallback
             
         Returns:
             dict: Status of the scan with performance metrics
@@ -3463,6 +3469,7 @@ class Microscope:
                 do_contrast_autofocus = scan_parameters.get('do_contrast_autofocus', False)
                 do_reflection_af = scan_parameters.get('do_reflection_af', False)
                 timepoint = scan_parameters.get('timepoint', 0)
+                fileset_name = scan_parameters.get('fileset_name', None)
             else:
                 # It's an ObjectProxy or similar object with attributes
                 wellplate_type = getattr(scan_parameters, 'wellplate_type', '96')
@@ -3477,6 +3484,7 @@ class Microscope:
                 do_contrast_autofocus = getattr(scan_parameters, 'do_contrast_autofocus', False)
                 do_reflection_af = getattr(scan_parameters, 'do_reflection_af', False)
                 timepoint = getattr(scan_parameters, 'timepoint', 0)
+                fileset_name = getattr(scan_parameters, 'fileset_name', None)
             
             # Validate exposure time early
             if exposure_time > 30:
@@ -3512,7 +3520,8 @@ class Microscope:
                 velocity_scan_mm_per_s=velocity_scan_mm_per_s,
                 do_contrast_autofocus=do_contrast_autofocus,
                 do_reflection_af=do_reflection_af,
-                timepoint=timepoint
+                timepoint=timepoint,
+                fileset_name=fileset_name
             )
             
             # Calculate performance metrics
@@ -3559,7 +3568,8 @@ class Microscope:
                     "zarr_scales_updated": "1-5 (scale 0 skipped for performance)",
                     "channel": "BF LED matrix full",
                     "action_id": action_ID,
-                    "pattern": f"{n_stripes}-stripe × {stripe_width_mm}mm serpentine per well"
+                    "pattern": f"{n_stripes}-stripe × {stripe_width_mm}mm serpentine per well",
+                    "fileset_name": self.squidController.active_canvas_name
                 }
             }
             

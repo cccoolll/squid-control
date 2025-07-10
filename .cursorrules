@@ -515,7 +515,6 @@ This serial communication system provides the foundation for precise, reliable, 
 
 ### Export & Storage Guidelines
 - **Export Size Estimation**: Use `get_export_info()` to estimate zip sizes before export operations
-- **Compression Strategy**: Apply appropriate compression levels (level 6 for zarr exports)
 - **Metadata Preservation**: Include comprehensive metadata in exports (channel mapping, stage limits, etc.)
 - **File Structure Validation**: Verify zarr directory structure before export operations
 - **ZIP64 Support**: Always use `allowZip64=True` for large archives (>4GB or >65,535 files):
