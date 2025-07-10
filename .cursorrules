@@ -518,6 +518,19 @@ This serial communication system provides the foundation for precise, reliable, 
 - **Compression Strategy**: Apply appropriate compression levels (level 6 for zarr exports)
 - **Metadata Preservation**: Include comprehensive metadata in exports (channel mapping, stage limits, etc.)
 - **File Structure Validation**: Verify zarr directory structure before export operations
+- **ZIP Path Manipulation**: When creating ZIP files with custom directory names, use direct string concatenation with forward slashes:
+  ```python
+  # CORRECT: Direct string construction for ZIP paths
+  relative_path = file_path.relative_to(zarr_path)
+  arcname = "data.zarr/" + "/".join(relative_path.parts)
+  
+  # WRONG: Path manipulation that can cause ZIP corruption
+  path_parts = relative_path.parts
+  fixed_path_parts = ("data.zarr",) + path_parts[1:]
+  arcname = str(Path(*fixed_path_parts))  # Can cause cross-platform issues
+  ```
+- **ZIP Standard Compliance**: Always use forward slashes (`/`) in ZIP archive paths, regardless of operating system
+- **Cross-Platform Safety**: Avoid `Path(*parts)` reconstruction which can create invalid paths on different OS
 
 ## Debugging & Logging
 - Use the configured logger (`setup_logging()`) 

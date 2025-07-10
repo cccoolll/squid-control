@@ -1096,9 +1096,16 @@ class ZarrCanvas:
                 for root, dirs, files in os.walk(self.zarr_path):
                     for file in files:
                         file_path = Path(root) / file
-                        # Create relative path within the zip
-                        arcname = file_path.relative_to(self.zarr_path.parent)
-                        zip_file.write(file_path, arcname=str(arcname))
+                        # Create relative path within the zarr directory
+                        relative_path = file_path.relative_to(self.zarr_path)
+                        # Build the archive name with fixed "data.zarr" prefix
+                        if relative_path.parts:
+                            # Join "data.zarr" with the relative path using forward slashes (ZIP standard)
+                            arcname = "data.zarr/" + "/".join(relative_path.parts)
+                        else:
+                            # This shouldn't happen, but handle edge case
+                            arcname = "data.zarr/" + file_path.name
+                        zip_file.write(file_path, arcname=arcname)
                         logger.debug(f"Added to zip: {arcname}")
                 
                 # Add a metadata file with canvas information
