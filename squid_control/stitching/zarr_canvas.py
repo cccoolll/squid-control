@@ -1118,29 +1118,17 @@ class ZarrCanvas:
         
         try:
             # Create ZIP file with ZIP64 support for large archives
-            # Try force_zip64 first (Python 3.11+), fallback to allowZip64 for older versions
+            # Use allowZip64=True to ensure ZIP64 format is used for large files
             zip_kwargs = {
                 'mode': 'w',
                 'compression': zipfile.ZIP_DEFLATED,
                 'compresslevel': 1,
-                'allowZip64': True
+                'allowZip64': True  # Allow ZIP64 format for large files
             }
             
-            # Try to use force_zip64 if available (ensures ZIP64 format is used)
-            try:
-                zip_file_obj = zipfile.ZipFile(zip_buffer, force_zip64=True, **zip_kwargs)
-                logger.info("Using force_zip64=True for guaranteed ZIP64 format")
-            except TypeError:
-                # force_zip64 not available in older Python versions
-                zip_file_obj = zipfile.ZipFile(zip_buffer, **zip_kwargs)
-                logger.info("Using allowZip64=True (force_zip64 not available)")
-            
-            with zip_file_obj as zip_file:
-                # Set ZIP64 extensions manually for compatibility
-                if hasattr(zip_file, '_allowZip64') and zip_file._allowZip64:
-                    # Force ZIP64 mode by setting the internal flag
-                    zip_file._zip64 = True
-                    logger.info("Manually enabled ZIP64 mode for large archive")
+            # Create ZIP file with ZIP64 support
+            with zipfile.ZipFile(zip_buffer, **zip_kwargs) as zip_file:
+                logger.info("Created ZIP file with allowZip64=True for large archive support")
                 
                 # Walk through the entire zarr directory
                 for root, dirs, files in os.walk(self.zarr_path):
@@ -1226,7 +1214,28 @@ class ZarrCanvas:
                         central_dir_info = zip_file.infolist()
                         if not central_dir_info:
                             raise RuntimeError("Cannot access central directory in large ZIP file")
-                        logger.info(f"ZIP64 format validation passed for {zip_size_mb:.2f} MB file")
+                        
+                        # Check for ZIP64 indicators in the central directory
+                        zip64_indicators = []
+                        for info in central_dir_info[:5]:  # Check first 5 files
+                            # Check for large file sizes that would require ZIP64
+                            if info.file_size >= 0xFFFFFFFF or info.compress_size >= 0xFFFFFFFF:
+                                zip64_indicators.append("large_files")
+                                break
+                        
+                        # Check total archive size vs ZIP32 limits
+                        if zip_size_mb * 1024 * 1024 >= 0xFFFFFFFF:  # 4GB limit
+                            zip64_indicators.append("archive_size")
+                        
+                        # Check file count vs ZIP32 limits
+                        if len(file_list) >= 0xFFFF:  # 65535 file limit
+                            zip64_indicators.append("file_count")
+                        
+                        if zip64_indicators:
+                            logger.info(f"ZIP64 format validation passed for {zip_size_mb:.2f} MB file (indicators: {', '.join(zip64_indicators)})")
+                        else:
+                            logger.info(f"ZIP64 format validation passed for {zip_size_mb:.2f} MB file")
+                            
                     except Exception as e:
                         raise RuntimeError(f"ZIP64 format validation failed: {e}")
                 
