@@ -518,6 +518,12 @@ This serial communication system provides the foundation for precise, reliable, 
 - **Compression Strategy**: Apply appropriate compression levels (level 6 for zarr exports)
 - **Metadata Preservation**: Include comprehensive metadata in exports (channel mapping, stage limits, etc.)
 - **File Structure Validation**: Verify zarr directory structure before export operations
+- **ZIP64 Support**: Always use `allowZip64=True` for large archives (>4GB or >65,535 files):
+  ```python
+  # CORRECT: ZIP64 support for large archives
+  with zipfile.ZipFile(zip_buffer, 'w', allowZip64=True, compression=zipfile.ZIP_DEFLATED) as zf:
+      # Add files to archive
+  ```
 - **ZIP Path Manipulation**: When creating ZIP files with custom directory names, use direct string concatenation with forward slashes:
   ```python
   # CORRECT: Direct string construction for ZIP paths
