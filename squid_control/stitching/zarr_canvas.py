@@ -13,7 +13,20 @@ from PIL import Image
 from datetime import datetime
 import cv2
 
+# Get the logger for this module
 logger = logging.getLogger(__name__)
+
+# Ensure the logger has the same level as the root logger
+# This ensures our INFO messages are actually displayed
+if not logger.handlers:
+    # If no handlers are set up, inherit from the root logger
+    logger.setLevel(logging.INFO)
+    # Add a handler that matches the main service format
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.propagate = False  # Prevent double logging
 
 class ZarrCanvas:
     """
@@ -855,6 +868,12 @@ class ZarrCanvas:
         # Wait for the stitching task to complete
         if self.stitching_task:
             await self.stitching_task
+        
+        # CRITICAL: Wait for all thread pool operations to complete
+        logger.info("Waiting for all zarr operations to complete...")
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._wait_for_zarr_operations_complete)
+        
         logger.info("Stopped background stitching task")
     
     async def _stitching_loop(self):
@@ -1104,6 +1123,42 @@ class ZarrCanvas:
         except Exception as e:
             logger.warning(f"Failed to save preview: {e}")
     
+    def _flush_and_sync_zarr_arrays(self):
+        """
+        Flush and synchronize all zarr arrays to ensure all data is written to disk.
+        This is critical before ZIP export to prevent race conditions.
+        """
+        try:
+            with self.zarr_lock:
+                if hasattr(self, 'zarr_arrays'):
+                    for scale, zarr_array in self.zarr_arrays.items():
+                        try:
+                            # Flush any pending writes to disk
+                            if hasattr(zarr_array, 'flush'):
+                                zarr_array.flush()
+                            # Sync the underlying store
+                            if hasattr(zarr_array.store, 'sync'):
+                                zarr_array.store.sync()
+                            logger.debug(f"Flushed and synced zarr array scale {scale}")
+                        except Exception as e:
+                            logger.warning(f"Error flushing zarr array scale {scale}: {e}")
+                
+                # Also shutdown and recreate the thread pool to ensure all tasks are complete
+                if hasattr(self, 'executor'):
+                    self.executor.shutdown(wait=True)
+                    self.executor = ThreadPoolExecutor(max_workers=4)
+                    logger.info("Thread pool shutdown and recreated to ensure all zarr operations complete")
+                
+                # Give the filesystem a moment to complete any pending I/O
+                import time
+                time.sleep(0.1)
+                
+                logger.info("All zarr arrays flushed and synchronized")
+                
+        except Exception as e:
+            logger.error(f"Error during zarr flush and sync: {e}")
+            raise RuntimeError(f"Failed to flush zarr arrays: {e}")
+
     def export_as_zip(self) -> bytes:
         """
         Export the entire zarr canvas as a zip file for upload to artifact manager.
@@ -1117,23 +1172,53 @@ class ZarrCanvas:
         zip_buffer = io.BytesIO()
         
         try:
+            # CRITICAL: Ensure all zarr operations are complete before ZIP export
+            logger.info("Preparing zarr canvas for ZIP export...")
+            self._flush_and_sync_zarr_arrays()
+            
             # Create ZIP file with ZIP64 support for large archives
             # Use allowZip64=True to ensure ZIP64 format is used for large files
             zip_kwargs = {
                 'mode': 'w',
                 'compression': zipfile.ZIP_DEFLATED,
-                'compresslevel': 1,
+                'compresslevel': 0,
                 'allowZip64': True  # Allow ZIP64 format for large files
             }
             
             # Create ZIP file with ZIP64 support
             with zipfile.ZipFile(zip_buffer, **zip_kwargs) as zip_file:
-                logger.info("Created ZIP file with allowZip64=True for large archive support")
+                logger.info("Creating ZIP archive with ZIP64 support...")
+                
+                # First, count total files for progress tracking
+                total_files = 0
+                for root, dirs, files in os.walk(self.zarr_path):
+                    total_files += len(files)
+                
+                logger.info(f"Found {total_files} files to add to ZIP archive")
                 
                 # Walk through the entire zarr directory
+                processed_files = 0
                 for root, dirs, files in os.walk(self.zarr_path):
                     for file in files:
                         file_path = Path(root) / file
+                        
+                        # Verify the file is completely written and not currently being modified
+                        try:
+                            # Check if file exists and is readable
+                            if not file_path.exists():
+                                logger.warning(f"Skipping non-existent file: {file_path}")
+                                continue
+                            
+                            # Try to open the file to ensure it's not locked
+                            with open(file_path, 'rb') as f:
+                                # Read a small portion to verify file integrity
+                                f.read(1)
+                                f.seek(0)
+                            
+                        except (IOError, OSError) as e:
+                            logger.warning(f"Skipping file that cannot be read: {file_path} - {e}")
+                            continue
+                        
                         # Create relative path within the zarr directory
                         relative_path = file_path.relative_to(self.zarr_path)
                         # Build the archive name with fixed "data.zarr" prefix
@@ -1143,8 +1228,20 @@ class ZarrCanvas:
                         else:
                             # This shouldn't happen, but handle edge case
                             arcname = "data.zarr/" + file_path.name
-                        zip_file.write(file_path, arcname=arcname)
-                        logger.debug(f"Added to zip: {arcname}")
+                        
+                        # Add file to ZIP with error handling
+                        try:
+                            zip_file.write(file_path, arcname=arcname)
+                            processed_files += 1
+                            
+                            # Log progress every 1000 files
+                            if processed_files % 1000 == 0:
+                                logger.info(f"ZIP progress: {processed_files}/{total_files} files processed")
+                                
+                        except Exception as e:
+                            logger.error(f"Failed to add file to ZIP: {file_path} - {e}")
+                            # Continue with other files rather than failing completely
+                            continue
                 
                 # Add a metadata file with canvas information
                 metadata = {
@@ -1166,15 +1263,24 @@ class ZarrCanvas:
                 import json
                 metadata_json = json.dumps(metadata, indent=2)
                 zip_file.writestr("squid_canvas_metadata.json", metadata_json)
+                logger.info("Added metadata file to ZIP archive")
+                logger.info(f"ZIP creation completed: {processed_files} files processed")
                 
             zip_buffer.seek(0)
             zip_content = zip_buffer.getvalue()
             zip_size_mb = len(zip_content) / (1024 * 1024)
             
+            # Count files in the ZIP for logging
+            import zipfile
+            import io
+            zip_buffer_for_count = io.BytesIO(zip_content)
+            with zipfile.ZipFile(zip_buffer_for_count, 'r') as zf:
+                file_count = len(zf.namelist())
+            
             # Validate ZIP file integrity before returning
             self._validate_zip_file(zip_content)
             
-            logger.info(f"Exported zarr canvas as zip: {zip_size_mb:.2f} MB")
+            logger.info(f"ZIP archive created successfully: {file_count} files, {zip_size_mb:.2f} MB")
             return zip_content
             
         except Exception as e:
@@ -1356,3 +1462,33 @@ class ZarrCanvas:
                 "error": str(e),
                 "export_feasible": False
             } 
+
+    def _wait_for_zarr_operations_complete(self):
+        """
+        Wait for all zarr operations to complete and ensure filesystem sync.
+        This prevents race conditions with ZIP export.
+        """
+        import time
+        
+        with self.zarr_lock:
+            # Shutdown thread pool and wait for all tasks to complete
+            if hasattr(self, 'executor'):
+                self.executor.shutdown(wait=True)
+                self.executor = ThreadPoolExecutor(max_workers=4)
+                logger.debug("Thread pool shutdown and recreated after stitching")
+            
+            # Flush all zarr arrays to ensure data is written
+            if hasattr(self, 'zarr_arrays'):
+                for scale, zarr_array in self.zarr_arrays.items():
+                    try:
+                        if hasattr(zarr_array, 'flush'):
+                            zarr_array.flush()
+                        if hasattr(zarr_array.store, 'sync'):
+                            zarr_array.store.sync()
+                    except Exception as e:
+                        logger.warning(f"Error flushing zarr array scale {scale}: {e}")
+            
+            # Small delay to ensure filesystem operations complete
+            time.sleep(0.2)
+            
+        logger.info("All zarr operations completed and synchronized") 
