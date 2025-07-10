@@ -1236,7 +1236,7 @@ class SquidController:
             
             # Give the stitching queue a moment to process any final images
             logging.info('Allowing time for final images to be queued for stitching...')
-            await asyncio.sleep(0.3)  # Wait 500ms to ensure all images are queued
+            await asyncio.sleep(0.3)  # Wait 300ms to ensure all images are queued
             
             # Save a preview image from the lowest resolution scale
             # try:
@@ -1250,6 +1250,12 @@ class SquidController:
             self.is_busy = False
             # Stop the stitching task (this will now process all remaining images)
             await canvas.stop_stitching()
+            
+            # CRITICAL: Additional delay after stitching stops to ensure all zarr operations are complete
+            # This prevents race conditions with ZIP export when scanning finishes normally
+            logging.info('Waiting additional time for all zarr operations to stabilize...')
+            await asyncio.sleep(0.5)  # 500ms buffer to ensure filesystem operations complete
+            logging.info('Normal scan with stitching fully completed - zarr data ready for export')
     
     async def _initialize_zarr_canvas(self):
         """Initialize the Zarr canvas for stitching with all available channels."""
@@ -1657,6 +1663,12 @@ class SquidController:
             
             # Stop the stitching task
             await self.zarr_canvas.stop_stitching()
+            
+            # CRITICAL: Additional delay after stitching stops to ensure all zarr operations are complete
+            # This prevents race conditions with ZIP export when scanning finishes normally
+            logging.info('Waiting additional time for all zarr operations to stabilize...')
+            await asyncio.sleep(0.5)  # 500ms buffer to ensure filesystem operations complete
+            logging.info('Quick scan with stitching fully completed - zarr data ready for export')
     
     async def _move_to_well_at_high_speed(self, well_name, start_x, start_y, high_speed_velocity, limit_y_neg, limit_y_pos):
         """Move to well at high speed (30 mm/s) for efficient inter-well movement."""

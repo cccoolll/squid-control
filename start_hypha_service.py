@@ -3038,11 +3038,24 @@ class Microscope:
             
             # Run the blocking export_as_zip operation in a separate thread to avoid blocking the asyncio event loop
             logger.info("Starting zarr export in background thread to prevent WebSocket timeout...")
-            zarr_zip_content = await asyncio.get_event_loop().run_in_executor(
-                None,  # Use default ThreadPoolExecutor
-                self.squidController.zarr_canvas.export_as_zip
-            )
-            logger.info(f"Zarr export completed, zip size: {len(zarr_zip_content) / (1024*1024):.2f} MB")
+            
+            # Export zarr canvas as ZIP file
+            zarr_zip_content = None
+            export_method_used = "standard"
+            
+            try:
+                zarr_zip_content = await asyncio.get_event_loop().run_in_executor(
+                    None,  # Use default ThreadPoolExecutor
+                    self.squidController.zarr_canvas.export_as_zip
+                )
+                logger.info(f"Zarr export completed, zip size: {len(zarr_zip_content) / (1024*1024):.2f} MB")
+                
+            except Exception as e:
+                logger.error(f"Zarr export failed: {e}")
+                raise Exception(f"Failed to export zarr canvas: {e}")
+            
+            if zarr_zip_content is None:
+                raise Exception("Failed to export zarr canvas - no content generated")
             
             # Prepare acquisition settings if requested
             acquisition_settings = None
@@ -3052,7 +3065,8 @@ class Microscope:
                     "channels": export_info.get("channels", []),
                     "canvas_dimensions": export_info.get("canvas_dimensions", {}),
                     "num_scales": export_info.get("num_scales"),
-                    "microscope_service_id": self.service_id
+                    "microscope_service_id": self.service_id,
+                    "export_method": export_method_used
                 }
             
             # Upload to artifact manager
@@ -3067,7 +3081,8 @@ class Microscope:
             return {
                 "success": True,
                 "upload_result": upload_result,
-                "export_info": export_info
+                "export_info": export_info,
+                "export_method": export_method_used
             }
             
         except Exception as e:
