@@ -362,7 +362,7 @@ class SquidController:
         self.zarr_canvas = None  # Keep for backward compatibility - will point to active canvas
         
         # Clean up ZARR_PATH directory on startup
-        self._cleanup_zarr_directory()
+        #self._cleanup_zarr_directory() # Disabled for now
 
     def get_pixel_size(self):
         """Calculate pixel size based on imaging parameters."""
