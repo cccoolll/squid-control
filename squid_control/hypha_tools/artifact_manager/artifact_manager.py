@@ -419,6 +419,14 @@ class SquidArtifactManager:
         """
         workspace = "agent-lens"
         
+        # Validate ZIP file before upload
+        await self._validate_zarr_zip_content(zarr_zip_content)
+        
+        # Run detailed ZIP integrity test
+        zip_test_results = await self.test_zip_file_integrity(zarr_zip_content, f"Upload: {dataset_name}")
+        if not zip_test_results["valid"]:
+            raise ValueError(f"ZIP file integrity test failed: {', '.join(zip_test_results['issues'])}")
+        
         # Ensure gallery exists
         gallery = await self.create_or_get_microscope_gallery(microscope_service_id)
         
@@ -430,6 +438,7 @@ class SquidArtifactManager:
         # Create dataset manifest
         import time
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        zip_size_mb = len(zarr_zip_content) / (1024 * 1024)
         
         dataset_manifest = {
             "name": dataset_name,
@@ -439,7 +448,9 @@ class SquidArtifactManager:
             "timestamp": timestamp,
             "acquisition_settings": acquisition_settings or {},
             "file_format": "ome-zarr",
-            "upload_method": "squid-control-api"
+            "upload_method": "squid-control-api",
+            "zip_size_mb": zip_size_mb,
+            "zip_format": "ZIP64-compatible"
         }
         
         # Create dataset in staging mode
@@ -452,27 +463,34 @@ class SquidArtifactManager:
         )
         
         try:
-            # Upload zarr zip file
-            put_url = await self._svc.put_file(
-                dataset["id"], 
-                file_path="zarr_dataset.zip", 
-                download_weight=1.0
-            )
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.put(put_url, content=zarr_zip_content, timeout=300)
-                response.raise_for_status()
+            # Upload zarr zip file with retry logic
+            await self._upload_large_zip_with_retry(dataset["id"], zarr_zip_content, max_retries=3)
             
             # Commit the dataset
             await self._svc.commit(dataset["id"])
             
-            print(f"Successfully uploaded zarr dataset: {dataset_name}")
+            # Test the uploaded ZIP file to ensure it's accessible
+            print("Testing uploaded ZIP file accessibility...")
+            upload_test_results = await self.test_uploaded_zip_file(dataset["id"])
+            
+            if not upload_test_results["download_success"]:
+                raise Exception(f"Uploaded ZIP file is not accessible: {upload_test_results.get('error', 'Unknown error')}")
+            
+            if not upload_test_results["zip_integrity"]["valid"]:
+                issues = upload_test_results["zip_integrity"]["issues"]
+                print(f"WARNING: Uploaded ZIP file has integrity issues: {', '.join(issues)}")
+            else:
+                print("Uploaded ZIP file verified successfully")
+            
+            print(f"Successfully uploaded zarr dataset: {dataset_name} ({zip_size_mb:.2f} MB)")
             return {
                 "success": True,
                 "dataset_id": dataset["id"],
                 "dataset_name": dataset_name,
                 "gallery_id": gallery["id"],
-                "upload_timestamp": timestamp
+                "upload_timestamp": timestamp,
+                "zip_size_mb": zip_size_mb,
+                "zip_test_results": upload_test_results
             }
             
         except Exception as e:
@@ -482,6 +500,293 @@ class SquidArtifactManager:
             except:
                 pass
             raise e
+
+    async def _validate_zarr_zip_content(self, zarr_zip_content: bytes) -> None:
+        """
+        Validate that the ZIP content is properly formatted and not corrupted.
+        
+        Args:
+            zarr_zip_content (bytes): The ZIP file content to validate
+            
+        Raises:
+            ValueError: If ZIP file is invalid or corrupted
+        """
+        try:
+            import zipfile
+            import io
+            
+            zip_buffer = io.BytesIO(zarr_zip_content)
+            with zipfile.ZipFile(zip_buffer, 'r') as zip_file:
+                # Test the ZIP file structure
+                file_list = zip_file.namelist()
+                if not file_list:
+                    raise ValueError("ZIP file is empty")
+                
+                # Check for expected zarr structure
+                zarr_files = [f for f in file_list if f.startswith('data.zarr/')]
+                if not zarr_files:
+                    raise ValueError("ZIP file does not contain expected 'data.zarr/' structure")
+                
+                # Test that we can read the ZIP file entries
+                test_count = min(5, len(file_list))
+                for i in range(test_count):
+                    try:
+                        with zip_file.open(file_list[i]) as f:
+                            f.read(1024)  # Read a small chunk
+                    except Exception as e:
+                        raise ValueError(f"Cannot read file {file_list[i]} from ZIP: {e}")
+                
+                print(f"ZIP validation passed: {len(file_list)} files, {len(zarr_zip_content) / (1024*1024):.2f} MB")
+                
+        except zipfile.BadZipFile as e:
+            raise ValueError(f"Invalid ZIP file format: {e}")
+        except Exception as e:
+            raise ValueError(f"ZIP file validation failed: {e}")
+
+    async def _upload_large_zip_with_retry(self, dataset_id: str, zarr_zip_content: bytes, max_retries: int = 3) -> None:
+        """
+        Upload large ZIP file with retry logic and appropriate timeouts.
+        
+        Args:
+            dataset_id (str): The dataset ID
+            zarr_zip_content (bytes): The ZIP file content
+            max_retries (int): Maximum number of retry attempts
+            
+        Raises:
+            Exception: If upload fails after all retries
+        """
+        zip_size_mb = len(zarr_zip_content) / (1024 * 1024)
+        
+        # Calculate timeout based on file size (minimum 5 minutes, add 1 minute per 50MB)
+        timeout_seconds = max(300, int(zip_size_mb / 50) * 60 + 300)
+        
+        for attempt in range(max_retries):
+            try:
+                print(f"Upload attempt {attempt + 1}/{max_retries} for {zip_size_mb:.2f} MB ZIP file (timeout: {timeout_seconds}s)")
+                
+                # Get upload URL
+                put_url = await self._svc.put_file(
+                    dataset_id, 
+                    file_path="zarr_dataset.zip", 
+                    download_weight=1.0
+                )
+                
+                # Upload with appropriate timeout and chunked transfer
+                async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds)) as client:
+                    response = await client.put(
+                        put_url, 
+                        content=zarr_zip_content,
+                        headers={
+                            'Content-Type': 'application/zip',
+                            'Content-Length': str(len(zarr_zip_content))
+                        }
+                    )
+                    response.raise_for_status()
+                
+                print(f"Upload successful on attempt {attempt + 1}")
+                return
+                
+            except httpx.TimeoutException as e:
+                print(f"Upload timeout on attempt {attempt + 1}: {e}")
+                if attempt == max_retries - 1:
+                    raise Exception(f"Upload failed after {max_retries} attempts due to timeout")
+                
+            except httpx.HTTPStatusError as e:
+                print(f"Upload HTTP error on attempt {attempt + 1}: {e.response.status_code} - {e.response.text}")
+                if e.response.status_code == 413:  # Payload too large
+                    raise Exception(f"ZIP file is too large ({zip_size_mb:.2f} MB) for upload")
+                elif e.response.status_code >= 500:  # Server errors - retry
+                    if attempt == max_retries - 1:
+                        raise Exception(f"Server error after {max_retries} attempts: {e}")
+                else:  # Client errors - don't retry
+                    raise Exception(f"Upload failed with HTTP {e.response.status_code}: {e.response.text}")
+                
+            except Exception as e:
+                print(f"Upload error on attempt {attempt + 1}: {e}")
+                if attempt == max_retries - 1:
+                    raise Exception(f"Upload failed after {max_retries} attempts: {e}")
+                
+            # Wait before retry (exponential backoff)
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                print(f"Waiting {wait_time}s before retry...")
+                await asyncio.sleep(wait_time)
+
+    async def test_zip_file_integrity(self, zip_content: bytes, description: str = "ZIP file") -> dict:
+        """
+        Test ZIP file integrity and provide detailed diagnostics.
+        
+        Args:
+            zip_content (bytes): The ZIP file content to test
+            description (str): Description of the ZIP file for logging
+            
+        Returns:
+            dict: Detailed test results including file count, size, and any issues
+        """
+        import zipfile
+        import io
+        
+        results = {
+            "valid": False,
+            "size_mb": len(zip_content) / (1024 * 1024),
+            "file_count": 0,
+            "zip64_required": False,
+            "zip64_enabled": False,
+            "compression_method": None,
+            "issues": [],
+            "sample_files": []
+        }
+        
+        try:
+            zip_buffer = io.BytesIO(zip_content)
+            
+            # Test basic ZIP file opening
+            with zipfile.ZipFile(zip_buffer, 'r') as zip_file:
+                file_list = zip_file.namelist()
+                results["file_count"] = len(file_list)
+                
+                if not file_list:
+                    results["issues"].append("ZIP file is empty")
+                    return results
+                
+                # Check if ZIP64 is required/enabled
+                results["zip64_required"] = results["size_mb"] > 200 or results["file_count"] > 65535
+                
+                # Test central directory access
+                try:
+                    info_list = zip_file.infolist()
+                    
+                    # More comprehensive ZIP64 detection
+                    # Check for ZIP64 indicators: large file sizes, large archive, or ZIP64 extra fields
+                    zip64_indicators = []
+                    
+                    # Check for large individual files
+                    large_files = any(info.file_size >= 0xFFFFFFFF or info.compress_size >= 0xFFFFFFFF for info in info_list)
+                    if large_files:
+                        zip64_indicators.append("large_files")
+                    
+                    # Check for ZIP64 extra fields (more reliable indicator)
+                    zip64_extra_fields = any(
+                        any(extra[0] == 0x0001 for extra in getattr(info, 'extra', []) if len(extra) >= 2) 
+                        for info in info_list[:10]  # Check first 10 files
+                    )
+                    if zip64_extra_fields:
+                        zip64_indicators.append("extra_fields")
+                    
+                    # Check total archive size vs ZIP32 limits
+                    if results["size_mb"] * 1024 * 1024 >= 0xFFFFFFFF:  # 4GB limit
+                        zip64_indicators.append("archive_size")
+                    
+                    # Check file count vs ZIP32 limits
+                    if results["file_count"] >= 0xFFFF:  # 65535 file limit
+                        zip64_indicators.append("file_count")
+                    
+                    results["zip64_enabled"] = len(zip64_indicators) > 0
+                    results["zip64_indicators"] = zip64_indicators
+                    
+                    # Get compression method from first file
+                    if info_list:
+                        results["compression_method"] = info_list[0].compress_type
+                        
+                except Exception as e:
+                    results["issues"].append(f"Cannot access central directory: {e}")
+                    return results
+                
+                # Test reading sample files
+                sample_count = min(5, len(file_list))
+                for i in range(sample_count):
+                    try:
+                        file_info = zip_file.getinfo(file_list[i])
+                        with zip_file.open(file_list[i]) as f:
+                            data = f.read(1024)  # Read first 1KB
+                            results["sample_files"].append({
+                                "name": file_list[i],
+                                "size": file_info.file_size,
+                                "compressed_size": file_info.compress_size,
+                                "readable": True
+                            })
+                    except Exception as e:
+                        results["issues"].append(f"Cannot read file {file_list[i]}: {e}")
+                        results["sample_files"].append({
+                            "name": file_list[i],
+                            "readable": False,
+                            "error": str(e)
+                        })
+                
+                # Additional ZIP64 validation for large files
+                if results["zip64_required"] and not results["zip64_enabled"]:
+                    results["issues"].append("Large file requires ZIP64 format but ZIP64 is not enabled")
+                elif results["zip64_required"] and results["zip64_enabled"]:
+                    # Test ZIP64 central directory
+                    try:
+                        for info in info_list[:3]:  # Test first 3 files
+                            if info.file_size > 0:
+                                with zip_file.open(info) as f:
+                                    f.read(1)
+                    except Exception as e:
+                        results["issues"].append(f"ZIP64 central directory test failed: {e}")
+                
+                # Mark as valid if no issues found
+                results["valid"] = len(results["issues"]) == 0
+                
+        except zipfile.BadZipFile as e:
+            results["issues"].append(f"Invalid ZIP file format: {e}")
+        except Exception as e:
+            results["issues"].append(f"ZIP file test failed: {e}")
+        
+        # Log results
+        status = "VALID" if results["valid"] else "INVALID"
+        print(f"ZIP Test [{description}]: {status}")
+        print(f"  Size: {results['size_mb']:.2f} MB, Files: {results['file_count']}")
+        print(f"  ZIP64 Required: {results['zip64_required']}, Enabled: {results['zip64_enabled']}")
+        if "zip64_indicators" in results and results["zip64_indicators"]:
+            print(f"  ZIP64 Indicators: {', '.join(results['zip64_indicators'])}")
+        print(f"  Compression: {results['compression_method']}")
+        
+        if results["issues"]:
+            print(f"  Issues: {', '.join(results['issues'])}")
+        
+        return results
+
+    async def test_uploaded_zip_file(self, dataset_id: str, file_path: str = "zarr_dataset.zip") -> dict:
+        """
+        Test an uploaded ZIP file by downloading and verifying its integrity.
+        
+        Args:
+            dataset_id (str): The dataset ID containing the ZIP file
+            file_path (str): Path to the ZIP file within the dataset
+            
+        Returns:
+            dict: Test results including download success and ZIP integrity
+        """
+        try:
+            # Download the ZIP file
+            get_url = await self._svc.get_file(dataset_id, file_path, silent=True)
+            
+            async with httpx.AsyncClient(timeout=300) as client:
+                response = await client.get(get_url)
+                response.raise_for_status()
+                
+                zip_content = response.content
+                
+                # Test the downloaded ZIP file
+                zip_test_results = await self.test_zip_file_integrity(
+                    zip_content, 
+                    f"Downloaded: {dataset_id}/{file_path}"
+                )
+                
+                return {
+                    "download_success": True,
+                    "download_size_mb": len(zip_content) / (1024 * 1024),
+                    "zip_integrity": zip_test_results
+                }
+                
+        except Exception as e:
+            return {
+                "download_success": False,
+                "error": str(e),
+                "zip_integrity": {"valid": False, "issues": [f"Download failed: {e}"]}
+            }
 
 # Constants
 SERVER_URL = "https://hypha.aicell.io"
