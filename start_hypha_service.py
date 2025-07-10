@@ -3021,7 +3021,7 @@ class Microscope:
         Returns:
             dict: Upload result information
         """
-        
+        logger.info(f"Uploading zarr dataset: {dataset_name}")
         try:
             # Check if zarr canvas exists
             if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
@@ -3036,7 +3036,13 @@ class Microscope:
             if self.zarr_artifact_manager is None:
                 raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
             
-            zarr_zip_content = self.squidController.zarr_canvas.export_as_zip()
+            # Run the blocking export_as_zip operation in a separate thread to avoid blocking the asyncio event loop
+            logger.info("Starting zarr export in background thread to prevent WebSocket timeout...")
+            zarr_zip_content = await asyncio.get_event_loop().run_in_executor(
+                None,  # Use default ThreadPoolExecutor
+                self.squidController.zarr_canvas.export_as_zip
+            )
+            logger.info(f"Zarr export completed, zip size: {len(zarr_zip_content) / (1024*1024):.2f} MB")
             
             # Prepare acquisition settings if requested
             acquisition_settings = None
