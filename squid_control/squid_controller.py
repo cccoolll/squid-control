@@ -1372,31 +1372,25 @@ class SquidController:
             # Use ALL available channels from ChannelMapper for initialization
             default_channels = ChannelMapper.get_all_human_names()
             logging.info(f'Initializing zarr canvas with channels from ChannelMapper: {len(default_channels)} channels')
-            
-            # Create the canvas with optimized timepoint allocation
+            # Only initialize new if it does not exist
+            initialize_new = not actual_zarr_path.exists()
             canvas = ZarrCanvas(
                 base_path=zarr_path,
                 pixel_size_xy_um=self.pixel_size_xy,
                 stage_limits=stage_limits,
                 channels=default_channels,
                 rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG,
-                initial_timepoints=20,  # Pre-allocate 20 timepoints to avoid resize delays
-                timepoint_expansion_chunk=10,  # Expand by 10 timepoints when needed
-                fileset_name=fileset_name  # Use the provided fileset name
+                initial_timepoints=20,
+                timepoint_expansion_chunk=10,
+                fileset_name=fileset_name,
+                initialize_new=initialize_new
             )
-            
-            # Initialize the OME-Zarr structure
-            canvas.initialize_canvas()
-            
-            # Add to tracking dictionary and set as active
             self.zarr_canvases[fileset_name] = canvas
             self.active_canvas_name = fileset_name
-            self.zarr_canvas = canvas  # For backward compatibility
-            
+            self.zarr_canvas = canvas
             logging.info(f'Successfully initialized Zarr canvas "{fileset_name}" at {canvas.zarr_path} with ALL channels: {len(default_channels)} channels')
             logging.info(f'Available channels: {default_channels}')
             logging.info(f'Pixel size: {self.pixel_size_xy:.3f} µm')
-            
         except Exception as e:
             logging.error(f'Failed to initialize zarr canvas "{fileset_name}": {e}')
             logging.info('To fix this, either:')
@@ -2027,17 +2021,35 @@ class SquidController:
             fileset_path = zarr_dir / f"{fileset_name}.zarr"
             
             if fileset_path.exists():
-                # Load the existing zarr canvas
-                # Note: This is a simplified loading - you might need to properly restore the canvas
-                self._initialize_empty_canvas(fileset_name)
+                # Open existing canvas without deleting data
+                stage_limits = {
+                    'x_positive': 120,
+                    'x_negative': 0,
+                    'y_positive': 86,
+                    'y_negative': 0,
+                    'z_positive': 6
+                }
+                default_channels = ChannelMapper.get_all_human_names()
+                canvas = ZarrCanvas(
+                    base_path=zarr_path,
+                    pixel_size_xy_um=self.pixel_size_xy,
+                    stage_limits=stage_limits,
+                    channels=default_channels,
+                    rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG,
+                    initial_timepoints=20,
+                    timepoint_expansion_chunk=10,
+                    fileset_name=fileset_name,
+                    initialize_new=False
+                )
+                self.zarr_canvases[fileset_name] = canvas
+                self.active_canvas_name = fileset_name
+                self.zarr_canvas = canvas
                 return {
                     "message": f"Loaded and activated fileset '{fileset_name}' from disk",
                     "fileset_name": fileset_name,
                     "was_already_active": False
                 }
-            
             raise ValueError(f"Fileset '{fileset_name}' not found")
-            
         except Exception as e:
             logging.error(f"Failed to set active zarr fileset '{fileset_name}': {e}")
             if isinstance(e, ValueError):

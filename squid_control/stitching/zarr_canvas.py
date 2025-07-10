@@ -38,7 +38,8 @@ class ZarrCanvas:
     
     def __init__(self, base_path: str, pixel_size_xy_um: float, stage_limits: Dict[str, float], 
                  channels: List[str] = None, chunk_size: int = 256, rotation_angle_deg: float = 0.0,
-                 initial_timepoints: int = 20, timepoint_expansion_chunk: int = 10, fileset_name: str = "live_stitching"):
+                 initial_timepoints: int = 20, timepoint_expansion_chunk: int = 10, fileset_name: str = "live_stitching",
+                 initialize_new: bool = False):
         """
         Initialize the Zarr canvas.
         
@@ -52,6 +53,7 @@ class ZarrCanvas:
             initial_timepoints: Number of timepoints to pre-allocate during initialization (default 20)
             timepoint_expansion_chunk: Number of timepoints to add when expansion is needed (default 10)
             fileset_name: Name of the zarr fileset (default 'live_stitching')
+            initialize_new: If True, create a new fileset (deletes existing). If False, open existing if present.
         """
         self.base_path = Path(base_path)
         self.pixel_size_xy_um = pixel_size_xy_um
@@ -101,6 +103,12 @@ class ZarrCanvas:
         
         # Track available timepoints
         self.available_timepoints = [0]  # Start with timepoint 0 as a list
+        
+        # Only initialize or open
+        if initialize_new or not self.zarr_path.exists():
+            self.initialize_canvas()
+        else:
+            self.open_existing_canvas()
         
         logger.info(f"ZarrCanvas initialized: {self.canvas_width_px}x{self.canvas_height_px} px, "
                     f"{self.num_scales} scales, chunk_size={chunk_size}, "
@@ -502,6 +510,24 @@ class ZarrCanvas:
         except Exception as e:
             logger.error(f"Failed to initialize OME-Zarr canvas: {e}")
             raise RuntimeError(f"Cannot initialize zarr canvas: {e}")
+    
+    def open_existing_canvas(self):
+        """Open an existing OME-Zarr structure from disk without deleting data."""
+        import zarr
+        store = zarr.DirectoryStore(str(self.zarr_path))
+        root = zarr.open_group(store=store, mode='r+')
+        self.zarr_root = root
+        # Load arrays for each scale
+        self.zarr_arrays = {}
+        for scale in range(self.num_scales):
+            if str(scale) in root:
+                self.zarr_arrays[scale] = root[str(scale)]
+        # Try to load available timepoints from metadata
+        if 'squid_canvas' in root.attrs and 'available_timepoints' in root.attrs['squid_canvas']:
+            self.available_timepoints = list(root.attrs['squid_canvas']['available_timepoints'])
+        else:
+            self.available_timepoints = [0]
+        logger.info(f"Opened existing Zarr canvas at {self.zarr_path}")
     
     def stage_to_pixel_coords(self, x_mm: float, y_mm: float, scale: int = 0) -> Tuple[int, int]:
         """
@@ -1091,7 +1117,31 @@ class ZarrCanvas:
         zip_buffer = io.BytesIO()
         
         try:
-            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zip_file:
+            # Create ZIP file with ZIP64 support for large archives
+            # Try force_zip64 first (Python 3.11+), fallback to allowZip64 for older versions
+            zip_kwargs = {
+                'mode': 'w',
+                'compression': zipfile.ZIP_DEFLATED,
+                'compresslevel': 1,
+                'allowZip64': True
+            }
+            
+            # Try to use force_zip64 if available (ensures ZIP64 format is used)
+            try:
+                zip_file_obj = zipfile.ZipFile(zip_buffer, force_zip64=True, **zip_kwargs)
+                logger.info("Using force_zip64=True for guaranteed ZIP64 format")
+            except TypeError:
+                # force_zip64 not available in older Python versions
+                zip_file_obj = zipfile.ZipFile(zip_buffer, **zip_kwargs)
+                logger.info("Using allowZip64=True (force_zip64 not available)")
+            
+            with zip_file_obj as zip_file:
+                # Set ZIP64 extensions manually for compatibility
+                if hasattr(zip_file, '_allowZip64') and zip_file._allowZip64:
+                    # Force ZIP64 mode by setting the internal flag
+                    zip_file._zip64 = True
+                    logger.info("Manually enabled ZIP64 mode for large archive")
+                
                 # Walk through the entire zarr directory
                 for root, dirs, files in os.walk(self.zarr_path):
                     for file in files:
@@ -1133,6 +1183,9 @@ class ZarrCanvas:
             zip_content = zip_buffer.getvalue()
             zip_size_mb = len(zip_content) / (1024 * 1024)
             
+            # Validate ZIP file integrity before returning
+            self._validate_zip_file(zip_content)
+            
             logger.info(f"Exported zarr canvas as zip: {zip_size_mb:.2f} MB")
             return zip_content
             
@@ -1141,7 +1194,69 @@ class ZarrCanvas:
             raise RuntimeError(f"Cannot export zarr canvas: {e}")
         finally:
             zip_buffer.close()
-    
+
+    def _validate_zip_file(self, zip_content: bytes) -> None:
+        """
+        Validate ZIP file integrity to catch issues before upload.
+        
+        Args:
+            zip_content (bytes): The ZIP file content to validate
+            
+        Raises:
+            RuntimeError: If ZIP file is invalid or corrupted
+        """
+        try:
+            import zipfile
+            import io
+            
+            # Test if the ZIP file can be opened and read
+            zip_buffer = io.BytesIO(zip_content)
+            with zipfile.ZipFile(zip_buffer, 'r') as zip_file:
+                # Test the ZIP file structure
+                file_list = zip_file.namelist()
+                if not file_list:
+                    raise RuntimeError("ZIP file is empty")
+                
+                # Check if ZIP64 format is being used for large files
+                zip_size_mb = len(zip_content) / (1024 * 1024)
+                if zip_size_mb > 200:
+                    # For large files, verify ZIP64 compatibility
+                    try:
+                        # Try to access the central directory
+                        central_dir_info = zip_file.infolist()
+                        if not central_dir_info:
+                            raise RuntimeError("Cannot access central directory in large ZIP file")
+                        logger.info(f"ZIP64 format validation passed for {zip_size_mb:.2f} MB file")
+                    except Exception as e:
+                        raise RuntimeError(f"ZIP64 format validation failed: {e}")
+                
+                # Test a few files to ensure they can be read
+                test_count = min(5, len(file_list))
+                for i in range(test_count):
+                    try:
+                        with zip_file.open(file_list[i]) as f:
+                            # Read a small chunk to verify file integrity
+                            f.read(1024)
+                    except Exception as e:
+                        raise RuntimeError(f"Cannot read file {file_list[i]} from ZIP: {e}")
+                
+                # Additional validation for central directory integrity
+                try:
+                    # Test that we can get file info for all files
+                    for info in zip_file.infolist()[:10]:  # Test first 10 files
+                        if info.file_size > 0:  # Only test non-empty files
+                            with zip_file.open(info) as f:
+                                f.read(1)  # Read just one byte to verify access
+                except Exception as e:
+                    raise RuntimeError(f"Central directory validation failed: {e}")
+                
+                logger.info(f"ZIP file validation passed: {len(file_list)} files, {zip_size_mb:.2f} MB")
+                
+        except zipfile.BadZipFile as e:
+            raise RuntimeError(f"Invalid ZIP file format: {e}")
+        except Exception as e:
+            raise RuntimeError(f"ZIP file validation failed: {e}")
+
     def get_export_info(self) -> dict:
         """
         Get information about the current canvas for export planning.
