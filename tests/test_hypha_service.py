@@ -116,8 +116,21 @@ async def test_microscope_service():
                     try:
                         if microscope.frame_acquisition_running:
                             print("Stopping video buffering...")
-                            await microscope.stop_video_buffering()
+                            # Add timeout for test environment to prevent hanging
+                            await asyncio.wait_for(
+                                microscope.stop_video_buffering(), 
+                                timeout=5.0  # 5 second timeout for tests
+                            )
                             print("✅ Video buffering stopped")
+                    except asyncio.TimeoutError:
+                        print("⚠️ Video buffering stop timed out, forcing cleanup...")
+                        # Force stop the video buffering by setting flags directly
+                        microscope.frame_acquisition_running = False
+                        if microscope.frame_acquisition_task:
+                            microscope.frame_acquisition_task.cancel()
+                        if microscope.video_idle_check_task:
+                            microscope.video_idle_check_task.cancel()
+                        print("✅ Video buffering force stopped")
                     except Exception as video_error:
                         print(f"Error stopping video buffering: {video_error}")
                 
@@ -129,7 +142,13 @@ async def test_microscope_service():
                             camera = microscope.squidController.camera
                             if hasattr(camera, 'cleanup_zarr_resources_async'):
                                 try:
-                                    await camera.cleanup_zarr_resources_async()
+                                    # Add timeout for zarr cleanup as well
+                                    await asyncio.wait_for(
+                                        camera.cleanup_zarr_resources_async(),
+                                        timeout=3.0  # 3 second timeout for zarr cleanup
+                                    )
+                                except asyncio.TimeoutError:
+                                    print("⚠️ Zarr cleanup timed out, skipping...")
                                 except Exception as camera_error:
                                     print(f"Camera cleanup error: {camera_error}")
                         
@@ -2097,8 +2116,3 @@ async def test_comprehensive_service_functionality(test_microscope_service):
     except Exception as e:
         print(f"❌ Comprehensive service functionality test failed: {e}")
         raise
-
-# Zarr upload tests have been moved to test_squid_controller.py
-
-
-
