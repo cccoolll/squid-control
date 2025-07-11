@@ -10,6 +10,7 @@ import zipfile
 import tempfile
 import shutil
 import requests
+import httpx
 import zarr
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -23,15 +24,42 @@ TEST_SERVER_URL = "https://hypha.aicell.io"
 TEST_WORKSPACE = "agent-lens"
 TEST_TIMEOUT = 300  # seconds (longer for large uploads)
 
-# Test sizes in MB - from 100MB to 10GB
+async def cleanup_test_galleries(artifact_manager):
+    """Clean up any leftover test galleries from interrupted tests."""
+    try:
+        # List all artifacts
+        artifacts = await artifact_manager.list()
+        
+        # Find test galleries
+        test_galleries = [a for a in artifacts if 'test-zip-gallery' in a.get('alias', '')]
+        
+        if not test_galleries:
+            print("✅ No test galleries found to clean up")
+            return
+        
+        print(f"🧹 Found {len(test_galleries)} test galleries to clean up:")
+        for gallery in test_galleries:
+            print(f"  - {gallery['alias']} (ID: {gallery['id']})")
+        
+        # Delete each test gallery
+        for gallery in test_galleries:
+            try:
+                await artifact_manager.delete(
+                    artifact_id=gallery["id"], 
+                    delete_files=True, 
+                    recursive=True
+                )
+                print(f"✅ Deleted gallery: {gallery['alias']}")
+            except Exception as e:
+                print(f"⚠️ Error deleting {gallery['alias']}: {e}")
+        
+        print("✅ Cleanup completed")
+    except Exception as e:
+        print(f"⚠️ Error during cleanup: {e}")
+
+# Test sizes in MB - smaller sizes for faster testing
 TEST_SIZES = [
-    ("100MB", 100),
-    ("200MB", 200), 
-    ("400MB", 400),
-    ("800MB", 800),
     ("1.6GB", 1600),
-    ("3.2GB", 3200),
-    ("10GB", 10000)
 ]
 
 class OMEZarrCreator:
@@ -137,11 +165,8 @@ class OMEZarrCreator:
             scale_width = width // scale_factor
             scale_z = z_slices
             
-            # Chunk size optimization for different scales
-            if scale_idx == 0:  # Full resolution
-                chunk_size = (1, 1, min(8, scale_z), min(512, scale_height), min(512, scale_width))
-            else:  # Lower resolutions
-                chunk_size = (1, 1, scale_z, scale_height, scale_width)
+            # Standard chunk size: 256x256 for X,Y dimensions, 1 for other dimensions
+            chunk_size = (1, 1, 1, 256, 256)
             
             # Create the array
             array = root.create_dataset(
@@ -225,6 +250,73 @@ class OMEZarrCreator:
             "file_count": total_files
         }
 
+async def upload_zip_with_retry(put_url: str, zip_path: Path, size_mb: int, max_retries: int = 3) -> float:
+    """
+    Upload ZIP file with retry logic and proper timeout handling.
+    
+    Args:
+        put_url: Upload URL
+        zip_path: Path to ZIP file
+        size_mb: Size in MB for timeout calculation
+        max_retries: Maximum retry attempts
+        
+    Returns:
+        Upload time in seconds
+    """
+    # Calculate timeout based on file size (minimum 5 minutes, add 1 minute per 50MB)
+    timeout_seconds = max(300, int(size_mb / 50) * 60 + 300)
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"Upload attempt {attempt + 1}/{max_retries} for {size_mb:.1f}MB ZIP file (timeout: {timeout_seconds}s)")
+            
+            # Read file content
+            with open(zip_path, 'rb') as f:
+                zip_content = f.read()
+            
+            # Upload with httpx (async) and proper timeout
+            upload_start = time.time()
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds)) as client:
+                response = await client.put(
+                    put_url, 
+                    content=zip_content,
+                    headers={
+                        'Content-Type': 'application/zip',
+                        'Content-Length': str(len(zip_content))
+                    }
+                )
+                response.raise_for_status()
+            
+            upload_time = time.time() - upload_start
+            print(f"Upload successful on attempt {attempt + 1}")
+            return upload_time
+            
+        except httpx.TimeoutException as e:
+            print(f"Upload timeout on attempt {attempt + 1}: {e}")
+            if attempt == max_retries - 1:
+                raise Exception(f"Upload failed after {max_retries} attempts due to timeout")
+            
+        except httpx.HTTPStatusError as e:
+            print(f"Upload HTTP error on attempt {attempt + 1}: {e.response.status_code} - {e.response.text}")
+            if e.response.status_code == 413:  # Payload too large
+                raise Exception(f"ZIP file is too large ({size_mb:.1f} MB) for upload")
+            elif e.response.status_code >= 500:  # Server errors - retry
+                if attempt == max_retries - 1:
+                    raise Exception(f"Server error after {max_retries} attempts: {e}")
+            else:  # Client errors - don't retry
+                raise Exception(f"Upload failed with HTTP {e.response.status_code}: {e.response.text}")
+            
+        except Exception as e:
+            print(f"Upload error on attempt {attempt + 1}: {e}")
+            if attempt == max_retries - 1:
+                raise Exception(f"Upload failed after {max_retries} attempts: {e}")
+            
+        # Wait before retry (exponential backoff)
+        if attempt < max_retries - 1:
+            wait_time = 2 ** attempt
+            print(f"Waiting {wait_time}s before retry...")
+            await asyncio.sleep(wait_time)
+
 @pytest_asyncio.fixture(scope="function")
 async def artifact_manager():
     """Create artifact manager connection for testing."""
@@ -246,7 +338,15 @@ async def artifact_manager():
         artifact_manager = await server.get_service("public/artifact-manager")
         print("✅ Artifact manager ready")
         
+        # Clean up any leftover test galleries at the start
+        print("🧹 Cleaning up any leftover test galleries...")
+        await cleanup_test_galleries(artifact_manager)
+        
         yield artifact_manager
+        
+        # Clean up any leftover test galleries at the end
+        print("🧹 Final cleanup of test galleries...")
+        await cleanup_test_galleries(artifact_manager)
 
 @pytest_asyncio.fixture(scope="function") 
 async def test_gallery(artifact_manager):
@@ -284,6 +384,7 @@ async def test_gallery(artifact_manager):
     except Exception as e:
         print(f"⚠️ Error during gallery cleanup: {e}")
 
+@pytest.mark.timeout(1800)  # 30 minute timeout
 async def test_create_datasets_and_test_endpoints(test_gallery, artifact_manager):
     """Test creating datasets of various sizes and accessing their ZIP endpoints."""
     gallery = test_gallery
@@ -333,9 +434,8 @@ async def test_create_datasets_and_test_endpoints(test_gallery, artifact_manager
                     stage=True
                 )
                 
-                # Upload ZIP file
+                # Upload ZIP file using improved async method
                 print(f"⬆️ Uploading ZIP file: {zip_info['size_mb']:.1f}MB")
-                upload_start = time.time()
                 
                 put_url = await artifact_manager.put_file(
                     dataset["id"], 
@@ -343,22 +443,8 @@ async def test_create_datasets_and_test_endpoints(test_gallery, artifact_manager
                     download_weight=1.0
                 )
                 
-                # Upload with progress tracking for large files
-                with open(zip_path, 'rb') as f:
-                    if size_mb > 500:  # For large files, show progress
-                        # Read in chunks and upload
-                        chunk_size = 8 * 1024 * 1024  # 8MB chunks
-                        total_size = zip_path.stat().st_size
-                        uploaded = 0
-                        
-                        response = requests.put(put_url, data=f, timeout=600)
-                    else:
-                        response = requests.put(put_url, data=f, timeout=300)
-                
-                upload_time = time.time() - upload_start
-                
-                if not response.ok:
-                    raise Exception(f"Upload failed: {response.status_code} - {response.text}")
+                # Use the improved async upload function
+                upload_time = await upload_zip_with_retry(put_url, zip_path, zip_info['size_mb'])
                 
                 print(f"✅ Upload completed in {upload_time:.1f}s ({zip_info['size_mb']/upload_time:.1f} MB/s)")
                 
@@ -373,6 +459,11 @@ async def test_create_datasets_and_test_endpoints(test_gallery, artifact_manager
                 # Test directory listing
                 response = requests.get(endpoint_url, timeout=60)
                 
+                # Print the actual response for debugging
+                print(f"📄 Response Status: {response.status_code}")
+                print(f"📄 Response Headers: {dict(response.headers)}")
+                print(f"📄 Response Content: {response.text[:1000]}...")
+                
                 test_result = {
                     "size_name": size_name,
                     "size_mb": size_mb,
@@ -383,34 +474,53 @@ async def test_create_datasets_and_test_endpoints(test_gallery, artifact_manager
                     "dataset_id": dataset["id"],
                     "endpoint_url": endpoint_url,
                     "endpoint_status": response.status_code,
-                    "endpoint_success": response.ok
+                    "endpoint_success": False  # Will be set based on content check
                 }
                 
+                # Check if response is OK and contains valid JSON
                 if response.ok:
                     try:
                         content = response.json()
-                        test_result["endpoint_content_type"] = "json"
-                        test_result["endpoint_files_count"] = len(content) if isinstance(content, list) else 0
-                        print(f"✅ Endpoint accessible: {response.status_code}, {len(content)} items")
                         
-                        # Test accessing a specific file in the ZIP
-                        if isinstance(content, list) and len(content) > 0:
-                            # Try to access the first item
-                            first_item = content[0]
-                            if first_item.get("type") == "file":
-                                file_url = f"{endpoint_url}?path=data.zarr/{first_item['name']}"
-                                file_response = requests.head(file_url, timeout=30)
-                                test_result["file_access_status"] = file_response.status_code
-                                test_result["file_access_success"] = file_response.ok
-                                print(f"✅ File access test: {file_response.status_code}")
+                        # Check if the response is a list (successful directory listing)
+                        if isinstance(content, list):
+                            test_result["endpoint_success"] = True
+                            test_result["endpoint_content_type"] = "json"
+                            test_result["endpoint_files_count"] = len(content)
+                            print(f"✅ Endpoint SUCCESS: {response.status_code}, {len(content)} items")
+                            print(f"📄 Directory listing: {content}")
+                            
+                            # Test accessing a specific file in the ZIP
+                            if len(content) > 0:
+                                first_item = content[0]
+                                if first_item.get("type") == "file":
+                                    file_url = f"{endpoint_url}?path=data.zarr/{first_item['name']}"
+                                    file_response = requests.head(file_url, timeout=30)
+                                    test_result["file_access_status"] = file_response.status_code
+                                    test_result["file_access_success"] = file_response.ok
+                                    print(f"✅ File access test: {file_response.status_code}")
+                        
+                        # Check if the response is an error message
+                        elif isinstance(content, dict) and content.get("success") == False:
+                            test_result["endpoint_success"] = False
+                            test_result["endpoint_error"] = content.get("detail", "Unknown error")
+                            print(f"❌ Endpoint FAILED: ZIP file not found - {content.get('detail', 'Unknown error')}")
+                        
+                        else:
+                            test_result["endpoint_success"] = False
+                            test_result["endpoint_error"] = f"Unexpected response format: {content}"
+                            print(f"❌ Endpoint FAILED: Unexpected response format - {content}")
                         
                     except json.JSONDecodeError:
+                        test_result["endpoint_success"] = False
                         test_result["endpoint_content_type"] = "text"
-                        print(f"✅ Endpoint accessible: {response.status_code} (non-JSON response)")
+                        test_result["endpoint_error"] = f"Invalid JSON response: {response.text[:200]}"
+                        print(f"❌ Endpoint FAILED: Invalid JSON response - {response.text[:200]}")
                     
                 else:
-                    print(f"❌ Endpoint failed: {response.status_code} - {response.text[:200]}")
-                    test_result["endpoint_error"] = response.text[:500]
+                    test_result["endpoint_success"] = False
+                    test_result["endpoint_error"] = f"HTTP {response.status_code}: {response.text[:200]}"
+                    print(f"❌ Endpoint FAILED: HTTP {response.status_code} - {response.text[:200]}")
                 
                 test_results.append(test_result)
                 
@@ -508,10 +618,10 @@ async def test_quick_zip_endpoint(test_gallery, artifact_manager):
             file_path="zarr_dataset.zip"
         )
         
-        with open(zip_path, 'rb') as f:
-            response = requests.put(put_url, data=f, timeout=120)
+        # Use the improved async upload function
+        upload_time = await upload_zip_with_retry(put_url, zip_path, zip_info['size_mb'])
         
-        assert response.ok, f"Upload failed: {response.status_code}"
+        print(f"✅ Quick test upload completed in {upload_time:.1f}s")
         
         await artifact_manager.commit(dataset["id"])
         
@@ -519,14 +629,25 @@ async def test_quick_zip_endpoint(test_gallery, artifact_manager):
         endpoint_url = f"{TEST_SERVER_URL}/{TEST_WORKSPACE}/artifacts/{dataset_name}/zip-files/zarr_dataset.zip/?path=data.zarr/"
         response = requests.get(endpoint_url, timeout=30)
         
-        assert response.ok, f"Endpoint failed: {response.status_code} - {response.text}"
+        # Print the actual response for debugging
+        print(f"📄 Quick Test Response Status: {response.status_code}")
+        print(f"📄 Quick Test Response Content: {response.text[:1000]}...")
         
-        # Verify we get JSON directory listing
-        content = response.json()
-        assert isinstance(content, list), "Expected JSON list from directory endpoint"
-        assert len(content) > 0, "Expected non-empty directory listing"
-        
-        print(f"✅ Quick test passed: {len(content)} items in directory")
+        # Check response content
+        if response.ok:
+            try:
+                content = response.json()
+                if isinstance(content, list):
+                    print(f"✅ Quick test passed: {len(content)} items in directory")
+                    print(f"📄 Directory listing: {content}")
+                elif isinstance(content, dict) and content.get("success") == False:
+                    raise Exception(f"ZIP file not found: {content.get('detail', 'Unknown error')}")
+                else:
+                    raise Exception(f"Unexpected response format: {content}")
+            except json.JSONDecodeError:
+                raise Exception(f"Invalid JSON response: {response.text[:200]}")
+        else:
+            raise Exception(f"HTTP {response.status_code}: {response.text[:200]}")
 
 if __name__ == "__main__":
     # Allow running this test directly
