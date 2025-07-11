@@ -1180,8 +1180,8 @@ class ZarrCanvas:
             # Use allowZip64=True to ensure ZIP64 format is used for large files
             zip_kwargs = {
                 'mode': 'w',
-                'compression': zipfile.ZIP_DEFLATED,
-                'compresslevel': 0,
+                'compression': zipfile.ZIP_STORED,
+                'compresslevel': None,
                 'allowZip64': True  # Allow ZIP64 format for large files
             }
             
@@ -1453,7 +1453,7 @@ class ZarrCanvas:
                     "height_px": self.canvas_height_px,
                     "pixel_size_um": self.pixel_size_xy_um
                 },
-                "export_feasible": estimated_zip_size_mb < 1000  # Reasonable limit
+                "export_feasible": True  # Removed arbitrary size limit - let S3 handle large files
             }
             
         except Exception as e:

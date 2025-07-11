@@ -3027,10 +3027,8 @@ class Microscope:
             if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
                 raise Exception("No zarr canvas available. Start a scanning operation first to create data.")
             
-            # Get export info to check feasibility
+            # Get export info for metadata (removed size limit check)
             export_info = self.squidController.zarr_canvas.get_export_info()
-            if not export_info.get("export_feasible", False):
-                raise Exception(f"Dataset too large for upload. Estimated size: {export_info.get('estimated_zip_size_mb', 0):.1f} MB")
             
             # Check if zarr artifact manager is available
             if self.zarr_artifact_manager is None:
