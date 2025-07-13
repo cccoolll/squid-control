@@ -3034,26 +3034,30 @@ class Microscope:
             if self.zarr_artifact_manager is None:
                 raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
             
-            # Run the blocking export_as_zip operation in a separate thread to avoid blocking the asyncio event loop
+            # Run the blocking export_as_zip_file operation in a separate thread to avoid blocking the asyncio event loop
             logger.info("Starting zarr export in background thread to prevent WebSocket timeout...")
             
-            # Export zarr canvas as ZIP file
-            zarr_zip_content = None
-            export_method_used = "standard"
+            # Export zarr canvas as ZIP file (using file-based method to avoid memory issues)
+            zarr_zip_file_path = None
+            export_method_used = "file_based"
             
             try:
-                zarr_zip_content = await asyncio.get_event_loop().run_in_executor(
+                zarr_zip_file_path = await asyncio.get_event_loop().run_in_executor(
                     None,  # Use default ThreadPoolExecutor
-                    self.squidController.zarr_canvas.export_as_zip
+                    self.squidController.zarr_canvas.export_as_zip_file
                 )
-                logger.info(f"Zarr export completed, zip size: {len(zarr_zip_content) / (1024*1024):.2f} MB")
+                
+                # Get file size for logging
+                import os
+                zip_size_mb = os.path.getsize(zarr_zip_file_path) / (1024*1024)
+                logger.info(f"Zarr export completed, zip size: {zip_size_mb:.2f} MB")
                 
             except Exception as e:
                 logger.error(f"Zarr export failed: {e}")
                 raise Exception(f"Failed to export zarr canvas: {e}")
             
-            if zarr_zip_content is None:
-                raise Exception("Failed to export zarr canvas - no content generated")
+            if zarr_zip_file_path is None:
+                raise Exception("Failed to export zarr canvas - no file generated")
             
             # Prepare acquisition settings if requested
             acquisition_settings = None
@@ -3067,21 +3071,37 @@ class Microscope:
                     "export_method": export_method_used
                 }
             
-            # Upload to artifact manager
-            upload_result = await self.zarr_artifact_manager.upload_zarr_dataset(
-                microscope_service_id=self.service_id,
-                dataset_name=dataset_name,
-                zarr_zip_content=zarr_zip_content,
-                acquisition_settings=acquisition_settings,
-                description=description
-            )
-            
-            return {
-                "success": True,
-                "upload_result": upload_result,
-                "export_info": export_info,
-                "export_method": export_method_used
-            }
+            # Read the ZIP file and upload using the existing content-based method
+            try:
+                with open(zarr_zip_file_path, 'rb') as zip_file:
+                    zarr_zip_content = zip_file.read()
+                    
+                upload_result = await self.zarr_artifact_manager.upload_zarr_dataset(
+                    microscope_service_id=self.service_id,
+                    dataset_name=dataset_name,
+                    zarr_zip_content=zarr_zip_content,
+                    acquisition_settings=acquisition_settings,
+                    description=description
+                )
+                
+                logger.info(f"Successfully uploaded zarr dataset: {dataset_name} ({upload_result['zip_size_mb']:.2f} MB)")
+                
+                return {
+                    "success": True,
+                    "upload_result": upload_result,
+                    "export_info": export_info,
+                    "export_method": export_method_used
+                }
+                
+            finally:
+                # Clean up temporary ZIP file
+                import os
+                try:
+                    if zarr_zip_file_path and os.path.exists(zarr_zip_file_path):
+                        os.unlink(zarr_zip_file_path)
+                        logger.info(f"Cleaned up temporary ZIP file: {zarr_zip_file_path}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to clean up temporary ZIP file {zarr_zip_file_path}: {cleanup_error}")
             
         except Exception as e:
             logger.error(f"Error uploading zarr dataset: {e}")
