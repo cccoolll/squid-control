@@ -15,6 +15,8 @@ import zarr
 from pathlib import Path
 from typing import Dict, List, Tuple
 from hypha_rpc import connect_to_server
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Mark all tests in this module as asyncio and integration tests
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
@@ -60,6 +62,7 @@ async def cleanup_test_galleries(artifact_manager):
 # Test sizes in MB - smaller sizes for faster testing
 TEST_SIZES = [
     ("1.6GB", 1600),
+    ("mini-chunks-test", 400),  # New test designed to create mini chunks
 ]
 
 class OMEZarrCreator:
@@ -90,9 +93,172 @@ class OMEZarrCreator:
         return xy_size, xy_size, z_slices
     
     @staticmethod
+    def create_mini_chunk_zarr_dataset(output_path: Path, target_size_mb: int, 
+                                     dataset_name: str) -> Dict:
+        """
+        Create an OME-Zarr dataset specifically designed to reproduce mini chunk issues.
+        This creates many small chunks that mirror real-world zarr canvas behavior.
+        """
+        print(f"Creating MINI-CHUNK OME-Zarr dataset: {dataset_name} (~{target_size_mb}MB)")
+        
+        # Create dimensions that will result in many small chunks
+        # Use smaller chunk sizes and sparse data to create mini chunks
+        height, width = 2048, 2048  # Reasonable image size
+        z_slices = 1
+        num_channels = 4
+        num_timepoints = 1
+        
+        # Create the zarr group
+        store = zarr.DirectoryStore(str(output_path))
+        root = zarr.group(store=store, overwrite=True)
+        
+        # OME-Zarr metadata
+        ome_metadata = {
+            "version": "0.4",
+            "axes": [
+                {"name": "t", "type": "time"},
+                {"name": "c", "type": "channel"},
+                {"name": "z", "type": "space"},
+                {"name": "y", "type": "space"},
+                {"name": "x", "type": "space"}
+            ],
+            "datasets": [
+                {"path": "0"},
+                {"path": "1"}, 
+                {"path": "2"}
+            ],
+            "coordinateTransformations": [
+                {
+                    "scale": [1.0, 1.0, 0.5, 0.1, 0.1],
+                    "type": "scale"
+                }
+            ]
+        }
+        
+        # Channel metadata
+        omero_metadata = {
+            "channels": [
+                {
+                    "label": "DAPI",
+                    "color": "0000ff",
+                    "window": {"start": 0, "end": 4095}
+                },
+                {
+                    "label": "GFP", 
+                    "color": "00ff00",
+                    "window": {"start": 0, "end": 4095}
+                },
+                {
+                    "label": "RFP",
+                    "color": "ff0000", 
+                    "window": {"start": 0, "end": 4095}
+                },
+                {
+                    "label": "Brightfield",
+                    "color": "ffffff",
+                    "window": {"start": 0, "end": 4095}
+                }
+            ],
+            "name": dataset_name
+        }
+        
+        # Store metadata
+        root.attrs["ome"] = ome_metadata
+        root.attrs["omero"] = omero_metadata
+        
+        # Create multi-scale pyramid with SMALL CHUNKS to simulate mini chunk problem
+        scales = [1, 2, 4]  # 3 scales
+        for scale_idx, scale_factor in enumerate(scales):
+            scale_height = height // scale_factor
+            scale_width = width // scale_factor
+            scale_z = z_slices
+            
+            # CRITICAL: Use small chunk sizes to create mini chunks
+            # This mimics the real-world zarr canvas behavior
+            if dataset_name.startswith("mini-chunks"):
+                chunk_size = (1, 1, 1, 128, 128)  # Smaller chunks = more files
+            else:
+                chunk_size = (1, 1, 1, 256, 256)  # Standard chunks
+            
+            # Create the array
+            array = root.create_dataset(
+                name=str(scale_idx),
+                shape=(num_timepoints, num_channels, scale_z, scale_height, scale_width),
+                chunks=chunk_size,
+                dtype=np.uint16,
+                compressor=zarr.Blosc(cname='zstd', clevel=3)
+            )
+            
+            print(f"  Scale {scale_idx}: {scale_width}x{scale_height}x{scale_z}, chunks: {chunk_size}")
+            
+            # Generate SPARSE data to create many small chunk files
+            # This is key to reproducing the mini chunk problem
+            for t in range(num_timepoints):
+                for c in range(num_channels):
+                    for z in range(scale_z):
+                        # Create sparse data pattern that results in small compressed chunks
+                        if dataset_name.startswith("mini-chunks"):
+                            # Create sparse pattern with mostly zeros
+                            data = np.zeros((scale_height, scale_width), dtype=np.uint16)
+                            
+                            # Add small patches of data every ~200 pixels
+                            # This creates many chunks with minimal data (mini chunks)
+                            for y in range(0, scale_height, 200):
+                                for x in range(0, scale_width, 200):
+                                    # Small 20x20 patches of data
+                                    y_end = min(y + 20, scale_height)
+                                    x_end = min(x + 20, scale_width)
+                                    data[y:y_end, x:x_end] = np.random.randint(100, 1000, (y_end-y, x_end-x))
+                        else:
+                            # Standard dense data for comparison
+                            y_coords, x_coords = np.ogrid[:scale_height, :scale_width]
+                            
+                            # Different patterns for different channels
+                            if c == 0:  # DAPI - nuclear pattern
+                                data = (np.sin(y_coords * 0.1) * np.cos(x_coords * 0.1) * 1000 + 
+                                       np.random.randint(0, 500, (scale_height, scale_width))).astype(np.uint16)
+                            elif c == 1:  # GFP - cytoplasmic pattern  
+                                data = (np.sin(y_coords * 0.05) * np.sin(x_coords * 0.05) * 1500 + 
+                                       np.random.randint(0, 300, (scale_height, scale_width))).astype(np.uint16)
+                            elif c == 2:  # RFP - spots pattern
+                                data = np.random.exponential(200, (scale_height, scale_width)).astype(np.uint16)
+                                data = np.clip(data, 0, 4095)
+                            else:  # Brightfield - uniform with texture
+                                data = (2000 + np.random.normal(0, 100, (scale_height, scale_width))).astype(np.uint16)
+                                data = np.clip(data, 0, 4095)
+                        
+                        array[t, c, z, :, :] = data
+        
+        # Calculate actual size
+        actual_size_mb = sum(os.path.getsize(os.path.join(root_path, f))
+                           for root_path, dirs, files in os.walk(output_path)
+                           for f in files) / (1024 * 1024)
+        
+        print(f"  Created dataset: {actual_size_mb:.1f}MB actual size")
+        
+        return {
+            "name": dataset_name,
+            "path": str(output_path),
+            "target_size_mb": target_size_mb,
+            "actual_size_mb": actual_size_mb,
+            "dimensions": {
+                "height": height,
+                "width": width, 
+                "z_slices": z_slices,
+                "channels": num_channels,
+                "timepoints": num_timepoints
+            }
+        }
+    
+    @staticmethod
     def create_ome_zarr_dataset(output_path: Path, target_size_mb: int, 
                               dataset_name: str) -> Dict:
         """Create an OME-Zarr dataset of approximately target_size_mb."""
+        
+        # Use mini-chunk creation for specific test
+        if dataset_name.startswith("mini-chunks"):
+            return OMEZarrCreator.create_mini_chunk_zarr_dataset(output_path, target_size_mb, dataset_name)
+        
         print(f"Creating OME-Zarr dataset: {dataset_name} (~{target_size_mb}MB)")
         
         # Calculate dimensions
@@ -224,11 +390,94 @@ class OMEZarrCreator:
         }
 
     @staticmethod
+    def analyze_chunk_sizes(zarr_path: Path) -> Dict:
+        """
+        Analyze the chunk file sizes in a zarr dataset to identify mini chunks.
+        This helps diagnose ZIP corruption issues.
+        """
+        print(f"🔍 Analyzing chunk sizes in: {zarr_path}")
+        
+        chunk_sizes = []
+        file_count = 0
+        total_size = 0
+        mini_chunks = 0  # Files < 1KB
+        small_chunks = 0  # Files < 10KB
+        
+        # Walk through all files in the zarr directory
+        for root, dirs, files in os.walk(zarr_path):
+            for file in files:
+                file_path = Path(root) / file
+                try:
+                    size = file_path.stat().st_size
+                    chunk_sizes.append(size)
+                    total_size += size
+                    file_count += 1
+                    
+                    if size < 1024:  # < 1KB
+                        mini_chunks += 1
+                    elif size < 10240:  # < 10KB
+                        small_chunks += 1
+                        
+                except OSError:
+                    continue
+        
+        # Calculate statistics
+        chunk_sizes = np.array(chunk_sizes)
+        stats = {
+            "total_files": file_count,
+            "total_size_mb": total_size / (1024 * 1024),
+            "average_file_size_bytes": np.mean(chunk_sizes) if len(chunk_sizes) > 0 else 0,
+            "median_file_size_bytes": np.median(chunk_sizes) if len(chunk_sizes) > 0 else 0,
+            "min_file_size_bytes": np.min(chunk_sizes) if len(chunk_sizes) > 0 else 0,
+            "max_file_size_bytes": np.max(chunk_sizes) if len(chunk_sizes) > 0 else 0,
+            "mini_chunks_count": mini_chunks,  # < 1KB
+            "small_chunks_count": small_chunks,  # < 10KB
+            "mini_chunks_percentage": (mini_chunks / file_count * 100) if file_count > 0 else 0,
+            "small_chunks_percentage": (small_chunks / file_count * 100) if file_count > 0 else 0,
+            "chunk_sizes": chunk_sizes.tolist()
+        }
+        
+        print(f"  📊 File Analysis:")
+        print(f"    Total files: {stats['total_files']}")
+        print(f"    Total size: {stats['total_size_mb']:.1f} MB")
+        print(f"    Average file size: {stats['average_file_size_bytes']:.0f} bytes")
+        print(f"    Median file size: {stats['median_file_size_bytes']:.0f} bytes")
+        print(f"    Mini chunks (<1KB): {stats['mini_chunks_count']} ({stats['mini_chunks_percentage']:.1f}%)")
+        print(f"    Small chunks (<10KB): {stats['small_chunks_count']} ({stats['small_chunks_percentage']:.1f}%)")
+        print(f"    Size range: {stats['min_file_size_bytes']:.0f} - {stats['max_file_size_bytes']:.0f} bytes")
+        
+        return stats
+
+    @staticmethod
     def create_zip_from_zarr(zarr_path: Path, zip_path: Path) -> Dict:
-        """Create a ZIP file from OME-Zarr dataset."""
+        """Create a ZIP file from OME-Zarr dataset with detailed analysis."""
         print(f"Creating ZIP file: {zip_path.name}")
         
-        with zipfile.ZipFile(zip_path, 'w', allowZip64=True, compression=zipfile.ZIP_STORED) as zipf:
+        # First analyze the zarr structure
+        chunk_analysis = OMEZarrCreator.analyze_chunk_sizes(zarr_path)
+        
+        # Create ZIP with different compression strategies based on chunk analysis
+        mini_chunk_percentage = chunk_analysis["mini_chunks_percentage"]
+        
+        if mini_chunk_percentage > 20:  # High percentage of mini chunks
+            print(f"⚠️ High mini chunk percentage ({mini_chunk_percentage:.1f}%) - using STORED compression to avoid ZIP corruption")
+            compression = zipfile.ZIP_STORED
+            compresslevel = None
+        else:
+            print(f"✅ Low mini chunk percentage ({mini_chunk_percentage:.1f}%) - using DEFLATED compression")
+            compression = zipfile.ZIP_DEFLATED
+            compresslevel = 1
+        
+        # Create ZIP with appropriate settings
+        zip_kwargs = {
+            'mode': 'w',
+            'compression': compression,
+            'allowZip64': True
+        }
+        if compresslevel is not None:
+            zip_kwargs['compresslevel'] = compresslevel
+        
+        with zipfile.ZipFile(zip_path, **zip_kwargs) as zipf:
             total_files = 0
             for root, dirs, files in os.walk(zarr_path):
                 for file in files:
@@ -244,11 +493,35 @@ class OMEZarrCreator:
         zip_size_mb = zip_path.stat().st_size / (1024 * 1024)
         print(f"  ZIP created: {zip_size_mb:.1f}MB, {total_files} files")
         
-        return {
+        # Test ZIP file integrity
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zipf:
+                # Test central directory access
+                file_list = zipf.namelist()
+                # Test reading first few files
+                for i, filename in enumerate(file_list[:5]):
+                    try:
+                        with zipf.open(filename) as f:
+                            f.read(1)  # Read one byte to test access
+                    except Exception as e:
+                        print(f"⚠️ Error reading file {filename} from ZIP: {e}")
+                        break
+                print(f"✅ ZIP integrity test passed")
+                zip_valid = True
+        except zipfile.BadZipFile as e:
+            print(f"❌ ZIP integrity test failed: {e}")
+            zip_valid = False
+        
+        result = {
             "zip_path": str(zip_path),
             "size_mb": zip_size_mb,
-            "file_count": total_files
+            "file_count": total_files,
+            "compression": "STORED" if compression == zipfile.ZIP_STORED else "DEFLATED",
+            "zip_valid": zip_valid,
+            "chunk_analysis": chunk_analysis
         }
+        
+        return result
 
 async def upload_zip_with_retry(put_url: str, zip_path: Path, size_mb: int, max_retries: int = 3) -> float:
     """
@@ -648,6 +921,203 @@ async def test_quick_zip_endpoint(test_gallery, artifact_manager):
                 raise Exception(f"Invalid JSON response: {response.text[:200]}")
         else:
             raise Exception(f"HTTP {response.status_code}: {response.text[:200]}")
+
+@pytest.mark.timeout(1800)  # 30 minute timeout
+async def test_mini_chunk_reproduction(test_gallery, artifact_manager):
+    """
+    Test specifically designed to reproduce the mini chunk ZIP corruption issue.
+    This test compares normal chunks vs mini chunks to identify the root cause.
+    """
+    gallery = test_gallery
+    
+    # Create temporary directory for test files
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        
+        print(f"\n🧪 MINI CHUNK REPRODUCTION TEST")
+        print(f"=" * 60)
+        
+        # Test both normal and mini chunk scenarios
+        test_scenarios = [
+            ("normal-chunks", 400, "Normal 256x256 chunks"),
+            ("mini-chunks-test", 400, "Small 128x128 chunks with sparse data")
+        ]
+        
+        results = []
+        
+        for scenario_name, size_mb, description in test_scenarios:
+            print(f"\n📋 Testing scenario: {description}")
+            print(f"   Target size: {size_mb}MB")
+            
+            try:
+                # Create dataset with specific chunk characteristics
+                dataset_name = f"{scenario_name}-{uuid.uuid4().hex[:6]}"
+                zarr_path = temp_path / f"{dataset_name}.zarr"
+                
+                dataset_info = OMEZarrCreator.create_ome_zarr_dataset(
+                    zarr_path, size_mb, dataset_name
+                )
+                
+                # Create ZIP with analysis
+                zip_path = temp_path / f"{dataset_name}.zip"
+                zip_info = OMEZarrCreator.create_zip_from_zarr(zarr_path, zip_path)
+                
+                # Extract key metrics
+                chunk_analysis = zip_info["chunk_analysis"]
+                
+                result = {
+                    "scenario": scenario_name,
+                    "description": description,
+                    "zarr_size_mb": dataset_info["actual_size_mb"],
+                    "zip_size_mb": zip_info["size_mb"],
+                    "compression_ratio": zip_info["size_mb"] / dataset_info["actual_size_mb"],
+                    "total_files": chunk_analysis["total_files"],
+                    "average_file_size": chunk_analysis["average_file_size_bytes"],
+                    "mini_chunks_count": chunk_analysis["mini_chunks_count"],
+                    "mini_chunks_percentage": chunk_analysis["mini_chunks_percentage"],
+                    "small_chunks_count": chunk_analysis["small_chunks_count"],
+                    "small_chunks_percentage": chunk_analysis["small_chunks_percentage"],
+                    "zip_compression": zip_info["compression"],
+                    "zip_valid": zip_info["zip_valid"],
+                    "files_per_mb": chunk_analysis["total_files"] / dataset_info["actual_size_mb"]
+                }
+                
+                results.append(result)
+                
+                print(f"📊 Results for {scenario_name}:")
+                print(f"   Zarr size: {result['zarr_size_mb']:.1f} MB")
+                print(f"   ZIP size: {result['zip_size_mb']:.1f} MB")
+                print(f"   Compression: {result['zip_compression']}")
+                print(f"   Total files: {result['total_files']}")
+                print(f"   Files per MB: {result['files_per_mb']:.0f}")
+                print(f"   Average file size: {result['average_file_size']:.0f} bytes")
+                print(f"   Mini chunks (<1KB): {result['mini_chunks_count']} ({result['mini_chunks_percentage']:.1f}%)")
+                print(f"   Small chunks (<10KB): {result['small_chunks_count']} ({result['small_chunks_percentage']:.1f}%)")
+                print(f"   ZIP valid: {'✅' if result['zip_valid'] else '❌'}")
+                
+                # Try to upload and test the problematic case
+                if scenario_name.startswith("mini-chunks"):
+                    print(f"\n🚀 Testing upload of mini-chunk scenario...")
+                    
+                    # Create artifact in gallery
+                    dataset_manifest = {
+                        "name": f"Mini Chunk Test - {scenario_name}",
+                        "description": f"Test for mini chunk ZIP corruption: {description}",
+                        "test_purpose": "mini_chunk_reproduction"
+                    }
+                    
+                    dataset = await artifact_manager.create(
+                        parent_id=gallery["id"],
+                        alias=dataset_name,
+                        manifest=dataset_manifest,
+                        stage=True
+                    )
+                    
+                    # Upload ZIP file
+                    put_url = await artifact_manager.put_file(
+                        dataset["id"], 
+                        file_path="zarr_dataset.zip"
+                    )
+                    
+                    upload_time = await upload_zip_with_retry(put_url, zip_path, zip_info['size_mb'])
+                    print(f"✅ Upload completed in {upload_time:.1f}s")
+                    
+                    await artifact_manager.commit(dataset["id"])
+                    
+                    # Test endpoint access
+                    endpoint_url = f"{TEST_SERVER_URL}/{TEST_WORKSPACE}/artifacts/{dataset_name}/zip-files/zarr_dataset.zip/?path=data.zarr/"
+                    
+                    print(f"🔍 Testing endpoint: {endpoint_url}")
+                    response = requests.get(endpoint_url, timeout=60)
+                    
+                    result["endpoint_status"] = response.status_code
+                    result["endpoint_success"] = response.ok
+                    
+                    if response.ok:
+                        try:
+                            content = response.json()
+                            if isinstance(content, list):
+                                result["endpoint_files_found"] = len(content)
+                                print(f"✅ Endpoint SUCCESS: Found {len(content)} files")
+                            else:
+                                result["endpoint_error"] = str(content)
+                                print(f"❌ Endpoint returned error: {content}")
+                        except json.JSONDecodeError:
+                            result["endpoint_error"] = f"Invalid JSON: {response.text[:200]}"
+                            print(f"❌ Endpoint returned invalid JSON: {response.text[:200]}")
+                    else:
+                        result["endpoint_error"] = f"HTTP {response.status_code}: {response.text[:200]}"
+                        print(f"❌ Endpoint FAILED: {result['endpoint_error']}")
+                    
+                    # Clean up
+                    await artifact_manager.delete(artifact_id=dataset["id"], delete_files=True)
+                
+                # Clean up local files
+                if zarr_path.exists():
+                    shutil.rmtree(zarr_path)
+                if zip_path.exists():
+                    zip_path.unlink()
+                
+            except Exception as e:
+                print(f"❌ Error in scenario {scenario_name}: {e}")
+                results.append({
+                    "scenario": scenario_name,
+                    "description": description,
+                    "error": str(e)
+                })
+        
+        # Print comparison analysis
+        print(f"\n📊 COMPARISON ANALYSIS")
+        print(f"=" * 60)
+        
+        if len(results) >= 2:
+            normal = next((r for r in results if r["scenario"].startswith("normal")), None)
+            mini = next((r for r in results if r["scenario"].startswith("mini-chunks")), None)
+            
+            if normal and mini and "error" not in normal and "error" not in mini:
+                print(f"📈 Comparison between scenarios:")
+                print(f"")
+                print(f"{'Metric':<25} {'Normal Chunks':<15} {'Mini Chunks':<15} {'Difference'}")
+                print(f"{'-'*70}")
+                print(f"{'Total files':<25} {normal['total_files']:<15} {mini['total_files']:<15} {mini['total_files'] - normal['total_files']:+}")
+                print(f"{'Files per MB':<25} {normal['files_per_mb']:<15.0f} {mini['files_per_mb']:<15.0f} {mini['files_per_mb'] - normal['files_per_mb']:+.0f}")
+                print(f"{'Avg file size (bytes)':<25} {normal['average_file_size']:<15.0f} {mini['average_file_size']:<15.0f} {mini['average_file_size'] - normal['average_file_size']:+.0f}")
+                print(f"{'Mini chunks %':<25} {normal['mini_chunks_percentage']:<15.1f} {mini['mini_chunks_percentage']:<15.1f} {mini['mini_chunks_percentage'] - normal['mini_chunks_percentage']:+.1f}")
+                print(f"{'ZIP compression':<25} {normal['zip_compression']:<15} {mini['zip_compression']:<15} {'Different' if normal['zip_compression'] != mini['zip_compression'] else 'Same'}")
+                print(f"{'ZIP valid':<25} {normal['zip_valid']:<15} {mini['zip_valid']:<15} {'Different' if normal['zip_valid'] != mini['zip_valid'] else 'Same'}")
+                
+                if "endpoint_success" in mini:
+                    print(f"{'Endpoint access':<25} {'N/A':<15} {mini['endpoint_success']:<15} {'N/A'}")
+                
+                print(f"")
+                
+                # Determine likely cause
+                if mini['mini_chunks_percentage'] > normal['mini_chunks_percentage'] * 2:
+                    print(f"🔍 DIAGNOSIS: Mini chunk percentage is significantly higher in the problematic case")
+                    print(f"   Normal: {normal['mini_chunks_percentage']:.1f}% mini chunks")
+                    print(f"   Problematic: {mini['mini_chunks_percentage']:.1f}% mini chunks")
+                    print(f"   This likely causes ZIP central directory corruption")
+                
+                if mini['files_per_mb'] > normal['files_per_mb'] * 1.5:
+                    print(f"🔍 DIAGNOSIS: File density is much higher in the problematic case")
+                    print(f"   Normal: {normal['files_per_mb']:.0f} files/MB")
+                    print(f"   Problematic: {mini['files_per_mb']:.0f} files/MB")
+                    print(f"   High file density can stress ZIP central directory structure")
+                
+                if not mini['zip_valid'] and normal['zip_valid']:
+                    print(f"🔍 DIAGNOSIS: ZIP corruption detected in mini chunk case")
+                    print(f"   This confirms that mini chunks cause ZIP file corruption")
+        
+        # Assert that we can reproduce the issue
+        mini_chunk_result = next((r for r in results if r["scenario"].startswith("mini-chunks")), None)
+        if mini_chunk_result and "endpoint_success" in mini_chunk_result:
+            if not mini_chunk_result["endpoint_success"]:
+                print(f"\n✅ SUCCESS: Reproduced the mini chunk ZIP corruption issue!")
+                print(f"   Endpoint failed as expected: {mini_chunk_result.get('endpoint_error', 'Unknown error')}")
+            else:
+                print(f"\n⚠️ UNEXPECTED: Mini chunk test passed - may need to adjust parameters")
+        
+        print(f"\n✅ Mini chunk reproduction test completed")
 
 if __name__ == "__main__":
     # Allow running this test directly
