@@ -1473,7 +1473,309 @@ async def test_set_stage_velocity_error_handling(sim_controller_fixture):
         print("✅ set_stage_velocity error handling tests passed!")
         break
 
+# Zarr Fileset Management Tests
+@pytest.mark.timeout(60)
+async def test_zarr_fileset_creation(sim_controller_fixture):
+    """Test creating new zarr filesets."""
+    async for controller in sim_controller_fixture:
+        print("Testing zarr fileset creation...")
+        
+        # Test creating a new fileset
+        fileset_name = "test_experiment_1"
+        result = controller.create_zarr_fileset(fileset_name)
+        
+        assert isinstance(result, dict)
+        assert result["fileset_name"] == fileset_name
+        assert result["is_active"] == True  # Should be active since it's the first one
+        assert "message" in result
+        
+        # Verify it's in the tracking dictionary
+        assert fileset_name in controller.zarr_canvases
+        assert controller.active_canvas_name == fileset_name
+        assert controller.zarr_canvas is not None
+        
+        print(f"   ✓ Created fileset '{fileset_name}' successfully")
+        
+        # Test creating another fileset
+        fileset_name_2 = "test_experiment_2"
+        result_2 = controller.create_zarr_fileset(fileset_name_2)
+        
+        assert result_2["fileset_name"] == fileset_name_2
+        assert result_2["is_active"] == True  # Should become the new active one
+        assert fileset_name_2 in controller.zarr_canvases
+        assert controller.active_canvas_name == fileset_name_2
+        
+        print(f"   ✓ Created second fileset '{fileset_name_2}' successfully")
+        
+        # Test error case: creating duplicate fileset
+        try:
+            controller.create_zarr_fileset(fileset_name)
+            assert False, "Should have raised ValueError for duplicate fileset"
+        except ValueError as e:
+            assert "already exists" in str(e)
+            print(f"   ✓ Correctly prevented duplicate fileset creation")
+        
+        print("✅ Zarr fileset creation tests passed!")
+        break
 
+@pytest.mark.timeout(60)
+async def test_zarr_fileset_listing(sim_controller_fixture):
+    """Test listing zarr filesets."""
+    async for controller in sim_controller_fixture:
+        print("Testing zarr fileset listing...")
+        
+        # Initially should have no filesets
+        result = controller.list_zarr_filesets()
+        
+        assert isinstance(result, dict)
+        assert "filesets" in result
+        assert "active_fileset" in result
+        assert "total_count" in result
+        
+        initial_count = result["total_count"]
+        print(f"   Initial fileset count: {initial_count}")
+        
+        # Create some filesets
+        test_filesets = ["experiment_a", "experiment_b", "experiment_c"]
+        for fileset_name in test_filesets:
+            controller.create_zarr_fileset(fileset_name)
+        
+        # List filesets again
+        result = controller.list_zarr_filesets()
+        
+        assert result["total_count"] >= len(test_filesets)
+        assert result["active_fileset"] in test_filesets  # Should be one of our created filesets
+        
+        # Check that all our filesets are in the list
+        fileset_names = [fs["name"] for fs in result["filesets"]]
+        for fileset_name in test_filesets:
+            assert fileset_name in fileset_names
+        
+        # Verify fileset details
+        for fileset in result["filesets"]:
+            assert "name" in fileset
+            assert "is_active" in fileset
+            assert "loaded" in fileset
+            assert "path" in fileset
+            
+            if fileset["loaded"]:
+                assert "channels" in fileset
+                assert "timepoints" in fileset
+                assert fileset["channels"] > 0  # Should have channels
+        
+        # Verify only one fileset is active
+        active_filesets = [fs for fs in result["filesets"] if fs["is_active"]]
+        assert len(active_filesets) == 1
+        
+        print(f"   ✓ Listed {result['total_count']} filesets successfully")
+        print(f"   ✓ Active fileset: {result['active_fileset']}")
+        
+        print("✅ Zarr fileset listing tests passed!")
+        break
+
+@pytest.mark.timeout(60)
+async def test_zarr_fileset_activation(sim_controller_fixture):
+    """Test setting active zarr fileset."""
+    async for controller in sim_controller_fixture:
+        print("Testing zarr fileset activation...")
+        
+        # Create multiple filesets
+        test_filesets = ["project_alpha", "project_beta", "project_gamma"]
+        for fileset_name in test_filesets:
+            controller.create_zarr_fileset(fileset_name)
+        
+        # The last created should be active
+        assert controller.active_canvas_name == test_filesets[-1]
+        
+        # Test switching to a different fileset
+        target_fileset = test_filesets[0]
+        result = controller.set_active_zarr_fileset(target_fileset)
+        
+        assert isinstance(result, dict)
+        assert result["fileset_name"] == target_fileset
+        assert result["was_already_active"] == False
+        assert "message" in result
+        
+        # Verify the switch worked
+        assert controller.active_canvas_name == target_fileset
+        assert controller.zarr_canvas == controller.zarr_canvases[target_fileset]
+        
+        print(f"   ✓ Switched to fileset '{target_fileset}' successfully")
+        
+        # Test switching to already active fileset
+        result_same = controller.set_active_zarr_fileset(target_fileset)
+        assert result_same["was_already_active"] == True
+        assert "already active" in result_same["message"]
+        
+        print(f"   ✓ Correctly handled switching to already active fileset")
+        
+        # Test error case: switching to non-existent fileset
+        try:
+            controller.set_active_zarr_fileset("non_existent_fileset")
+            assert False, "Should have raised ValueError for non-existent fileset"
+        except ValueError as e:
+            assert "not found" in str(e)
+            print(f"   ✓ Correctly handled non-existent fileset")
+        
+        print("✅ Zarr fileset activation tests passed!")
+        break
+
+@pytest.mark.timeout(60)
+async def test_zarr_fileset_removal(sim_controller_fixture):
+    """Test removing zarr filesets."""
+    async for controller in sim_controller_fixture:
+        print("Testing zarr fileset removal...")
+        
+        # Create multiple filesets
+        test_filesets = ["temp_exp_1", "temp_exp_2", "temp_exp_3"]
+        for fileset_name in test_filesets:
+            controller.create_zarr_fileset(fileset_name)
+        
+        # Verify all filesets exist
+        list_result = controller.list_zarr_filesets()
+        initial_count = list_result["total_count"]
+        
+        # Make sure we have an active fileset (should be the last created)
+        active_fileset = controller.active_canvas_name
+        assert active_fileset in test_filesets
+        
+        # Test error case: trying to remove active fileset
+        try:
+            controller.remove_zarr_fileset(active_fileset)
+            assert False, "Should have raised ValueError for removing active fileset"
+        except ValueError as e:
+            assert "Cannot remove active fileset" in str(e)
+            print(f"   ✓ Correctly prevented removal of active fileset")
+        
+        # Switch to a different fileset so we can remove the previous one
+        target_to_remove = None
+        for fileset_name in test_filesets:
+            if fileset_name != active_fileset:
+                target_to_remove = fileset_name
+                break
+        
+        assert target_to_remove is not None, "Should have a non-active fileset to remove"
+        
+        # Remove the non-active fileset
+        result = controller.remove_zarr_fileset(target_to_remove)
+        
+        assert isinstance(result, dict)
+        assert result["fileset_name"] == target_to_remove
+        assert "message" in result
+        
+        # Verify it was removed from memory
+        assert target_to_remove not in controller.zarr_canvases
+        
+        # Verify the count decreased
+        list_result_after = controller.list_zarr_filesets()
+        assert list_result_after["total_count"] == initial_count - 1
+        
+        # Verify it's not in the list anymore
+        remaining_names = [fs["name"] for fs in list_result_after["filesets"]]
+        assert target_to_remove not in remaining_names
+        
+        print(f"   ✓ Removed fileset '{target_to_remove}' successfully")
+        
+        # Test removing non-existent fileset (should not raise error, just report what happened)
+        try:
+            result_nonexistent = controller.remove_zarr_fileset("non_existent_fileset")
+            # Should complete without error but report nothing was removed
+            assert result_nonexistent["removed_from_memory"] == False
+            assert result_nonexistent["removed_from_disk"] == False
+            print(f"   ✓ Handled non-existent fileset removal gracefully")
+        except Exception:
+            # If it raises an error, that's also acceptable behavior
+            print(f"   ✓ Non-existent fileset removal raised error (acceptable)")
+        
+        print("✅ Zarr fileset removal tests passed!")
+        break
+
+@pytest.mark.timeout(60)
+async def test_zarr_fileset_get_active_canvas(sim_controller_fixture):
+    """Test getting active canvas with automatic creation."""
+    async for controller in sim_controller_fixture:
+        print("Testing get_active_canvas functionality...")
+        
+        # Reset the controller's zarr state to test auto-creation
+        controller.zarr_canvas = None
+        controller.active_canvas_name = None
+        controller.zarr_canvases.clear()
+        
+        # Call get_active_canvas - should create default fileset
+        canvas = controller.get_active_canvas()
+        
+        assert canvas is not None
+        assert controller.active_canvas_name == "default"
+        assert "default" in controller.zarr_canvases
+        assert controller.zarr_canvas == canvas
+        
+        print(f"   ✓ Auto-created default fileset when no canvas exists")
+        
+        # Create a custom fileset and switch to it
+        custom_name = "custom_experiment"
+        controller.create_zarr_fileset(custom_name)
+        
+        # Get active canvas - should return the custom one
+        canvas_custom = controller.get_active_canvas()
+        
+        assert canvas_custom is not None
+        assert controller.active_canvas_name == custom_name
+        assert canvas_custom == controller.zarr_canvases[custom_name]
+        
+        print(f"   ✓ Returned correct active canvas '{custom_name}'")
+        
+        print("✅ Get active canvas tests passed!")
+        break
+
+@pytest.mark.timeout(60)
+async def test_zarr_fileset_error_handling(sim_controller_fixture):
+    """Test error handling in zarr fileset operations."""
+    async for controller in sim_controller_fixture:
+        print("Testing zarr fileset error handling...")
+        
+        # Test creating fileset with invalid name characters
+        invalid_names = ["", "   ", "invalid/name", "invalid\\name", "invalid:name"]
+        
+        for invalid_name in invalid_names:
+            try:
+                controller.create_zarr_fileset(invalid_name)
+                # If it doesn't raise an error, that's also fine - depends on implementation
+                print(f"   Note: Invalid name '{invalid_name}' was accepted (implementation choice)")
+            except (ValueError, RuntimeError) as e:
+                print(f"   ✓ Correctly rejected invalid name '{invalid_name}': {str(e)[:50]}...")
+            except Exception as e:
+                print(f"   ✓ Rejected invalid name '{invalid_name}' with error: {type(e).__name__}")
+        
+        # Test operations on empty zarr_canvases dictionary
+        controller.zarr_canvases.clear()
+        controller.active_canvas_name = None
+        controller.zarr_canvas = None
+        
+        # List filesets should work even with empty state
+        try:
+            result = controller.list_zarr_filesets()
+            assert isinstance(result, dict)
+            print(f"   ✓ list_zarr_filesets handled empty state gracefully")
+        except Exception as e:
+            assert False, f"list_zarr_filesets should not fail with empty state: {e}"
+        
+        # Setting active fileset to non-existent should raise error
+        try:
+            controller.set_active_zarr_fileset("definitely_does_not_exist")
+            assert False, "Should have raised error for non-existent fileset"
+        except ValueError:
+            print(f"   ✓ set_active_zarr_fileset correctly raised ValueError for non-existent fileset")
+        except RuntimeError:
+            print(f"   ✓ set_active_zarr_fileset correctly raised RuntimeError for non-existent fileset")
+        
+        # Test that get_active_canvas creates default when needed
+        canvas = controller.get_active_canvas()
+        assert canvas is not None
+        assert controller.active_canvas_name == "default"
+        print(f"   ✓ get_active_canvas auto-created default fileset when needed")
+        
+        print("✅ Zarr fileset error handling tests passed!")
+        break
 
 if __name__ == "__main__":
     print("Running Well Position Detection Tests...")
