@@ -3391,35 +3391,7 @@ class Microscope:
             dict: Status of the scan with performance metrics
         """
         try:
-            # Extract parameters from the scan_parameters object/dict
-            # Handle both dict and ObjectProxy cases
-            if hasattr(scan_parameters, '__getitem__'):
-                # It's a dict-like object
-                wellplate_type = scan_parameters.get('wellplate_type', '96')
-                exposure_time = scan_parameters.get('exposure_time', 5)
-                intensity = scan_parameters.get('intensity', 70)
-                fps_target = scan_parameters.get('fps_target', 10)
-                action_ID = scan_parameters.get('action_ID', 'quick_scan_stitching')
-                n_stripes = scan_parameters.get('n_stripes', 4)
-                stripe_width_mm = scan_parameters.get('stripe_width_mm', 4.0)
-                dy_mm = scan_parameters.get('dy_mm', 0.9)
-                velocity_scan_mm_per_s = scan_parameters.get('velocity_scan_mm_per_s', 7.0)
-                do_contrast_autofocus = scan_parameters.get('do_contrast_autofocus', False)
-                do_reflection_af = scan_parameters.get('do_reflection_af', False)
-            else:
-                # It's an ObjectProxy or similar object with attributes
-                wellplate_type = getattr(scan_parameters, 'wellplate_type', '96')
-                exposure_time = getattr(scan_parameters, 'exposure_time', 5)
-                intensity = getattr(scan_parameters, 'intensity', 70)
-                fps_target = getattr(scan_parameters, 'fps_target', 10)
-                action_ID = getattr(scan_parameters, 'action_ID', 'quick_scan_stitching')
-                n_stripes = getattr(scan_parameters, 'n_stripes', 4)
-                stripe_width_mm = getattr(scan_parameters, 'stripe_width_mm', 4.0)
-                dy_mm = getattr(scan_parameters, 'dy_mm', 0.9)
-                velocity_scan_mm_per_s = getattr(scan_parameters, 'velocity_scan_mm_per_s', 7.0)
-                do_contrast_autofocus = getattr(scan_parameters, 'do_contrast_autofocus', False)
-                do_reflection_af = getattr(scan_parameters, 'do_reflection_af', False)
-            
+           
             # Validate exposure time early
             if exposure_time > 30:
                 raise ValueError(f"Quick scan exposure time must not exceed 30ms (got {exposure_time}ms)")

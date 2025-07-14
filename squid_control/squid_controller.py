@@ -1578,6 +1578,25 @@ class SquidController:
                         actual_x_mm, actual_y_mm, actual_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
                         logging.info(f'Autofocus completed at well {well_name}, current position: ({actual_x_mm:.2f}, {actual_y_mm:.2f}, {actual_z_mm:.2f})')
                     
+                    # Get well canvas for this well and validate brightfield channel
+                    canvas = self.experiment_manager.get_well_canvas(row_letter, col_number, wellplate_type, well_padding_mm)
+                    
+                    # Validate that brightfield channel is available in this canvas
+                    if channel_name not in canvas.channel_to_zarr_index:
+                        logging.error(f"Requested channel '{channel_name}' not found in well canvas!")
+                        logging.error(f"Available channels: {list(canvas.channel_to_zarr_index.keys())}")
+                        raise ValueError(f"Channel '{channel_name}' not available in well canvas")
+                    
+                    # Get local zarr channel index for brightfield
+                    try:
+                        zarr_channel_idx = canvas.get_zarr_channel_index(channel_name)
+                    except ValueError as e:
+                        logging.error(f"Channel mapping error: {e}")
+                        continue
+                    
+                    # Start stitching for this well
+                    await canvas.start_stitching()
+                    
                     # Move to well stripe start position at high speed
                     await self._move_to_well_at_high_speed(well_name, stripe_start_x, stripe_start_y, 
                                                             HIGH_SPEED_VELOCITY_MM_PER_S, limit_y_neg, limit_y_pos)
@@ -1591,7 +1610,8 @@ class SquidController:
                     total_frames = await self._scan_well_with_continuous_acquisition(
                         well_name, n_stripes, stripe_start_x, stripe_end_x, 
                         stripe_start_y, dy_mm, intensity, frame_interval, 
-                        zarr_channel_idx, limit_y_neg, limit_y_pos, timepoint=timepoint)
+                        zarr_channel_idx, limit_y_neg, limit_y_pos, timepoint=timepoint,
+                        wellplate_type=wellplate_type, well_padding_mm=well_padding_mm, channel_name=channel_name)
                     
                     logging.info(f'Well {well_name} completed with {n_stripes} stripes, total frames: {total_frames}')
                     
@@ -1652,7 +1672,8 @@ class SquidController:
     
     async def _scan_well_with_continuous_acquisition(self, well_name, n_stripes, stripe_start_x, stripe_end_x, 
                                                    stripe_start_y, dy_mm, intensity, frame_interval, 
-                                                   zarr_channel_idx, limit_y_neg, limit_y_pos, timepoint=0):
+                                                   zarr_channel_idx, limit_y_neg, limit_y_pos, timepoint=0,
+                                                   wellplate_type='96', well_padding_mm=2.0, channel_name='BF LED matrix full'):
         """Scan all stripes within a well with continuous frame acquisition."""
         total_frames = 0
         
@@ -1713,7 +1734,7 @@ class SquidController:
                     # Check if it's time for next frame
                     if current_time - last_frame_time >= frame_interval:
                         frame_acquired = await self._acquire_and_process_frame(
-                            0, timepoint, wellplate_type, well_padding_mm, channel_name
+                            zarr_channel_idx, timepoint, wellplate_type, well_padding_mm, channel_name
                         )
                         if frame_acquired:
                             stripe_frames += 1
