@@ -2921,7 +2921,205 @@ class Microscope:
             )
         except Exception as e:
             logger.error(f"Error setting stage velocity: {e}")
-            raise e
+            return {"success": False, "error": str(e)}
+
+    @schema_function(skip_self=True)
+    async def get_zarr_upload_info(self, context=None):
+        """
+        Get information about the current zarr canvas for upload planning.
+        
+        Returns:
+            dict: Information about canvas size, export feasibility, and gallery status
+        """
+        
+        try:
+            # Check if zarr canvas exists
+            if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
+                return {
+                    "success": False,
+                    "error": "No zarr canvas available. Start a scanning operation first to create data."
+                }
+            
+            # Get export info from zarr canvas
+            export_info = self.squidController.zarr_canvas.get_export_info()
+            
+            # Check if zarr artifact manager is available
+            if self.zarr_artifact_manager is None:
+                return {
+                    "success": False,
+                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
+                }
+            
+            # Check gallery status
+            try:
+                gallery = await self.zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
+                gallery_info = {
+                    "gallery_exists": True,
+                    "gallery_id": gallery.get("id"),
+                    "gallery_name": gallery.get("manifest", {}).get("name")
+                }
+            except Exception as e:
+                logger.error(f"Error getting gallery info: {e}")
+                gallery_info = {
+                    "gallery_exists": False,
+                    "gallery_error": str(e)
+                }
+            
+            return {
+                "success": True,
+                "export_info": export_info,
+                "gallery_info": gallery_info,
+                "microscope_service_id": self.service_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting zarr upload info: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @schema_function(skip_self=True)
+    async def check_zarr_dataset_name(self, dataset_name: str = Field(..., description="Proposed dataset name"), context=None):
+        """
+        Check if a dataset name is available for upload.
+        
+        Args:
+            dataset_name: The proposed dataset name
+            
+        Returns:
+            dict: Information about name availability and suggestions
+        """
+        
+        try:
+            # Check if zarr artifact manager is available
+            if self.zarr_artifact_manager is None:
+                return {
+                    "success": False,
+                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
+                }
+            
+            # Check name availability
+            name_check = await self.zarr_artifact_manager.check_dataset_name_availability(
+                self.service_id, dataset_name
+            )
+            
+            return {
+                "success": True,
+                "name_check": name_check
+            }
+            
+        except Exception as e:
+            logger.error(f"Error checking dataset name: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @schema_function(skip_self=True)
+    async def upload_zarr_dataset(self, 
+                                dataset_name: str = Field(..., description="Name for the dataset"),
+                                description: str = Field("", description="Description of the dataset"),
+                                include_acquisition_settings: bool = Field(True, description="Whether to include current acquisition settings as metadata"),
+                                context=None):
+        """
+        Upload the current zarr canvas as a dataset to the artifact manager.
+        
+        Args:
+            dataset_name: Name for the dataset
+            description: Description of the dataset
+            include_acquisition_settings: Whether to include current acquisition settings as metadata
+            
+        Returns:
+            dict: Upload result information
+        """
+        
+        try:
+            # Check if zarr canvas exists
+            if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
+                return {
+                    "success": False,
+                    "error": "No zarr canvas available. Start a scanning operation first to create data."
+                }
+            
+            # Get export info to check feasibility
+            export_info = self.squidController.zarr_canvas.get_export_info()
+            if not export_info.get("export_feasible", False):
+                return {
+                    "success": False,
+                    "error": f"Dataset too large for upload. Estimated size: {export_info.get('estimated_zip_size_mb', 0):.1f} MB",
+                    "export_info": export_info
+                }
+            
+            # Check if zarr artifact manager is available
+            if self.zarr_artifact_manager is None:
+                return {
+                    "success": False,
+                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
+                }
+            
+            zarr_zip_content = self.squidController.zarr_canvas.export_as_zip()
+            
+            # Prepare acquisition settings if requested
+            acquisition_settings = None
+            if include_acquisition_settings:
+                acquisition_settings = {
+                    "pixel_size_xy_um": export_info.get("canvas_dimensions", {}).get("pixel_size_um"),
+                    "channels": export_info.get("channels", []),
+                    "canvas_dimensions": export_info.get("canvas_dimensions", {}),
+                    "num_scales": export_info.get("num_scales"),
+                    "microscope_service_id": self.service_id
+                }
+            
+            # Upload to artifact manager
+            upload_result = await self.zarr_artifact_manager.upload_zarr_dataset(
+                microscope_service_id=self.service_id,
+                dataset_name=dataset_name,
+                zarr_zip_content=zarr_zip_content,
+                acquisition_settings=acquisition_settings,
+                description=description
+            )
+            
+            return {
+                "success": True,
+                "upload_result": upload_result,
+                "export_info": export_info
+            }
+            
+        except Exception as e:
+            logger.error(f"Error uploading zarr dataset: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @schema_function(skip_self=True)
+    async def list_microscope_datasets(self, context=None):
+        """
+        List all datasets uploaded by this microscope.
+        
+        Returns:
+            list: List of datasets in the microscope's gallery
+        """
+        
+        try:
+            # Check if zarr artifact manager is available
+            if self.zarr_artifact_manager is None:
+                return {
+                    "success": False,
+                    "error": "Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set."
+                }
+            
+            # Get gallery
+            gallery = await self.zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
+            
+            # List datasets in gallery
+            datasets = await self.zarr_artifact_manager._svc.list(gallery["id"])
+            
+            return {
+                "success": True,
+                "datasets": datasets,
+                "gallery_info": {
+                    "id": gallery["id"], 
+                    "name": gallery.get("manifest", {}).get("name"),
+                    "microscope_service_id": self.service_id
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error listing microscope datasets: {e}")
+            return {"success": False, "error": str(e)}
 
     def get_microscope_configuration_schema(self, config: GetMicroscopeConfigurationInput, context=None):
         return self.get_microscope_configuration(config.config_section, config.include_defaults, context)
