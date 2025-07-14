@@ -2107,3 +2107,7 @@ class ExperimentManager:
             canvas.close()
         self.well_canvases = {}
         logger.info("ExperimentManager closed")
+
+
+# Alias for backward compatibility
+ZarrCanvas = WellZarrCanvasBase
