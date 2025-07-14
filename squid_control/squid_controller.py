@@ -1463,9 +1463,15 @@ class SquidController:
                 # Get well canvas and extract region
                 canvas = self.experiment_manager.get_well_canvas(well_row, well_column, wellplate_type, well_padding_mm)
                 
+                # Calculate absolute coordinates for the intersection region
+                intersection_center_x = (well_info['abs_min_x'] + well_info['abs_max_x']) / 2.0
+                intersection_center_y = (well_info['abs_min_y'] + well_info['abs_max_y']) / 2.0
+                intersection_width = well_info['abs_max_x'] - well_info['abs_min_x']
+                intersection_height = well_info['abs_max_y'] - well_info['abs_min_y']
+                
                 region = canvas.get_canvas_region_by_channel_name(
-                    well_info['well_rel_center_x'], well_info['well_rel_center_y'], 
-                    well_info['well_rel_width'], well_info['well_rel_height'],
+                    intersection_center_x, intersection_center_y, 
+                    intersection_width, intersection_height,
                     channel_name, scale=scale_level, timepoint=timepoint
                 )
                 
@@ -1500,9 +1506,15 @@ class SquidController:
                 # Get well canvas and extract region
                 canvas = self.experiment_manager.get_well_canvas(well_row, well_column, wellplate_type, well_padding_mm)
                 
+                # Calculate absolute coordinates for the intersection region
+                intersection_center_x = (well_info['abs_min_x'] + well_info['abs_max_x']) / 2.0
+                intersection_center_y = (well_info['abs_min_y'] + well_info['abs_max_y']) / 2.0
+                intersection_width = well_info['abs_max_x'] - well_info['abs_min_x']
+                intersection_height = well_info['abs_max_y'] - well_info['abs_min_y']
+                
                 well_region = canvas.get_canvas_region_by_channel_name(
-                    well_info['well_rel_center_x'], well_info['well_rel_center_y'], 
-                    well_info['well_rel_width'], well_info['well_rel_height'],
+                    intersection_center_x, intersection_center_y, 
+                    intersection_width, intersection_height,
                     channel_name, scale=scale_level, timepoint=timepoint
                 )
                 
