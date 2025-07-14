@@ -386,7 +386,7 @@ class SquidController:
             print(f"CONFIG.DEFAULT_OBJECTIVE: {CONFIG.DEFAULT_OBJECTIVE}")
             print(f"Tube lens: {tube_lens_mm} mm, Objective tube lens: {objective_tube_lens_mm} mm, Pixel size: {pixel_size_um} µm, Magnification: {magnification}")
         except Exception as e:
-            logging.error(f"Missing required parameters for pixel size calculation: {e}")
+            logger.error(f"Missing required parameters for pixel size calculation: {e}")
             return
 
         self.pixel_size_xy = pixel_size_um / (magnification / (objective_tube_lens_mm / tube_lens_mm))
@@ -435,7 +435,7 @@ class SquidController:
             action_ID (str): Identifier for this scan
         """
         if illumination_settings is None:
-            logging.warning("No illumination settings provided, using default settings")
+            logger.warning("No illumination settings provided, using default settings")
             # Default settings if none provided
             illumination_settings = [
                 {'channel': 'BF LED matrix full', 'intensity': 18, 'exposure_time': 37},
@@ -618,12 +618,12 @@ class SquidController:
         # Set high speed velocity for moving to well center
         velocity_result = self.set_stage_velocity(velocity_mm_per_s, velocity_mm_per_s)
         if not velocity_result['success']:
-            logging.warning(f"Failed to set high-speed velocity for autofocus: {velocity_result['message']}")
+            logger.warning(f"Failed to set high-speed velocity for autofocus: {velocity_result['message']}")
         
         # Move to well center using async method
         await self.move_to_well_async(row, column, wellplate_type)
         
-        logging.info(f'Moved to well {row}{column} center for autofocus')
+        logger.info(f'Moved to well {row}{column} center for autofocus')
 
     def get_well_from_position(self, wellplate_type='96', x_pos_mm=None, y_pos_mm=None, well_padding_mm=2.0):
         """
@@ -1131,13 +1131,13 @@ class SquidController:
                 raise RuntimeError(f"Current position ({current_x:.2f}, {current_y:.2f}) is not inside a well. Please specify wells_to_scan or move to a well first.")
             
             wells_to_scan = [(well_info['row'], well_info['column'])]
-            logging.info(f"Auto-detected current well: {well_info['row']}{well_info['column']}")
+            logger.info(f"Auto-detected current well: {well_info['row']}{well_info['column']}")
         
         # Validate wells_to_scan format
         if not isinstance(wells_to_scan, list) or not wells_to_scan:
             raise ValueError("wells_to_scan must be a non-empty list of (row, column) tuples")
         
-        logging.info(f"Normal scan with stitching for experiment '{self.experiment_manager.current_experiment}', scanning {len(wells_to_scan)} wells")
+        logger.info(f"Normal scan with stitching for experiment '{self.experiment_manager.current_experiment}', scanning {len(wells_to_scan)} wells")
         
         # Map channel names to indices
         channel_map = ChannelMapper.get_human_to_id_map()
@@ -1146,15 +1146,15 @@ class SquidController:
         try:
             self.is_busy = True
             self.scan_stop_requested = False  # Reset stop flag at start of scan
-            logging.info(f'Starting normal scan with stitching: {Nx}x{Ny} positions per well, dx={dx_mm}mm, dy={dy_mm}mm, timepoint={timepoint}')
+            logger.info(f'Starting normal scan with stitching: {Nx}x{Ny} positions per well, dx={dx_mm}mm, dy={dy_mm}mm, timepoint={timepoint}')
             
             for well_idx, (well_row, well_column) in enumerate(wells_to_scan):
                 if self.scan_stop_requested:
-                    logging.info("Scan stopped by user request")
+                    logger.info("Scan stopped by user request")
                     self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                     break
                 
-                logging.info(f"Scanning well {well_row}{well_column} ({well_idx + 1}/{len(wells_to_scan)})")
+                logger.info(f"Scanning well {well_row}{well_column} ({well_idx + 1}/{len(wells_to_scan)})")
                 
                 # Get well canvas for this well
                 canvas = self.experiment_manager.get_well_canvas(well_row, well_column, wellplate_type, well_padding_mm)
@@ -1163,8 +1163,8 @@ class SquidController:
                 for settings in illumination_settings:
                     channel_name = settings['channel']
                     if channel_name not in canvas.channel_to_zarr_index:
-                        logging.error(f"Requested channel '{channel_name}' not found in well canvas!")
-                        logging.error(f"Available channels: {list(canvas.channel_to_zarr_index.keys())}")
+                        logger.error(f"Requested channel '{channel_name}' not found in well canvas!")
+                        logger.error(f"Available channels: {list(canvas.channel_to_zarr_index.keys())}")
                         raise ValueError(f"Channel '{channel_name}' not available in well canvas")
                 
                 # Start stitching for this well
@@ -1182,13 +1182,13 @@ class SquidController:
                     for i in range(Ny):
                         # Check for stop request before each row
                         if self.scan_stop_requested:
-                            logging.info("Scan stopped by user request")
+                            logger.info("Scan stopped by user request")
                             break
                             
                         for j in range(Nx):
                             # Check for stop request before each position
                             if self.scan_stop_requested:
-                                logging.info("Scan stopped by user request")
+                                logger.info("Scan stopped by user request")
                                 break
                             
                             # Calculate position (snake pattern - reverse X on odd rows)
@@ -1237,7 +1237,7 @@ class SquidController:
                                 try:
                                     zarr_channel_idx = canvas.get_zarr_channel_index(channel_name)
                                 except ValueError as e:
-                                    logging.error(f"Channel mapping error: {e}")
+                                    logger.error(f"Channel mapping error: {e}")
                                     continue
                                 
                                 # Snap image using global channel ID with full frame for stitching
@@ -1259,21 +1259,21 @@ class SquidController:
                                     timepoint=timepoint
                                 )
                                 
-                                logging.debug(f'Added image at position ({actual_x_mm:.2f}, {actual_y_mm:.2f}) for well {well_row}{well_column}, channel {channel_name}, timepoint={timepoint}')
+                                logger.debug(f'Added image at position ({actual_x_mm:.2f}, {actual_y_mm:.2f}) for well {well_row}{well_column}, channel {channel_name}, timepoint={timepoint}')
                 
                 finally:
                     # Stop stitching for this well
                     await canvas.stop_stitching()
-                    logging.info(f'Completed scanning well {well_row}{well_column}')
+                    logger.info(f'Completed scanning well {well_row}{well_column}')
             
-            logging.info('Normal scan with stitching completed for all wells')
+            logger.info('Normal scan with stitching completed for all wells')
             
         finally:
             self.is_busy = False
             # Additional delay to ensure all zarr operations are complete
-            logging.info('Waiting for all zarr operations to stabilize...')
+            logger.info('Waiting for all zarr operations to stabilize...')
             await asyncio.sleep(0.5)  # 500ms buffer to ensure filesystem operations complete
-            logging.info('Normal scan with stitching fully completed - zarr data ready for export')
+            logger.info('Normal scan with stitching fully completed - zarr data ready for export')
     
     def ensure_active_experiment(self, experiment_name: str = None):
         """
@@ -1289,11 +1289,11 @@ class SquidController:
             # No active experiment, create or set one
             try:
                 self.experiment_manager.set_active_experiment(experiment_name)
-                logging.info(f"Set active experiment to existing '{experiment_name}'")
+                logger.info(f"Set active experiment to existing '{experiment_name}'")
             except ValueError:
                 # Experiment doesn't exist, create it
                 self.experiment_manager.create_experiment(experiment_name)
-                logging.info(f"Created new experiment '{experiment_name}'")
+                logger.info(f"Created new experiment '{experiment_name}'")
     
     def get_well_stitched_region(self, well_row: str, well_column: int, wellplate_type: str = '96',
                                 center_x_mm: float = 0.0, center_y_mm: float = 0.0, 
@@ -1329,13 +1329,13 @@ class SquidController:
             )
             
             if region is None:
-                logging.warning(f"Failed to get region for well {well_row}{well_column}, channel {channel_name}, timepoint {timepoint}")
+                logger.warning(f"Failed to get region for well {well_row}{well_column}, channel {channel_name}, timepoint {timepoint}")
                 return None
             
             return region
             
         except Exception as e:
-            logging.error(f"Error getting stitched region for well {well_row}{well_column}: {e}")
+            logger.error(f"Error getting stitched region for well {well_row}{well_column}: {e}")
             return None
     
     def initialize_experiment_if_needed(self, experiment_name: str = None):
@@ -1347,7 +1347,7 @@ class SquidController:
             experiment_name: Name of experiment to initialize (default: "default")
         """
         self.ensure_active_experiment(experiment_name)
-        logging.info(f"Experiment '{self.experiment_manager.current_experiment}' is ready")
+        logger.info(f"Experiment '{self.experiment_manager.current_experiment}' is ready")
 
     # Experiment management methods
     def create_experiment(self, experiment_name: str, wellplate_type: str = '96', 
@@ -1447,7 +1447,7 @@ class SquidController:
         self.ensure_active_experiment(experiment_name)
         
         # Always use well-based approach - create well canvases dynamically as we encounter wells
-        logging.info(f"Quick scan with stitching for experiment '{self.experiment_manager.current_experiment}': individual canvases for each well ({wellplate_type})")
+        logger.info(f"Quick scan with stitching for experiment '{self.experiment_manager.current_experiment}': individual canvases for each well ({wellplate_type})")
         
         # Validate that brightfield channel is available (we'll check per well canvas)
         channel_name = 'BF LED matrix full'
@@ -1463,25 +1463,25 @@ class SquidController:
         try:
             self.is_busy = True
             self.scan_stop_requested = False  # Reset stop flag at start of scan
-            logging.info(f'Starting quick scan with stitching: {wellplate_type} well plate, {n_stripes} stripes × {stripe_width_mm}mm, dy={dy_mm}mm, scan_velocity={scan_velocity}mm/s, fps={fps_target}, timepoint={timepoint}')
+            logger.info(f'Starting quick scan with stitching: {wellplate_type} well plate, {n_stripes} stripes × {stripe_width_mm}mm, dy={dy_mm}mm, scan_velocity={scan_velocity}mm/s, fps={fps_target}, timepoint={timepoint}')
             
             if do_contrast_autofocus:
-                logging.info('Contrast autofocus enabled for quick scan')
+                logger.info('Contrast autofocus enabled for quick scan')
             if do_reflection_af:
-                logging.info('Reflection autofocus enabled for quick scan')
+                logger.info('Reflection autofocus enabled for quick scan')
             
             # 1. Before starting scanning, read the position of z axis
             original_x_mm, original_y_mm, original_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
-            logging.info(f'Original Z position before autofocus: {original_z_mm:.3f}mm')
+            logger.info(f'Original Z position before autofocus: {original_z_mm:.3f}mm')
             
             if do_contrast_autofocus:
-                logging.info('Contrast autofocus enabled for quick scan')
+                logger.info('Contrast autofocus enabled for quick scan')
             if do_reflection_af:
-                logging.info('Reflection autofocus enabled for quick scan')
+                logger.info('Reflection autofocus enabled for quick scan')
             
             # 1. Before starting scanning, read the position of z axis
             original_x_mm, original_y_mm, original_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
-            logging.info(f'Original Z position before autofocus: {original_z_mm:.3f}mm')
+            logger.info(f'Original Z position before autofocus: {original_z_mm:.3f}mm')
             
             # Set camera exposure time
             self.camera.set_exposure_time(exposure_time)
@@ -1503,7 +1503,7 @@ class SquidController:
             # Scan each well using snake pattern for rows
             for row_idx in range(max_rows):
                 if self.scan_stop_requested:
-                    logging.info("Quick scan stopped by user request")
+                    logger.info("Quick scan stopped by user request")
                     self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                     break
                     
@@ -1519,11 +1519,11 @@ class SquidController:
                     col_range = range(max_cols - 1, -1, -1)
                     direction = "right-to-left"
                 
-                logging.info(f'Scanning row {row_letter} ({direction})')
+                logger.info(f'Scanning row {row_letter} ({direction})')
                 
                 for col_idx in col_range:
                     if self.scan_stop_requested:
-                        logging.info("Quick scan stopped by user request")
+                        logger.info("Quick scan stopped by user request")
                         self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                         break
                         
@@ -1546,16 +1546,16 @@ class SquidController:
                     # Calculate starting Y position for stripes (centered around well)
                     stripe_start_y = well_center_y - ((n_stripes - 1) * dy_mm) / 2
                     
-                    logging.info(f'Scanning well {well_name}: {n_stripes} stripes × {stripe_width_mm}mm at Y positions starting from {stripe_start_y:.2f}mm')
+                    logger.info(f'Scanning well {well_name}: {n_stripes} stripes × {stripe_width_mm}mm at Y positions starting from {stripe_start_y:.2f}mm')
                     
                     # Autofocus workflow: move to well center first if autofocus is requested
                     if do_contrast_autofocus or do_reflection_af:
-                        logging.info(f'Moving to well {well_name} center for autofocus')
+                        logger.info(f'Moving to well {well_name} center for autofocus')
                         
                         # Set high speed velocity for moving to well center
                         velocity_result = self.set_stage_velocity(HIGH_SPEED_VELOCITY_MM_PER_S, HIGH_SPEED_VELOCITY_MM_PER_S)
                         if not velocity_result['success']:
-                            logging.warning(f"Failed to set high-speed velocity for autofocus: {velocity_result['message']}")
+                            logger.warning(f"Failed to set high-speed velocity for autofocus: {velocity_result['message']}")
                         
                         # Move to well center using move_to_well function
                         self.move_to_well(row_letter, col_number, wellplate_type)
@@ -1566,37 +1566,39 @@ class SquidController:
                         
                         # Perform autofocus
                         if do_reflection_af:
-                            logging.info(f'Performing reflection autofocus at well {well_name}')
+                            logger.info(f'Performing reflection autofocus at well {well_name}')
                             if hasattr(self, 'laserAutofocusController'):
                                 await self.do_laser_autofocus()
                             else:
-                                logging.warning('Reflection autofocus requested but laserAutofocusController not available')
+                                logger.warning('Reflection autofocus requested but laserAutofocusController not available')
                         elif do_contrast_autofocus:
-                            logging.info(f'Performing contrast autofocus at well {well_name}')
+                            logger.info(f'Performing contrast autofocus at well {well_name}')
                             await self.do_autofocus()
                         
                         # Update position after autofocus
                         actual_x_mm, actual_y_mm, actual_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
-                        logging.info(f'Autofocus completed at well {well_name}, current position: ({actual_x_mm:.2f}, {actual_y_mm:.2f}, {actual_z_mm:.2f})')
+                        logger.info(f'Autofocus completed at well {well_name}, current position: ({actual_x_mm:.2f}, {actual_y_mm:.2f}, {actual_z_mm:.2f})')
                     
                     # Get well canvas for this well and validate brightfield channel
                     canvas = self.experiment_manager.get_well_canvas(row_letter, col_number, wellplate_type, well_padding_mm)
                     
                     # Validate that brightfield channel is available in this canvas
                     if channel_name not in canvas.channel_to_zarr_index:
-                        logging.error(f"Requested channel '{channel_name}' not found in well canvas!")
-                        logging.error(f"Available channels: {list(canvas.channel_to_zarr_index.keys())}")
+                        logger.error(f"Requested channel '{channel_name}' not found in well canvas!")
+                        logger.error(f"Available channels: {list(canvas.channel_to_zarr_index.keys())}")
                         raise ValueError(f"Channel '{channel_name}' not available in well canvas")
                     
                     # Get local zarr channel index for brightfield
                     try:
                         zarr_channel_idx = canvas.get_zarr_channel_index(channel_name)
                     except ValueError as e:
-                        logging.error(f"Channel mapping error: {e}")
+                        logger.error(f"Channel mapping error: {e}")
                         continue
                     
                     # Start stitching for this well
+                    logger.info(f'QUICK_SCAN: Starting stitching for well {well_name}')
                     await canvas.start_stitching()
+                    logger.info(f'QUICK_SCAN: Stitching started for well {well_name}, is_stitching={canvas.is_stitching}')
                     
                     # Move to well stripe start position at high speed
                     await self._move_to_well_at_high_speed(well_name, stripe_start_x, stripe_start_y, 
@@ -1605,7 +1607,7 @@ class SquidController:
                     # Set scan velocity for stripe scanning
                     velocity_result = self.set_stage_velocity(scan_velocity, scan_velocity)
                     if not velocity_result['success']:
-                        logging.warning(f"Failed to set scanning velocity: {velocity_result['message']}")
+                        logger.warning(f"Failed to set scanning velocity: {velocity_result['message']}")
                     
                     # Scan all stripes within the well with continuous frame acquisition
                     total_frames = await self._scan_well_with_continuous_acquisition(
@@ -1614,19 +1616,22 @@ class SquidController:
                         zarr_channel_idx, limit_y_neg, limit_y_pos, timepoint=timepoint,
                         wellplate_type=wellplate_type, well_padding_mm=well_padding_mm, channel_name=channel_name)
                     
-                    logging.info(f'Well {well_name} completed with {n_stripes} stripes, total frames: {total_frames}')
+                    logger.info(f'Well {well_name} completed with {n_stripes} stripes, total frames: {total_frames}')
+                    
+                    # Debug stitching status after completing well
+                    self.debug_stitching_status()
                     
                     # 3. After scanning for this well is done, move the z axis back to the remembered position
                     if do_contrast_autofocus or do_reflection_af:
-                        logging.info(f'Restoring Z position to original: {original_z_mm:.3f}mm')
+                        logger.info(f'Restoring Z position to original: {original_z_mm:.3f}mm')
                         self.navigationController.move_z_to(original_z_mm)
                         while self.microcontroller.is_busy():
                             await asyncio.sleep(0.005)
             
-            logging.info('Quick scan with stitching completed')
+            logger.info('Quick scan with stitching completed')
             
             # Allow time for final images to be queued for stitching
-            logging.info('Allowing time for final images to be queued for stitching...')
+            logger.info('Allowing time for final images to be queued for stitching...')
             await asyncio.sleep(0.5)
             
         finally:
@@ -1638,25 +1643,34 @@ class SquidController:
             # Restore original velocity settings
             self._restore_original_velocity(original_velocity_x, original_velocity_y)
             
+            # Debug stitching status before stopping
+            logger.info('QUICK_SCAN: Final stitching status before stopping:')
+            self.debug_stitching_status()
+            
             # Stop stitching for all active well canvases in the experiment
             for well_id, well_canvas in self.experiment_manager.well_canvases.items():
                 if well_canvas.is_stitching:
+                    logger.info(f'QUICK_SCAN: Stopping stitching for well canvas {well_id}, queue_size={well_canvas.stitch_queue.qsize()}')
                     await well_canvas.stop_stitching()
-                    logging.info(f'Stopped stitching for well canvas {well_id}')
+                    logger.info(f'QUICK_SCAN: Stopped stitching for well canvas {well_id}')
+            
+            # Final stitching status after stopping
+            logger.info('QUICK_SCAN: Final stitching status after stopping:')
+            self.debug_stitching_status()
             
             # CRITICAL: Additional delay after stitching stops to ensure all zarr operations are complete
             # This prevents race conditions with ZIP export when scanning finishes normally
-            logging.info('Waiting additional time for all zarr operations to stabilize...')
+            logger.info('Waiting additional time for all zarr operations to stabilize...')
             await asyncio.sleep(0.5)  # 500ms buffer to ensure filesystem operations complete
-            logging.info('Quick scan with stitching fully completed - zarr data ready for export')
+            logger.info('Quick scan with stitching fully completed - zarr data ready for export')
     
     async def _move_to_well_at_high_speed(self, well_name, start_x, start_y, high_speed_velocity, limit_y_neg, limit_y_pos):
         """Move to well at high speed (30 mm/s) for efficient inter-well movement."""
-        logging.info(f'Moving to well {well_name} at high speed ({high_speed_velocity} mm/s)')
+        logger.info(f'Moving to well {well_name} at high speed ({high_speed_velocity} mm/s)')
         
         velocity_result = self.set_stage_velocity(high_speed_velocity, high_speed_velocity)
         if not velocity_result['success']:
-            logging.warning(f"Failed to set high-speed velocity: {velocity_result['message']}")
+            logger.warning(f"Failed to set high-speed velocity: {velocity_result['message']}")
         
         # Clamp Y position to limits
         clamped_y = max(min(start_y, limit_y_pos), limit_y_neg)
@@ -1669,7 +1683,7 @@ class SquidController:
         while self.microcontroller.is_busy():
             await asyncio.sleep(0.005)
         
-        logging.info(f'Moved to well {well_name} start position ({start_x:.2f}, {clamped_y:.2f})')
+        logger.info(f'Moved to well {well_name} start position ({start_x:.2f}, {clamped_y:.2f})')
     
     async def _scan_well_with_continuous_acquisition(self, well_name, n_stripes, stripe_start_x, stripe_end_x, 
                                                    stripe_start_y, dy_mm, intensity, frame_interval, 
@@ -1689,7 +1703,7 @@ class SquidController:
         try:
             for stripe_idx in range(n_stripes):
                 if self.scan_stop_requested:
-                    logging.info("Quick scan stopped by user request")
+                    logger.info("Quick scan stopped by user request")
                     self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                     break
                     
@@ -1706,7 +1720,7 @@ class SquidController:
                     start_x, end_x = stripe_end_x, stripe_start_x
                     direction = "right-to-left"
                 
-                logging.info(f'Well {well_name}, stripe {stripe_idx + 1}/{n_stripes} ({direction}) from X={start_x:.2f}mm to X={end_x:.2f}mm at Y={stripe_y:.2f}mm')
+                logger.info(f'Well {well_name}, stripe {stripe_idx + 1}/{n_stripes} ({direction}) from X={start_x:.2f}mm to X={end_x:.2f}mm at Y={stripe_y:.2f}mm')
                 
                 # Move to stripe start position
                 self.navigationController.move_x_to(start_x)
@@ -1726,7 +1740,7 @@ class SquidController:
                 stripe_frames = 0
                 while self.microcontroller.is_busy():
                     if self.scan_stop_requested:
-                        logging.info("Quick scan stopped during stripe movement")
+                        logger.info("Quick scan stopped during stripe movement")
                         self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                         break
                         
@@ -1746,7 +1760,7 @@ class SquidController:
                     # Small delay to prevent overwhelming the system
                     await asyncio.sleep(0.001)
                 
-                logging.info(f'Well {well_name}, stripe {stripe_idx + 1}/{n_stripes} completed, acquired {stripe_frames} frames')
+                logger.info(f'Well {well_name}, stripe {stripe_idx + 1}/{n_stripes} completed, acquired {stripe_frames} frames')
                 
                 # Continue to next stripe without stopping illumination or frame acquisition
                 
@@ -1783,7 +1797,7 @@ class SquidController:
         
         while self.microcontroller.is_busy():
             if self.scan_stop_requested:
-                logging.info("Quick scan stopped during stripe movement")
+                logger.info("Quick scan stopped during stripe movement")
                 self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                 break
                 
@@ -1838,7 +1852,7 @@ class SquidController:
             try:
                 zarr_channel_idx = well_canvas.get_zarr_channel_index(channel_name)
             except ValueError:
-                logging.warning(f"Channel '{channel_name}' not found in well canvas {well_row}{well_column}")
+                logger.warning(f"Channel '{channel_name}' not found in well canvas {well_row}{well_column}")
                 return
             
             # Convert to well-relative coordinates and add to well canvas
@@ -1850,10 +1864,10 @@ class SquidController:
                 channel_idx=zarr_channel_idx, z_idx=0, timepoint=timepoint
             )
             
-            logging.debug(f'Routed image to well {well_row}{well_column} at well-relative coords ({well_relative_x:.2f}, {well_relative_y:.2f})')
+            logger.debug(f'Routed image to well {well_row}{well_column} at well-relative coords ({well_relative_x:.2f}, {well_relative_y:.2f})')
         else:
             # Image is outside wells - log and skip
-            logging.debug(f'Image at ({x_mm:.2f}, {y_mm:.2f}) is {well_info["position_status"]} - skipping')
+            logger.debug(f'Image at ({x_mm:.2f}, {y_mm:.2f}) is {well_info["position_status"]} - skipping')
 
     async def _acquire_and_process_frame(self, zarr_channel_idx, timepoint=0, 
                                        wellplate_type='96', well_padding_mm=2.0, channel_name='BF LED matrix full'):
@@ -1872,18 +1886,25 @@ class SquidController:
         avg_x_mm = (pos_before_x_mm + pos_after_x_mm) / 2.0
         avg_y_mm = (pos_before_y_mm + pos_after_y_mm) / 2.0
         
+        logger.info(f'FRAME_ACQ: Position before=({pos_before_x_mm:.2f}, {pos_before_y_mm:.2f}), after=({pos_after_x_mm:.2f}, {pos_after_y_mm:.2f}), avg=({avg_x_mm:.2f}, {avg_y_mm:.2f})')
+        
         if gray_img is not None:
+            logger.info(f'FRAME_ACQ: Camera frame acquired successfully, shape={gray_img.shape}, dtype={gray_img.dtype}')
+            
             # Process and add image to stitching queue using quick scan method
             processed_img = self._process_frame_for_stitching(gray_img)
+            logger.info(f'FRAME_ACQ: Image processed for stitching, new shape={processed_img.shape}, dtype={processed_img.dtype}')
             
             # Add to stitching queue for quick scan (using well-based approach)
-            await self._add_image_to_zarr_quick_well_based(
+            result = await self._add_image_to_zarr_quick_well_based(
                 processed_img, avg_x_mm, avg_y_mm, 
                 zarr_channel_idx, timepoint, wellplate_type, well_padding_mm, channel_name
             )
             
-            logging.debug(f'Acquired frame at average position ({avg_x_mm:.2f}, {avg_y_mm:.2f}), timepoint={timepoint}')
+            logger.info(f'FRAME_ACQ: Frame processing completed at position ({avg_x_mm:.2f}, {avg_y_mm:.2f}), timepoint={timepoint}, result={result}')
             return True
+        else:
+            logger.warning(f'FRAME_ACQ: Camera frame is None at position ({avg_x_mm:.2f}, {avg_y_mm:.2f})')
         
         return False
     
@@ -1917,9 +1938,9 @@ class SquidController:
         """Restore the original stage velocity settings."""
         restore_result = self.set_stage_velocity(original_velocity_x, original_velocity_y)
         if restore_result['success']:
-            logging.info(f'Restored original stage velocity: X={original_velocity_x}mm/s, Y={original_velocity_y}mm/s')
+            logger.info(f'Restored original stage velocity: X={original_velocity_x}mm/s, Y={original_velocity_y}mm/s')
         else:
-            logging.warning(f'Failed to restore original stage velocity: {restore_result["message"]}')
+            logger.warning(f'Failed to restore original stage velocity: {restore_result["message"]}')
     
     async def _scan_single_stripe(self, start_x, end_x, stripe_y, intensity, frame_interval, zarr_channel_idx):
         """Scan a single stripe and return the number of frames acquired."""
@@ -1948,7 +1969,7 @@ class SquidController:
         
         while self.microcontroller.is_busy():
             if self.scan_stop_requested:
-                logging.info("Quick scan stopped during stripe movement")
+                logger.info("Quick scan stopped during stripe movement")
                 self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
                 break
                 
@@ -1975,7 +1996,7 @@ class SquidController:
         This will interrupt normal_scan_with_stitching and quick_scan_with_stitching.
         """
         self.scan_stop_requested = True
-        logging.info("Scan stop requested - ongoing scans will be interrupted")
+        logger.info("Scan stop requested - ongoing scans will be interrupted")
         self._restore_original_velocity(CONFIG.MAX_VELOCITY_X_MM, CONFIG.MAX_VELOCITY_Y_MM)
         return {"success": True, "message": "Scan stop requested"}
     
@@ -1996,48 +2017,82 @@ class SquidController:
             well_padding_mm: Well padding in mm
             channel_name: Channel name for validation
         """
+        logger.info(f'ZARR_QUEUE: Attempting to queue image at position ({x_mm:.2f}, {y_mm:.2f}), timepoint={timepoint}, channel={channel_name}')
+        
         # Determine which well this position belongs to using padded boundaries for stitching
         well_info = self.get_well_from_position(wellplate_type, x_mm, y_mm, well_padding_mm)
+        
+        logger.info(f'ZARR_QUEUE: Well detection result - status={well_info["position_status"]}, well={well_info.get("well_id", "None")}, distance={well_info["distance_from_center"]:.2f}mm')
         
         if well_info["position_status"] == "in_well":
             well_row = well_info["row"]
             well_column = well_info["column"]
             
+            logger.info(f'ZARR_QUEUE: Position is inside well {well_row}{well_column}')
+            
             # Get or create well canvas
             try:
                 well_canvas = self.experiment_manager.get_well_canvas(well_row, well_column, wellplate_type, well_padding_mm)
+                logger.info(f'ZARR_QUEUE: Got well canvas for {well_row}{well_column}, stitching_active={well_canvas.is_stitching}')
             except Exception as e:
-                logging.error(f"Failed to get well canvas for {well_row}{well_column}: {e}")
-                return
+                logger.error(f"ZARR_QUEUE: Failed to get well canvas for {well_row}{well_column}: {e}")
+                return f"Failed to get well canvas: {e}"
             
             # Validate channel exists in this well canvas
             if channel_name not in well_canvas.channel_to_zarr_index:
-                logging.warning(f"Channel '{channel_name}' not found in well canvas {well_row}{well_column}")
-                return
+                logger.warning(f"ZARR_QUEUE: Channel '{channel_name}' not found in well canvas {well_row}{well_column}")
+                logger.warning(f"ZARR_QUEUE: Available channels: {list(well_canvas.channel_to_zarr_index.keys())}")
+                return f"Channel {channel_name} not found"
             
-            # Convert to well-relative coordinates
-            well_relative_x = x_mm - well_canvas.well_center_x
-            well_relative_y = y_mm - well_canvas.well_center_y
+            # Note: WellZarrCanvas will handle coordinate conversion internally
+            logger.info(f'ZARR_QUEUE: Using absolute coordinates: ({x_mm:.2f}, {y_mm:.2f}), well_center: ({well_canvas.well_center_x:.2f}, {well_canvas.well_center_y:.2f})')
             
             # Add to stitching queue with quick_scan flag
             try:
-                await well_canvas.stitch_queue.put({
+                queue_item = {
                     'image': image.copy(),
-                    'x_mm': well_relative_x,  # Use well-relative coordinates
-                    'y_mm': well_relative_y,  # Use well-relative coordinates
+                    'x_mm': x_mm,  # Use absolute coordinates - WellZarrCanvas will convert to well-relative
+                    'y_mm': y_mm,  # Use absolute coordinates - WellZarrCanvas will convert to well-relative
                     'channel_idx': zarr_channel_idx,
                     'z_idx': 0,
                     'timepoint': timepoint,
                     'timestamp': time.time(),
                     'quick_scan': True  # Flag to indicate this is for quick scan (scales 1-5 only)
-                })
+                }
                 
-                logging.debug(f'Added image to stitching queue for well {well_row}{well_column} at well-relative coords ({well_relative_x:.2f}, {well_relative_y:.2f})')
+                # Check queue size before adding
+                queue_size_before = well_canvas.stitch_queue.qsize()
+                await well_canvas.stitch_queue.put(queue_item)
+                queue_size_after = well_canvas.stitch_queue.qsize()
+                
+                logger.info(f'ZARR_QUEUE: Successfully queued image for well {well_row}{well_column} at absolute coords ({x_mm:.2f}, {y_mm:.2f})')
+                logger.info(f'ZARR_QUEUE: Queue size before={queue_size_before}, after={queue_size_after}')
+                return f"Queued for well {well_row}{well_column}"
+                
             except Exception as e:
-                logging.error(f"Failed to add image to stitching queue for well {well_row}{well_column}: {e}")
+                logger.error(f"ZARR_QUEUE: Failed to add image to stitching queue for well {well_row}{well_column}: {e}")
+                return f"Failed to queue: {e}"
         else:
             # Image is outside wells - log and skip
-            logging.debug(f'Image at ({x_mm:.2f}, {y_mm:.2f}) is {well_info["position_status"]} - skipping')
+            logger.warning(f'ZARR_QUEUE: Image at ({x_mm:.2f}, {y_mm:.2f}) is {well_info["position_status"]} - skipping')
+            return f"Position outside well: {well_info['position_status']}"
+
+    def debug_stitching_status(self):
+        """Debug method to check stitching status of all well canvases."""
+        logger.info("STITCHING_DEBUG: Checking stitching status for all well canvases")
+        
+        if hasattr(self, 'experiment_manager') and hasattr(self.experiment_manager, 'well_canvases'):
+            for well_id, well_canvas in self.experiment_manager.well_canvases.items():
+                queue_size = well_canvas.stitch_queue.qsize()
+                is_stitching = well_canvas.is_stitching
+                logger.info(f"STITCHING_DEBUG: Well {well_id} - stitching_active={is_stitching}, queue_size={queue_size}")
+                
+                # Check if stitching task is running
+                if hasattr(well_canvas, 'stitching_task'):
+                    task_done = well_canvas.stitching_task.done() if well_canvas.stitching_task else True
+                    logger.info(f"STITCHING_DEBUG: Well {well_id} - stitching_task_done={task_done}")
+        else:
+            logger.warning("STITCHING_DEBUG: No well canvases found in experiment manager")
 
     def _cleanup_zarr_directory(self):
         # Clean up .zarr folders within ZARR_PATH directory on startup
@@ -2052,17 +2107,17 @@ class SquidController:
                         try:
                             shutil.rmtree(item_path)
                             deleted_count += 1
-                            logging.info(f'Cleaned up zarr folder: {item_path}')
+                            logger.info(f'Cleaned up zarr folder: {item_path}')
                         except Exception as e:
-                            logging.warning(f'Failed to clean up zarr folder {item_path}: {e}')
+                            logger.warning(f'Failed to clean up zarr folder {item_path}: {e}')
                 
                 if deleted_count > 0:
-                    logging.info(f'Cleaned up {deleted_count} zarr folders in {zarr_path}')
+                    logger.info(f'Cleaned up {deleted_count} zarr folders in {zarr_path}')
                 else:
-                    logging.info(f'No zarr folders found to clean up in {zarr_path}')
+                    logger.info(f'No zarr folders found to clean up in {zarr_path}')
                     
             except Exception as e:
-                logging.error(f'Failed to access ZARR_PATH directory {zarr_path}: {e}')
+                logger.error(f'Failed to access ZARR_PATH directory {zarr_path}: {e}')
 
     def create_zarr_fileset(self, fileset_name):
         """Create a new zarr fileset with the given name.
@@ -2091,7 +2146,7 @@ class SquidController:
             }
             
         except Exception as e:
-            logging.error(f"Failed to create zarr fileset '{fileset_name}': {e}")
+            logger.error(f"Failed to create zarr fileset '{fileset_name}': {e}")
             raise RuntimeError(f"Failed to create fileset '{fileset_name}': {str(e)}") from e
     
     def list_zarr_filesets(self):
@@ -2140,7 +2195,7 @@ class SquidController:
             }
             
         except Exception as e:
-            logging.error(f"Failed to list zarr filesets: {e}")
+            logger.error(f"Failed to list zarr filesets: {e}")
             raise RuntimeError(f"Failed to list filesets: {str(e)}") from e
     
     def set_active_zarr_fileset(self, fileset_name):
@@ -2211,7 +2266,7 @@ class SquidController:
                 }
             raise ValueError(f"Fileset '{fileset_name}' not found")
         except Exception as e:
-            logging.error(f"Failed to set active zarr fileset '{fileset_name}': {e}")
+            logger.error(f"Failed to set active zarr fileset '{fileset_name}': {e}")
             if isinstance(e, ValueError):
                 raise
             raise RuntimeError(f"Failed to activate fileset '{fileset_name}': {str(e)}") from e
@@ -2251,7 +2306,7 @@ class SquidController:
             
             if fileset_path.exists():
                 shutil.rmtree(fileset_path)
-                logging.info(f"Removed zarr fileset '{fileset_name}' from disk")
+                logger.info(f"Removed zarr fileset '{fileset_name}' from disk")
                 removed_from_disk = True
             
             return {
@@ -2262,7 +2317,7 @@ class SquidController:
             }
             
         except Exception as e:
-            logging.error(f"Failed to remove zarr fileset '{fileset_name}': {e}")
+            logger.error(f"Failed to remove zarr fileset '{fileset_name}': {e}")
             raise RuntimeError(f"Failed to remove fileset '{fileset_name}': {str(e)}") from e
     
     def get_active_canvas(self):
@@ -2273,7 +2328,7 @@ class SquidController:
         """
         if self.zarr_canvas is None and self.active_canvas_name is None:
             # No canvas exists, create default one
-            logging.info("No active zarr canvas, creating default fileset")
+            logger.info("No active zarr canvas, creating default fileset")
             self.create_zarr_fileset("default")
         
         return self.zarr_canvas
@@ -2313,7 +2368,7 @@ class SquidController:
             )
             
             self.well_canvases[well_id] = canvas
-            logging.info(f"Created well canvas for {well_row}{well_column} ({wellplate_type})")
+            logger.info(f"Created well canvas for {well_row}{well_column} ({wellplate_type})")
             
         return self.well_canvases[well_id]
     
@@ -2336,7 +2391,7 @@ class SquidController:
         # Close existing canvas if present
         if well_id in self.well_canvases:
             self.well_canvases[well_id].close()
-            logging.info(f"Closed existing well canvas for {well_row}{well_column}")
+            logger.info(f"Closed existing well canvas for {well_row}{well_column}")
         
         # Create new canvas
         canvas = self.get_well_canvas(well_row, well_column, wellplate_type, padding_mm)
@@ -2406,9 +2461,9 @@ class SquidController:
             import shutil
             if canvas.zarr_path.exists():
                 shutil.rmtree(canvas.zarr_path)
-                logging.info(f"Removed well canvas directory: {canvas.zarr_path}")
+                logger.info(f"Removed well canvas directory: {canvas.zarr_path}")
         except Exception as e:
-            logging.warning(f"Failed to remove well canvas directory: {e}")
+            logger.warning(f"Failed to remove well canvas directory: {e}")
         
         return {
             "well_id": well_id,
