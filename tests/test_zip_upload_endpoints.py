@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 from hypha_rpc import connect_to_server
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 # Mark all tests in this module as asyncio and integration tests
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
