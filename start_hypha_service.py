@@ -3259,6 +3259,13 @@ class Microscope:
                 logger.warning(f"Position ({center_x_mm:.2f}, {center_y_mm:.2f}) is not inside a well: {well_info['position_status']}")
                 return None
             
+            # Check if the well canvas exists before trying to get the region
+            if not self.squidController._check_well_canvas_exists(
+                well_info['row'], well_info['column'], '96'
+            ):
+                logger.warning(f"Well canvas for {well_info['row']}{well_info['column']} does not exist on disk")
+                return None
+            
             # Get the region from the specific well canvas
             try:
                 region = self.squidController.get_well_stitched_region(
@@ -3279,6 +3286,10 @@ class Microscope:
                     return None
                 else:
                     raise e
+            
+            if region is None:
+                logger.warning(f"No data available for region at well {well_info['row']}{well_info['column']}")
+                return None
             
             if output_format == 'base64':
                 # Convert to base64 encoded PNG

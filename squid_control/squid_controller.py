@@ -1295,6 +1295,28 @@ class SquidController:
                 self.experiment_manager.create_experiment(experiment_name)
                 logger.info(f"Created new experiment '{experiment_name}'")
     
+    def _check_well_canvas_exists(self, well_row: str, well_column: int, wellplate_type: str = '96'):
+        """
+        Check if a well canvas exists on disk for the current experiment.
+        
+        Args:
+            well_row: Well row (e.g., 'A', 'B')
+            well_column: Well column (e.g., 1, 2, 3)
+            wellplate_type: Well plate type ('6', '12', '24', '96', '384')
+            
+        Returns:
+            bool: True if the well canvas exists on disk, False otherwise
+        """
+        if self.experiment_manager.current_experiment is None:
+            return False
+        
+        # Calculate the expected canvas path
+        experiment_path = self.experiment_manager.base_path / self.experiment_manager.current_experiment
+        fileset_name = f"well_{well_row}{well_column}_{wellplate_type}"
+        canvas_path = experiment_path / f"{fileset_name}.zarr"
+        
+        return canvas_path.exists()
+
     def get_well_stitched_region(self, well_row: str, well_column: int, wellplate_type: str = '96',
                                 center_x_mm: float = 0.0, center_y_mm: float = 0.0, 
                                 width_mm: float = 5.0, height_mm: float = 5.0,
@@ -1319,6 +1341,11 @@ class SquidController:
             np.ndarray: The requested region, or None if not available
         """
         try:
+            # Check if the well canvas exists on disk before trying to get it
+            if not self._check_well_canvas_exists(well_row, well_column, wellplate_type):
+                logger.warning(f"Well canvas for {well_row}{well_column} ({wellplate_type}) does not exist on disk")
+                return None
+            
             # Get well canvas
             canvas = self.experiment_manager.get_well_canvas(well_row, well_column, wellplate_type)
             
