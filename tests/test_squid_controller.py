@@ -1703,8 +1703,17 @@ async def test_well_canvas_management(sim_controller_fixture):
     async for controller in sim_controller_fixture:
         print("Testing well canvas management...")
         
-        # Create an experiment
+        # Clean up any existing experiment with the same name
         experiment_name = "test_well_canvas_experiment"
+        try:
+            # Try to remove the experiment if it exists
+            controller.experiment_manager.remove_experiment(experiment_name)
+            print(f"   ✓ Removed existing experiment '{experiment_name}'")
+        except (ValueError, RuntimeError):
+            # Experiment doesn't exist, which is fine
+            pass
+        
+        # Create an experiment
         controller.experiment_manager.create_experiment(experiment_name, wellplate_type='96')
         
         # Test getting well canvas
@@ -1737,10 +1746,22 @@ async def test_well_canvas_management(sim_controller_fixture):
         # Verify well canvas details
         for canvas_info in well_list["well_canvases"]:
             assert "well_id" in canvas_info
-            assert "well_row" in canvas_info
-            assert "well_column" in canvas_info
-            assert "wellplate_type" in canvas_info
             assert "canvas_path" in canvas_info
+            
+            # Active canvases have full details, on-disk canvases have minimal info
+            if canvas_info.get("status") == "active":
+                assert "well_row" in canvas_info
+                assert "well_column" in canvas_info
+                assert "wellplate_type" in canvas_info
+                assert "well_center_x_mm" in canvas_info
+                assert "well_center_y_mm" in canvas_info
+                assert "padding_mm" in canvas_info
+                assert "channels" in canvas_info
+                assert "timepoints" in canvas_info
+            else:
+                # On-disk canvases only have basic info
+                assert "status" in canvas_info
+                assert canvas_info["status"] == "on_disk"
         
         print(f"   ✓ Listed {well_list['total_count']} well canvases")
         
