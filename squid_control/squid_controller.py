@@ -1317,52 +1317,233 @@ class SquidController:
         
         return canvas_path.exists()
 
-    def get_well_stitched_region(self, well_row: str, well_column: int, wellplate_type: str = '96',
-                                center_x_mm: float = 0.0, center_y_mm: float = 0.0, 
-                                width_mm: float = 5.0, height_mm: float = 5.0,
-                                scale_level: int = 0, channel_name: str = 'BF LED matrix full', 
-                                timepoint: int = 0):
+    def get_stitched_region(self, center_x_mm: float, center_y_mm: float, 
+                           width_mm: float, height_mm: float,
+                           wellplate_type: str = '96', scale_level: int = 0, 
+                           channel_name: str = 'BF LED matrix full', 
+                           timepoint: int = 0, well_padding_mm: float = 2.0):
         """
-        Get a region from a specific well's stitched canvas.
+        Get a stitched region that may span multiple wells by determining which wells 
+        are needed and combining their data.
         
         Args:
-            well_row: Well row (e.g., 'A', 'B')
-            well_column: Well column (e.g., 1, 2, 3)
-            wellplate_type: Well plate type ('6', '12', '24', '96', '384')
-            center_x_mm: Center X position in well-relative coordinates (default 0 = well center)
-            center_y_mm: Center Y position in well-relative coordinates (default 0 = well center)
+            center_x_mm: Center X position in absolute stage coordinates (mm)
+            center_y_mm: Center Y position in absolute stage coordinates (mm)
             width_mm: Width of region in mm
             height_mm: Height of region in mm
+            wellplate_type: Well plate type ('6', '12', '24', '96', '384')
             scale_level: Scale level (0=full res, 1=1/4, 2=1/16, etc)
             channel_name: Name of channel to retrieve
             timepoint: Timepoint index (default 0)
+            well_padding_mm: Padding around wells in mm
             
         Returns:
             np.ndarray: The requested region, or None if not available
         """
         try:
-            # Check if the well canvas exists on disk before trying to get it
-            if not self._check_well_canvas_exists(well_row, well_column, wellplate_type):
-                logger.warning(f"Well canvas for {well_row}{well_column} ({wellplate_type}) does not exist on disk")
+            # Calculate the bounding box of the requested region
+            half_width = width_mm / 2.0
+            half_height = height_mm / 2.0
+            
+            region_min_x = center_x_mm - half_width
+            region_max_x = center_x_mm + half_width
+            region_min_y = center_y_mm - half_height
+            region_max_y = center_y_mm + half_height
+            
+            logger.info(f"Requested region: center=({center_x_mm:.2f}, {center_y_mm:.2f}), "
+                       f"size=({width_mm:.2f}x{height_mm:.2f}), "
+                       f"bounds=({region_min_x:.2f}-{region_max_x:.2f}, {region_min_y:.2f}-{region_max_y:.2f})")
+            
+            # Get well plate format configuration
+            if wellplate_type == '6':
+                wellplate_format = WELLPLATE_FORMAT_6
+                max_rows = 2  # A-B
+                max_cols = 3  # 1-3
+            elif wellplate_type == '12':
+                wellplate_format = WELLPLATE_FORMAT_12
+                max_rows = 3  # A-C
+                max_cols = 4  # 1-4
+            elif wellplate_type == '24':
+                wellplate_format = WELLPLATE_FORMAT_24
+                max_rows = 4  # A-D
+                max_cols = 6  # 1-6
+            elif wellplate_type == '96':
+                wellplate_format = WELLPLATE_FORMAT_96
+                max_rows = 8  # A-H
+                max_cols = 12  # 1-12
+            elif wellplate_type == '384':
+                wellplate_format = WELLPLATE_FORMAT_384
+                max_rows = 16  # A-P
+                max_cols = 24  # 1-24
+            else:
+                wellplate_format = WELLPLATE_FORMAT_96
+                max_rows = 8
+                max_cols = 12
+                wellplate_type = '96'
+            
+            # Apply well plate offset for hardware mode
+            if self.is_simulation:
+                x_offset = 0
+                y_offset = 0
+            else:
+                x_offset = CONFIG.WELLPLATE_OFFSET_X_MM
+                y_offset = CONFIG.WELLPLATE_OFFSET_Y_MM
+            
+            # Find all wells that intersect with the requested region
+            wells_to_query = []
+            well_regions = []
+            
+            for row_idx in range(max_rows):
+                for col_idx in range(max_cols):
+                    # Calculate well center position
+                    well_center_x = wellplate_format.A1_X_MM + x_offset + col_idx * wellplate_format.WELL_SPACING_MM
+                    well_center_y = wellplate_format.A1_Y_MM + y_offset + row_idx * wellplate_format.WELL_SPACING_MM
+                    
+                    # Calculate well boundaries with padding
+                    well_radius = wellplate_format.WELL_SIZE_MM / 2.0
+                    padded_radius = well_radius + well_padding_mm
+                    
+                    well_min_x = well_center_x - padded_radius
+                    well_max_x = well_center_x + padded_radius
+                    well_min_y = well_center_y - padded_radius
+                    well_max_y = well_center_y + padded_radius
+                    
+                    # Check if this well intersects with the requested region
+                    if (well_max_x >= region_min_x and well_min_x <= region_max_x and
+                        well_max_y >= region_min_y and well_min_y <= region_max_y):
+                        
+                        well_row = chr(ord('A') + row_idx)
+                        well_column = col_idx + 1
+                        
+                        # Calculate the intersection region in well-relative coordinates
+                        intersection_min_x = max(region_min_x, well_min_x)
+                        intersection_max_x = min(region_max_x, well_max_x)
+                        intersection_min_y = max(region_min_y, well_min_y)
+                        intersection_max_y = min(region_max_y, well_max_y)
+                        
+                        # Convert to well-relative coordinates
+                        well_rel_center_x = ((intersection_min_x + intersection_max_x) / 2.0) - well_center_x
+                        well_rel_center_y = ((intersection_min_y + intersection_max_y) / 2.0) - well_center_y
+                        well_rel_width = intersection_max_x - intersection_min_x
+                        well_rel_height = intersection_max_y - intersection_min_y
+                        
+                        wells_to_query.append((well_row, well_column))
+                        well_regions.append({
+                            'well_row': well_row,
+                            'well_column': well_column,
+                            'well_center_x': well_center_x,
+                            'well_center_y': well_center_y,
+                            'well_rel_center_x': well_rel_center_x,
+                            'well_rel_center_y': well_rel_center_y,
+                            'well_rel_width': well_rel_width,
+                            'well_rel_height': well_rel_height,
+                            'abs_min_x': intersection_min_x,
+                            'abs_max_x': intersection_max_x,
+                            'abs_min_y': intersection_min_y,
+                            'abs_max_y': intersection_max_y
+                        })
+            
+            if not wells_to_query:
+                logger.warning(f"No wells found that intersect with requested region")
                 return None
             
-            # Get well canvas
-            canvas = self.experiment_manager.get_well_canvas(well_row, well_column, wellplate_type)
+            logger.info(f"Found {len(wells_to_query)} wells that intersect with requested region: {wells_to_query}")
             
-            # Get the region using well-relative coordinates
-            region = canvas.get_canvas_region_by_channel_name(
-                center_x_mm, center_y_mm, width_mm, height_mm,
-                channel_name, scale=scale_level, timepoint=timepoint
-            )
+            # If only one well, get the region directly
+            if len(wells_to_query) == 1:
+                well_info = well_regions[0]
+                well_row = well_info['well_row']
+                well_column = well_info['well_column']
+                
+                # Check if the well canvas exists
+                if not self._check_well_canvas_exists(well_row, well_column, wellplate_type):
+                    logger.warning(f"Well canvas for {well_row}{well_column} ({wellplate_type}) does not exist")
+                    return None
+                
+                # Get well canvas and extract region
+                canvas = self.experiment_manager.get_well_canvas(well_row, well_column, wellplate_type, well_padding_mm)
+                
+                region = canvas.get_canvas_region_by_channel_name(
+                    well_info['well_rel_center_x'], well_info['well_rel_center_y'], 
+                    well_info['well_rel_width'], well_info['well_rel_height'],
+                    channel_name, scale=scale_level, timepoint=timepoint
+                )
+                
+                if region is None:
+                    logger.warning(f"Failed to get region from well {well_row}{well_column}")
+                    return None
+                
+                logger.info(f"Retrieved single-well region from {well_row}{well_column}, shape: {region.shape}")
+                return region
             
-            if region is None:
-                logger.warning(f"Failed to get region for well {well_row}{well_column}, channel {channel_name}, timepoint {timepoint}")
-                return None
+            # Multiple wells - need to stitch them together
+            logger.info(f"Stitching regions from {len(wells_to_query)} wells")
             
-            return region
+            # Calculate the output image dimensions at the requested scale
+            scale_factor = 4 ** scale_level  # Each scale level is 4x smaller
+            output_width_pixels = int(width_mm / (self.pixel_size_xy / 1000) / scale_factor)
+            output_height_pixels = int(height_mm / (self.pixel_size_xy / 1000) / scale_factor)
+            
+            # Create output image
+            output_image = np.zeros((output_height_pixels, output_width_pixels), dtype=np.uint8)
+            
+            # Process each well and place its data in the output image
+            for well_info in well_regions:
+                well_row = well_info['well_row']
+                well_column = well_info['well_column']
+                
+                # Check if the well canvas exists
+                if not self._check_well_canvas_exists(well_row, well_column, wellplate_type):
+                    logger.warning(f"Well canvas for {well_row}{well_column} ({wellplate_type}) does not exist - skipping")
+                    continue
+                
+                # Get well canvas and extract region
+                canvas = self.experiment_manager.get_well_canvas(well_row, well_column, wellplate_type, well_padding_mm)
+                
+                well_region = canvas.get_canvas_region_by_channel_name(
+                    well_info['well_rel_center_x'], well_info['well_rel_center_y'], 
+                    well_info['well_rel_width'], well_info['well_rel_height'],
+                    channel_name, scale=scale_level, timepoint=timepoint
+                )
+                
+                if well_region is None:
+                    logger.warning(f"Failed to get region from well {well_row}{well_column} - skipping")
+                    continue
+                
+                # Calculate where to place this region in the output image
+                # Convert absolute coordinates to output image coordinates
+                rel_min_x = well_info['abs_min_x'] - region_min_x
+                rel_min_y = well_info['abs_min_y'] - region_min_y
+                
+                # Convert to pixel coordinates
+                start_x_px = int(rel_min_x / (self.pixel_size_xy / 1000) / scale_factor)
+                start_y_px = int(rel_min_y / (self.pixel_size_xy / 1000) / scale_factor)
+                
+                # Ensure we don't go out of bounds
+                start_x_px = max(0, min(start_x_px, output_width_pixels))
+                start_y_px = max(0, min(start_y_px, output_height_pixels))
+                
+                end_x_px = min(start_x_px + well_region.shape[1], output_width_pixels)
+                end_y_px = min(start_y_px + well_region.shape[0], output_height_pixels)
+                
+                # Crop the well region if needed to fit in output
+                well_width = end_x_px - start_x_px
+                well_height = end_y_px - start_y_px
+                
+                if well_width > 0 and well_height > 0:
+                    cropped_well_region = well_region[:well_height, :well_width]
+                    output_image[start_y_px:end_y_px, start_x_px:end_x_px] = cropped_well_region
+                    
+                    logger.info(f"Placed region from well {well_row}{well_column} at ({start_x_px}, {start_y_px}) "
+                               f"with size ({well_width}, {well_height})")
+            
+            logger.info(f"Successfully stitched region from {len(well_regions)} wells, "
+                       f"output shape: {output_image.shape}")
+            
+            return output_image
             
         except Exception as e:
-            logger.error(f"Error getting stitched region for well {well_row}{well_column}: {e}")
+            logger.error(f"Error getting stitched region: {e}")
             return None
     
     def initialize_experiment_if_needed(self, experiment_name: str = None):
@@ -1410,6 +1591,18 @@ class SquidController:
     def reset_experiment(self, experiment_name: str = None):
         """Reset an experiment by removing all well canvases."""
         return self.experiment_manager.reset_experiment(experiment_name)
+    
+    def get_experiment_info(self, experiment_name: str = None):
+        """
+        Get detailed information about an experiment.
+        
+        Args:
+            experiment_name: Name of the experiment (default: current experiment)
+            
+        Returns:
+            dict: Detailed experiment information
+        """
+        return self.experiment_manager.get_experiment_info(experiment_name)
 
     async def quick_scan_with_stitching(self, wellplate_type='96', exposure_time=5, intensity=50, 
                                       fps_target=10, action_ID='quick_scan_stitching',

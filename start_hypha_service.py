@@ -3551,63 +3551,71 @@ class Microscope:
             raise e
 
     @schema_function(skip_self=True)
-    def get_well_stitched_region(self, well_row: str = Field(..., description="Well row (e.g., 'A', 'B')"),
-                                well_column: int = Field(..., description="Well column (e.g., 1, 2, 3)"),
-                                wellplate_type: str = Field('96', description="Well plate type ('6', '12', '24', '96', '384')"),
-                                well_padding_mm: float = Field(2.0, description="Padding around well in mm"),
-                                scale_level: int = Field(0, description="Scale level (0=full resolution, 1=1/4, 2=1/16, etc)"),
-                                channel_name: str = Field('BF LED matrix full', description="Name of channel to retrieve"),
-                                timepoint: int = Field(0, description="Timepoint index to retrieve (default 0)"),
-                                output_format: str = Field('base64', description="Output format: 'base64' or 'array'"),
-                                context=None):
+    def get_stitched_region(self, center_x_mm: float = Field(..., description="Center X position in absolute stage coordinates (mm)"),
+                           center_y_mm: float = Field(..., description="Center Y position in absolute stage coordinates (mm)"),
+                           width_mm: float = Field(5.0, description="Width of region in mm"),
+                           height_mm: float = Field(5.0, description="Height of region in mm"),
+                           wellplate_type: str = Field('96', description="Well plate type ('6', '12', '24', '96', '384')"),
+                           scale_level: int = Field(0, description="Scale level (0=full resolution, 1=1/4, 2=1/16, etc)"),
+                           channel_name: str = Field('BF LED matrix full', description="Name of channel to retrieve"),
+                           timepoint: int = Field(0, description="Timepoint index to retrieve (default 0)"),
+                           well_padding_mm: float = Field(2.0, description="Padding around wells in mm"),
+                           output_format: str = Field('base64', description="Output format: 'base64' or 'array'"),
+                           context=None):
         """
-        Get stitched region from a specific well canvas.
+        Get a stitched region that may span multiple wells by determining which wells 
+        are needed and combining their data.
         
-        This function retrieves the entire well region from a well-specific canvas.
-        Each well has its own canvas with well-center-relative coordinates.
+        This function automatically determines which wells intersect with the requested region
+        and stitches together the data from multiple wells if necessary.
         
         Args:
-            well_row: Well row (e.g., 'A', 'B')
-            well_column: Well column (e.g., 1, 2, 3)
+            center_x_mm: Center X position in absolute stage coordinates (mm)
+            center_y_mm: Center Y position in absolute stage coordinates (mm)
+            width_mm: Width of region in mm
+            height_mm: Height of region in mm
             wellplate_type: Well plate type ('6', '12', '24', '96', '384')
-            well_padding_mm: Padding around well in mm
             scale_level: Scale level (0=full resolution, 1=1/4, 2=1/16, etc)
             channel_name: Name of channel to retrieve
             timepoint: Timepoint index to retrieve (default 0)
+            well_padding_mm: Padding around wells in mm
             output_format: Output format ('base64' for compressed image, 'array' for numpy array)
             
         Returns:
-            dict: Retrieved well image data with metadata and well information
+            dict: Retrieved stitched image data with metadata and region information
         """
         try:
-            # Get well canvas
-            canvas = self.squidController.get_well_canvas(well_row, well_column, wellplate_type, well_padding_mm)
-            
-            # Get well information
-            well_info = canvas.get_well_info()
-            
-            # Get well diameter for region size
-            well_diameter = canvas.wellplate_format.WELL_SIZE_MM
-            
-            # Get entire well region (from well center = 0,0 in well-relative coordinates)
-            region = canvas.get_canvas_region_by_channel_name(
-                x_mm=0,  # Well center (relative coordinates)
-                y_mm=0,
-                width_mm=well_diameter,
-                height_mm=well_diameter,
+            # Call the new get_stitched_region method from squidController
+            region = self.squidController.get_stitched_region(
+                center_x_mm=center_x_mm,
+                center_y_mm=center_y_mm,
+                width_mm=width_mm,
+                height_mm=height_mm,
+                wellplate_type=wellplate_type,
+                scale_level=scale_level,
                 channel_name=channel_name,
-                scale=scale_level,
-                timepoint=timepoint
+                timepoint=timepoint,
+                well_padding_mm=well_padding_mm
             )
             
             if region is None:
                 return {
                     "success": False,
-                    "message": f"No data available for well {well_row}{well_column}",
-                    "well_info": well_info
+                    "message": f"No data available for region at ({center_x_mm:.2f}, {center_y_mm:.2f}) with size ({width_mm:.2f}x{height_mm:.2f})",
+                    "region": {
+                        "center_x_mm": center_x_mm,
+                        "center_y_mm": center_y_mm,
+                        "width_mm": width_mm,
+                        "height_mm": height_mm,
+                        "wellplate_type": wellplate_type,
+                        "scale_level": scale_level,
+                        "channel": channel_name,
+                        "timepoint": timepoint,
+                        "well_padding_mm": well_padding_mm
+                    }
                 }
             
-            # Process output format (same as existing get_stitched_region)
+            # Process output format
             if output_format == 'base64':
                 # Convert to base64 encoded PNG
                 import base64
@@ -3628,14 +3636,15 @@ class Microscope:
                     "format": "png_base64",
                     "shape": region.shape,
                     "dtype": str(region.dtype),
-                    "well_info": well_info,
                     "region": {
-                        "well_id": f"{well_row}{well_column}",
+                        "center_x_mm": center_x_mm,
+                        "center_y_mm": center_y_mm,
+                        "width_mm": width_mm,
+                        "height_mm": height_mm,
                         "wellplate_type": wellplate_type,
                         "scale_level": scale_level,
                         "channel": channel_name,
                         "timepoint": timepoint,
-                        "well_diameter_mm": well_diameter,
                         "well_padding_mm": well_padding_mm
                     }
                 }
@@ -3646,20 +3655,21 @@ class Microscope:
                     "format": "array",
                     "shape": region.shape,
                     "dtype": str(region.dtype),
-                    "well_info": well_info,
                     "region": {
-                        "well_id": f"{well_row}{well_column}",
+                        "center_x_mm": center_x_mm,
+                        "center_y_mm": center_y_mm,
+                        "width_mm": width_mm,
+                        "height_mm": height_mm,
                         "wellplate_type": wellplate_type,
                         "scale_level": scale_level,
                         "channel": channel_name,
                         "timepoint": timepoint,
-                        "well_diameter_mm": well_diameter,
                         "well_padding_mm": well_padding_mm
                     }
                 }
                 
         except Exception as e:
-            logger.error(f"Failed to get well stitched region: {e}")
+            logger.error(f"Failed to get stitched region: {e}")
             raise e
 
     @schema_function(skip_self=True)
