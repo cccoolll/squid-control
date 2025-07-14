@@ -361,6 +361,14 @@ class SquidController:
         from squid_control.stitching.zarr_canvas import ExperimentManager
         self.experiment_manager = ExperimentManager(zarr_path, self.pixel_size_xy)
         
+        # Initialize legacy well_canvases attribute for backward compatibility
+        self.well_canvases = {}
+        
+        # Initialize legacy zarr canvas attributes for backward compatibility
+        self.zarr_canvases = {}
+        self.zarr_canvas = None
+        self.active_canvas_name = None
+        
         # Clean up ZARR_PATH directory on startup
         #self._cleanup_zarr_directory() # Disabled for now
 
