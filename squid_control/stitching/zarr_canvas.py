@@ -664,17 +664,28 @@ class WellZarrCanvasBase:
                 img_x_start = max(0, -x_px + scaled_image.shape[1] // 2)
                 img_x_end = img_x_start + (x_end - x_start)
                 
-                # Write to zarr at the specified timepoint
-                if y_end > y_start and x_end > x_start:
-                    try:
-                        zarr_array[timepoint, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
-                            scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
-                        logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx}, timepoint {timepoint}")
-                    except IndexError as e:
-                        logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
-                        logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access timepoint {timepoint}")
-                    except Exception as e:
-                        logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
+                # CRITICAL: Always validate bounds before writing to zarr arrays
+                # This prevents zero-size chunk creation and zarr write errors
+                if y_end > y_start and x_end > x_start and img_y_end > img_y_start and img_x_end > img_x_start:
+                    # Additional validation to ensure image slice is within bounds
+                    img_y_end = min(img_y_end, scaled_image.shape[0])
+                    img_x_end = min(img_x_end, scaled_image.shape[1])
+                    
+                    # Final check that we still have valid bounds after clamping
+                    if img_y_end > img_y_start and img_x_end > img_x_start:
+                        try:
+                            zarr_array[timepoint, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
+                                scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
+                            logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx}, timepoint {timepoint}")
+                        except IndexError as e:
+                            logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
+                            logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access timepoint {timepoint}")
+                        except Exception as e:
+                            logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
+                    else:
+                        logger.debug(f"Skipping zarr write - invalid image bounds after clamping: img_y({img_y_start}:{img_y_end}), img_x({img_x_start}:{img_x_end})")
+                else:
+                    logger.debug(f"Skipping zarr write - invalid bounds: zarr_y({y_start}:{y_end}), zarr_x({x_start}:{x_end}), img_y({img_y_start}:{img_y_end}), img_x({img_x_start}:{img_x_end})")
     
     def add_image_sync_quick(self, image: np.ndarray, x_mm: float, y_mm: float, 
                            channel_idx: int = 0, z_idx: int = 0, timepoint: int = 0):
@@ -755,17 +766,28 @@ class WellZarrCanvasBase:
                 img_x_start = max(0, -x_px + scaled_image.shape[1] // 2)
                 img_x_end = img_x_start + (x_end - x_start)
                 
-                # Write to zarr at the specified timepoint
-                if y_end > y_start and x_end > x_start:
-                    try:
-                        zarr_array[timepoint, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
-                            scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
-                        logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx}, timepoint {timepoint} (quick scan)")
-                    except IndexError as e:
-                        logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
-                        logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access timepoint {timepoint}")
-                    except Exception as e:
-                        logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
+                # CRITICAL: Always validate bounds before writing to zarr arrays
+                # This prevents zero-size chunk creation and zarr write errors
+                if y_end > y_start and x_end > x_start and img_y_end > img_y_start and img_x_end > img_x_start:
+                    # Additional validation to ensure image slice is within bounds
+                    img_y_end = min(img_y_end, scaled_image.shape[0])
+                    img_x_end = min(img_x_end, scaled_image.shape[1])
+                    
+                    # Final check that we still have valid bounds after clamping
+                    if img_y_end > img_y_start and img_x_end > img_x_start:
+                        try:
+                            zarr_array[timepoint, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
+                                scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
+                            logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx}, timepoint {timepoint} (quick scan)")
+                        except IndexError as e:
+                            logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
+                            logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access timepoint {timepoint}")
+                        except Exception as e:
+                            logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
+                    else:
+                        logger.debug(f"Skipping zarr write - invalid image bounds after clamping: img_y({img_y_start}:{img_y_end}), img_x({img_x_start}:{img_x_end}) (quick scan)")
+                else:
+                    logger.debug(f"Skipping zarr write - invalid bounds: zarr_y({y_start}:{y_end}), zarr_x({x_start}:{x_end}), img_y({img_y_start}:{img_y_end}), img_x({img_x_start}:{img_x_end}) (quick scan)")
     
     async def add_image_async(self, image: np.ndarray, x_mm: float, y_mm: float,
                               channel_idx: int = 0, z_idx: int = 0, timepoint: int = 0):

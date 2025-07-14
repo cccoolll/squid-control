@@ -3234,20 +3234,39 @@ class Microscope:
             dict: Retrieved image data with metadata, or None if zarr canvas is not initialized
         """
         try:
-            # Check if zarr canvas is initialized before attempting to get region
-            if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
-                logger.warning("Zarr canvas not initialized, returning None")
+            # Check if experiment manager is initialized
+            if not hasattr(self.squidController, 'experiment_manager') or self.squidController.experiment_manager is None:
+                logger.warning("Experiment manager not initialized, returning None")
+                return None
+            
+            # Check if there's an active experiment
+            if self.squidController.experiment_manager.current_experiment is None:
+                logger.warning("No active experiment, returning None")
                 return None
             
             # Calculate center coordinates for the underlying function
             center_x_mm = start_x_mm + width_mm / 2
             center_y_mm = start_y_mm + height_mm / 2
             
-            # Get the region from the zarr canvas
+            # Determine which well this position belongs to
+            well_info = self.squidController.get_well_from_position(
+                wellplate_type='96',  # Default to 96-well plate
+                x_pos_mm=center_x_mm,
+                y_pos_mm=center_y_mm
+            )
+            
+            if well_info['position_status'] != 'in_well':
+                logger.warning(f"Position ({center_x_mm:.2f}, {center_y_mm:.2f}) is not inside a well: {well_info['position_status']}")
+                return None
+            
+            # Get the region from the specific well canvas
             try:
-                region = self.squidController.get_stitched_region(
-                    center_x_mm=center_x_mm,
-                    center_y_mm=center_y_mm,
+                region = self.squidController.get_well_stitched_region(
+                    well_row=well_info['row'],
+                    well_column=well_info['column'],
+                    wellplate_type='96',  # Default to 96-well plate
+                    center_x_mm=0.0,  # Use well-relative coordinates (0,0 = well center)
+                    center_y_mm=0.0,
                     width_mm=width_mm,
                     height_mm=height_mm,
                     scale_level=scale_level,
