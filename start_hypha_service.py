@@ -3067,13 +3067,13 @@ class Microscope:
                                 well_zip_content = temp_canvas.export_as_zip()
                                 temp_canvas.close()
                                 
-                                # Upload the well canvas zip
-                                well_dataset_name = f"{experiment_name}_{well_name}"
+                                # Upload the well canvas zip with new naming scheme
+                                # Use experiment_name as experiment_id for the new gallery/dataset naming
                                 well_description = f"Well canvas {well_name} from experiment {experiment_name}"
                                 
                                 upload_result = await self.zarr_artifact_manager.upload_zarr_dataset(
                                     microscope_service_id=self.service_id,
-                                    dataset_name=well_dataset_name,
+                                    dataset_name=f"{experiment_name}_{well_name}",  # This will be overridden by experiment_id
                                     zarr_zip_content=well_zip_content,
                                     acquisition_settings={
                                         "well_info": {
@@ -3085,7 +3085,8 @@ class Microscope:
                                         "experiment_name": experiment_name,
                                         "microscope_service_id": self.service_id
                                     },
-                                    description=well_description
+                                    description=well_description,
+                                    experiment_id=experiment_name  # Use experiment_name as experiment_id for new naming
                                 )
                                 
                                 uploaded_wells.append({
@@ -3133,10 +3134,13 @@ class Microscope:
             raise e
     
     @schema_function(skip_self=True)
-    async def list_microscope_datasets(self, context=None):
+    async def list_microscope_datasets(self, experiment_name: str = Field(None, description="Name of the experiment to list datasets for"), context=None):
         """
         List all datasets uploaded by this microscope.
         
+        Args:
+            experiment_name: Name of the experiment to list datasets for. If None, lists all datasets in the microscope's gallery.
+            
         Returns:
             list: List of datasets in the microscope's gallery
         """
@@ -3146,8 +3150,9 @@ class Microscope:
             if self.zarr_artifact_manager is None:
                 raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
             
-            # Get gallery
-            gallery = await self.zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
+            # Get gallery with experiment_id if provided
+            experiment_id = experiment_name if experiment_name else None
+            gallery = await self.zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id, experiment_id)
             
             # List datasets in gallery
             datasets = await self.zarr_artifact_manager._svc.list(gallery["id"])
@@ -3158,7 +3163,8 @@ class Microscope:
                 "gallery_info": {
                     "id": gallery["id"], 
                     "name": gallery.get("manifest", {}).get("name"),
-                    "microscope_service_id": self.service_id
+                    "microscope_service_id": self.service_id,
+                    "experiment_id": experiment_id
                 }
             }
             

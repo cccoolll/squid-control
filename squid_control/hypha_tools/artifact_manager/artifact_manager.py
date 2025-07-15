@@ -271,18 +271,28 @@ class SquidArtifactManager:
             print(traceback.format_exc())
             return []
 
-    async def create_or_get_microscope_gallery(self, microscope_service_id):
+    async def create_or_get_microscope_gallery(self, microscope_service_id, experiment_id=None):
         """
         Create or get a gallery for a specific microscope in the agent-lens workspace.
         
         Args:
             microscope_service_id (str): The hypha service ID of the microscope
+            experiment_id (str, optional): The experiment ID for gallery naming. Required if microscope_service_id ends with '-1'
             
         Returns:
             dict: The gallery artifact information
         """
         workspace = "agent-lens"
-        gallery_alias = f"microscope-gallery-{microscope_service_id}"
+        
+        # Determine gallery naming based on microscope service ID
+        if microscope_service_id.endswith('-1'):
+            # Special case: microscope ID ends with '-1', use experiment-based gallery
+            if experiment_id is None:
+                raise ValueError("experiment_id is required when microscope_service_id ends with '-1'")
+            gallery_alias = f"1-{experiment_id}"
+        else:
+            # Standard case: use microscope-based gallery
+            gallery_alias = f"microscope-gallery-{microscope_service_id}"
         
         try:
             # Try to get existing gallery
@@ -298,12 +308,24 @@ class SquidArtifactManager:
                 "artifact with id" in error_str):
                 # Gallery doesn't exist, create it
                 print(f"Creating new gallery: {gallery_alias}")
+                
+                # Determine gallery name and description based on type
+                if microscope_service_id.endswith('-1'):
+                    gallery_name = f"Experiment Gallery - {experiment_id}"
+                    gallery_description = f"Dataset collection for experiment {experiment_id}"
+                    gallery_type = "experiment-gallery"
+                else:
+                    gallery_name = f"Microscope Gallery - {microscope_service_id}"
+                    gallery_description = f"Dataset collection for microscope service {microscope_service_id}"
+                    gallery_type = "microscope-gallery"
+                
                 gallery_manifest = {
-                    "name": f"Microscope Gallery - {microscope_service_id}",
-                    "description": f"Dataset collection for microscope service {microscope_service_id}",
+                    "name": gallery_name,
+                    "description": gallery_description,
                     "microscope_service_id": microscope_service_id,
+                    "experiment_id": experiment_id,
                     "created_by": "squid-control-system",
-                    "type": "microscope-gallery"
+                    "type": gallery_type
                 }
                 
                 gallery_config = {
@@ -315,6 +337,7 @@ class SquidArtifactManager:
                             "description": {"type": "string"},
                             "record_type": {"type": "string", "enum": ["zarr-dataset"]},
                             "microscope_service_id": {"type": "string"},
+                            "experiment_id": {"type": "string"},
                             "acquisition_settings": {"type": "object"},
                             "timestamp": {"type": "string"}
                         },
@@ -403,21 +426,28 @@ class SquidArtifactManager:
                 raise e
     
     async def upload_zarr_dataset(self, microscope_service_id, dataset_name, zarr_zip_content, 
-                                 acquisition_settings=None, description=None):
+                                 acquisition_settings=None, description=None, experiment_id=None):
         """
         Upload a zarr fileset as a zip file to the microscope's gallery.
         
         Args:
             microscope_service_id (str): The hypha service ID of the microscope
-            dataset_name (str): The name for the dataset
+            dataset_name (str): The name for the dataset (will be overridden if experiment_id is provided)
             zarr_zip_content (bytes): The zip file content containing the zarr fileset
             acquisition_settings (dict, optional): Acquisition settings metadata
             description (str, optional): Description of the dataset
+            experiment_id (str, optional): The experiment ID for dataset naming. If provided, dataset_name will be overridden with '{experiment_id}-{date and time}'
             
         Returns:
             dict: Information about the uploaded dataset
         """
         workspace = "agent-lens"
+        
+        # Generate dataset name if experiment_id is provided
+        if experiment_id is not None:
+            import time
+            timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+            dataset_name = f"{experiment_id}-{timestamp}"
         
         # Validate ZIP file before upload
         await self._validate_zarr_zip_content(zarr_zip_content)
@@ -428,7 +458,7 @@ class SquidArtifactManager:
             raise ValueError(f"ZIP file integrity test failed: {', '.join(zip_test_results['issues'])}")
         
         # Ensure gallery exists
-        gallery = await self.create_or_get_microscope_gallery(microscope_service_id)
+        gallery = await self.create_or_get_microscope_gallery(microscope_service_id, experiment_id)
         
         # Check name availability
         name_check = await self.check_dataset_name_availability(microscope_service_id, dataset_name)
@@ -445,6 +475,7 @@ class SquidArtifactManager:
             "description": description or f"Zarr dataset from microscope {microscope_service_id}",
             "record_type": "zarr-dataset",
             "microscope_service_id": microscope_service_id,
+            "experiment_id": experiment_id,
             "timestamp": timestamp,
             "acquisition_settings": acquisition_settings or {},
             "file_format": "ome-zarr",
@@ -475,6 +506,7 @@ class SquidArtifactManager:
                 "dataset_id": dataset["id"],
                 "dataset_name": dataset_name,
                 "gallery_id": gallery["id"],
+                "experiment_id": experiment_id,
                 "upload_timestamp": timestamp,
                 "zip_size_mb": zip_size_mb
             }

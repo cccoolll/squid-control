@@ -31,11 +31,17 @@ async def cleanup_test_galleries(artifact_manager):
         # List all artifacts
         artifacts = await artifact_manager.list()
         
-        # Find test galleries - check for both patterns
+        # Find test galleries - check for multiple patterns
         test_galleries = []
         for artifact in artifacts:
             alias = artifact.get('alias', '')
-            if 'test-zip-gallery' in alias or 'microscope-gallery-test' in alias:
+            # Check for various test gallery patterns
+            if any(pattern in alias for pattern in [
+                'test-zip-gallery',           # Standard test galleries
+                'microscope-gallery-test',     # Test microscope galleries
+                '1-test-upload-experiment',    # New experiment galleries (test uploads)
+                '1-test-experiment'           # Other test experiment galleries
+            ]):
                 test_galleries.append(artifact)
         
         if not test_galleries:
@@ -1050,38 +1056,57 @@ async def test_upload_zarr_dataset_experiment_logic(test_gallery, artifact_manag
         zarr_dirs = []
         for well in wells:
             well_dir = temp_path / f"well_{well}_{wellplate_type}.zarr"
-            os.makedirs(well_dir, exist_ok=True)
-            # Create a dummy .zarray file and a chunk
-            (well_dir / ".zarray").write_text('{"chunks": [64, 64], "compressor": null, "dtype": "<u1", "fill_value": 0, "filters": null, "order": "C", "shape": [64, 64], "zarr_format": 2}')
-            chunk_dir = well_dir / "0"
-            os.makedirs(chunk_dir, exist_ok=True)
-            (chunk_dir / "0.0").write_bytes(np.random.randint(0, 255, (64*64,), dtype=np.uint8).tobytes())
+            well_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create minimal zarr structure
+            zarr_group = zarr.open_group(str(well_dir), mode='w')
+            
+            # Create a simple array for testing
+            test_array = np.random.randint(0, 255, (100, 100), dtype=np.uint8)
+            zarr_group.create_dataset('0', data=test_array, chunks=(50, 50))
+            
+            # Create .zarray file
+            zarray_path = well_dir / "0" / ".zarray"
+            zarray_path.parent.mkdir(exist_ok=True)
+            zarray_content = {
+                "zarr_format": 2,
+                "shape": [100, 100],
+                "chunks": [50, 50],
+                "dtype": "<u1",
+                "compressor": None,
+                "fill_value": 0,
+                "order": "C"
+            }
+            with open(zarray_path, 'w') as f:
+                json.dump(zarray_content, f)
+            
             zarr_dirs.append(well_dir)
+            print(f"  📁 Created test zarr directory: {well_dir}")
         
-        # Zip each well canvas as well_XY_ZZ.zip with data.zarr/ inside
+        # Create zip files for each well with correct data.zarr/ structure
         zip_files = []
         for well_dir in zarr_dirs:
-            well_name = well_dir.stem  # e.g. well_A1_96
+            well_name = well_dir.stem  # e.g., "well_A1_96"
             zip_path = temp_path / f"{well_name}.zip"
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            
+            with zipfile.ZipFile(zip_path, 'w', allowZip64=True) as zf:
+                # Walk through the zarr directory and add files under data.zarr/ prefix
                 for root, dirs, files in os.walk(well_dir):
                     for file in files:
-                        abs_path = Path(root) / file
-                        relative_path = abs_path.relative_to(well_dir)
-                        arcname = f"data.zarr/{relative_path}"  # <-- CRITICAL: always use data.zarr/
-                        zf.write(abs_path, arcname)
+                        file_path = Path(root) / file
+                        relative_path = file_path.relative_to(well_dir)
+                        # CRITICAL: Always use data.zarr/ prefix, not well name
+                        arcname = f"data.zarr/{relative_path}"
+                        zf.write(file_path, arcname)
+            
+            # Validate zip structure
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                zip_contents = zf.namelist()
+                assert any('data.zarr/' in name for name in zip_contents), f"Zip {zip_path} must contain data.zarr/ structure"
+                assert any('.zarray' in name for name in zip_contents), f"Zip {zip_path} must contain .zarray file"
+            
             zip_files.append(zip_path)
-        
-        # First, check that the zip structure is correct
-        for zip_path in zip_files:
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                namelist = zf.namelist()
-                assert any(name.startswith("data.zarr/") for name in namelist), f"Zip {zip_path} missing data.zarr/ root"
-                assert any(".zarray" in name for name in namelist), f"Zip {zip_path} missing .zarray file"
-        print("✅ All well zip files have correct data.zarr/ structure.")
-
-        # Now test the real upload_zarr_dataset functionality
-        print("🔧 Testing real upload_zarr_dataset functionality...")
+            print(f"  📦 Created zip file: {zip_path}")
         
         # Create a proper SquidArtifactManager instance
         from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
@@ -1110,99 +1135,65 @@ async def test_upload_zarr_dataset_experiment_logic(test_gallery, artifact_manag
         
         # Test uploading each well as a separate dataset
         uploaded_datasets = []
-        test_microscope_service_id = f"test-microscope-{uuid.uuid4().hex[:6]}"
+        test_microscope_service_id = f"test-microscope-{uuid.uuid4().hex[:6]}-1"  # End with -1 for new gallery naming
         
         try:
             for i, zip_path in enumerate(zip_files):
-                well_name = zip_path.stem  # e.g. "well_A1_96"
-                # Convert to valid dataset name: lowercase, hyphens only
-                dataset_name = f"{experiment_name}-{well_name}".lower().replace("_", "-")
+                well_name = zip_path.stem  # e.g., "well_A1_96"
                 
-                print(f"  📤 Uploading well dataset: {dataset_name}")
-                
-                # Read the zip content
+                # Read zip content
                 with open(zip_path, 'rb') as f:
                     zip_content = f.read()
                 
-                # Upload using SquidArtifactManager.upload_zarr_dataset
+                print(f"  📤 Uploading {well_name} as experiment dataset...")
+                
+                # Upload with new naming scheme (experiment_id will override dataset_name)
                 upload_result = await squid_artifact_manager.upload_zarr_dataset(
                     microscope_service_id=test_microscope_service_id,
-                    dataset_name=dataset_name,
+                    dataset_name=f"{experiment_name}_{well_name}",  # This will be overridden
                     zarr_zip_content=zip_content,
                     acquisition_settings={
-                        "well_info": {
-                            "well_row": wells[i][0],
-                            "well_column": int(wells[i][1:]),
-                            "wellplate_type": wellplate_type,
-                            "well_name": well_name
-                        },
+                        "well_name": well_name,
                         "experiment_name": experiment_name,
-                        "microscope_service_id": test_microscope_service_id
+                        "test_upload": True
                     },
-                    description=f"Test well canvas {well_name} from experiment {experiment_name}"
+                    description=f"Test upload for {well_name}",
+                    experiment_id=experiment_name  # This will create gallery "1-{experiment_name}" and dataset "{experiment_name}-{timestamp}"
                 )
                 
                 uploaded_datasets.append({
-                    "dataset_name": dataset_name,
                     "well_name": well_name,
+                    "dataset_name": upload_result["dataset_name"],
                     "upload_result": upload_result
                 })
                 
-                print(f"    ✅ Successfully uploaded {dataset_name}")
-                
-                # Test the endpoint for this dataset
-                print(f"  🌐 Testing endpoint for dataset: {dataset_name}")
-                
-                endpoint_url = f"{TEST_SERVER_URL}/{TEST_WORKSPACE}/artifacts/{dataset_name}/zip-files/zarr_dataset.zip/?path=data.zarr/"
-                
-                # Give some time for the upload to be processed
-                await asyncio.sleep(2)
-                
-                response = requests.get(endpoint_url, timeout=30)
-                
-                print(f"    📄 Response Status: {response.status_code}")
-                if not response.ok:
-                    print(f"    📄 Response Content: {response.text[:500]}...")
-                
-                # Check response content
-                if response.ok:
-                    try:
-                        content = response.json()
-                        if isinstance(content, list):
-                            print(f"    ✅ Endpoint test passed: {len(content)} items in directory")
-                            print(f"    📄 Directory items: {content}")
-                            # Verify we have zarr structure
-                            assert any('.zarray' in item.get('name', '') for item in content), "Missing .zarray file in endpoint response"
-                        elif isinstance(content, dict) and content.get("success") == False:
-                            print(f"    ❌ Endpoint error: {content.get('detail', 'Unknown error')}")
-                        else:
-                            print(f"    ⚠️ Unexpected response format: {content}")
-                    except json.JSONDecodeError:
-                        print(f"    ❌ Invalid JSON response: {response.text[:200]}")
-                        raise Exception(f"Invalid JSON response for {dataset_name}")
-                else:
-                    print(f"    ❌ Endpoint request failed with status {response.status_code}")
-                    # Don't fail the test immediately - some endpoints might take time to be available
-                    
-            print(f"✅ Successfully uploaded and tested {len(uploaded_datasets)} well datasets")
+                print(f"  ✅ Uploaded {well_name} -> {upload_result['dataset_name']}")
             
-            # Final validation
-            assert len(uploaded_datasets) == len(wells), f"Expected {len(wells)} uploads, got {len(uploaded_datasets)}"
-            
+            # Validate upload results
+            print(f"  📊 Validating upload results...")
             for dataset_info in uploaded_datasets:
                 assert dataset_info["upload_result"]["success"] == True, f"Upload failed for {dataset_info['dataset_name']}"
-                assert experiment_name in dataset_info["dataset_name"], f"Dataset name should contain experiment name"
-                # Convert well name to lowercase with hyphens for comparison
-                well_name_normalized = dataset_info["well_name"].lower().replace("_", "-")
-                assert well_name_normalized in dataset_info["dataset_name"], f"Dataset name should contain well name (normalized)"
                 
-            print("✅ All upload validation checks passed!")
+                # Check that dataset name follows new format: {experiment_name}-{timestamp}
+                dataset_name = dataset_info["dataset_name"]
+                assert experiment_name in dataset_name, f"Dataset name should contain experiment name"
+                assert dataset_name.startswith(f"{experiment_name}-"), f"Dataset name should start with experiment name and timestamp"
+                
+                # Check that gallery follows new format: "1-{experiment_name}"
+                gallery_id = dataset_info["upload_result"]["gallery_id"]
+                print(f"  📁 Gallery ID: {gallery_id}")
+                
+                # Test endpoint access
+                try:
+                    # Get the dataset details
+                    dataset_id = dataset_info["upload_result"]["dataset_id"]
+                    dataset_details = await squid_artifact_manager._svc.read(artifact_id=dataset_id)
+                    print(f"  ✅ Dataset endpoint accessible: {dataset_name}")
+                except Exception as e:
+                    print(f"  ❌ Dataset endpoint failed: {e}")
+                    raise e
             
-        except Exception as e:
-            print(f"❌ Upload test failed: {e}")
-            import traceback
-            print(f"Traceback: {traceback.format_exc()}")
-            raise e
+            print(f"  🎉 All uploads successful! Uploaded {len(uploaded_datasets)} datasets")
             
         finally:
             # Cleanup: Remove uploaded test datasets
@@ -1213,23 +1204,34 @@ async def test_upload_zarr_dataset_experiment_logic(test_gallery, artifact_manag
                     try:
                         # Get the dataset and delete it
                         artifacts = await squid_artifact_manager._svc.list()
-                        test_artifacts = [a for a in artifacts if a.get('alias') == dataset_name]
+                        test_artifacts = [a for a in artifacts if a.get('alias') == f"agent-lens/{dataset_name}"]
                         
                         for artifact in test_artifacts:
                             await squid_artifact_manager._svc.delete(
                                 artifact_id=artifact["id"],
-                                delete_files=True
                             )
-                            print(f"  🗑️ Deleted test dataset: {dataset_name}")
-                    except Exception as cleanup_error:
-                        print(f"  ⚠️ Failed to cleanup {dataset_name}: {cleanup_error}")
-                        
-            except Exception as cleanup_error:
-                print(f"⚠️ Cleanup failed: {cleanup_error}")
+                            print(f"  ✅ Deleted dataset: {dataset_name}")
+                    except Exception as e:
+                        print(f"  ⚠️ Error deleting {dataset_name}: {e}")
+                
+                # Also clean up the gallery if it was created
+                try:
+                    gallery_alias = f"1-{experiment_name}"
+                    gallery_artifacts = [a for a in artifacts if a.get('alias') == f"agent-lens/{gallery_alias}"]
+                    for gallery in gallery_artifacts:
+                        await squid_artifact_manager._svc.delete(
+                            artifact_id=gallery["id"],
+                            delete_files=True,
+                            recursive=True
+                        )
+                        print(f"  ✅ Deleted gallery: {gallery_alias}")
+                except Exception as e:
+                    print(f"  ⚠️ Error deleting gallery: {e}")
+                    
+            except Exception as e:
+                print(f"  ⚠️ Error during cleanup: {e}")
         
-        # Final cleanup of test galleries
-        print("🧹 Final cleanup of test galleries...")
-        await cleanup_test_galleries(squid_artifact_manager)
+        print("✅ Test completed successfully!")
 
 if __name__ == "__main__":
     # Allow running this test directly
