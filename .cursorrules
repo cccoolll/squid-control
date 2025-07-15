@@ -495,6 +495,12 @@ This serial communication system provides the foundation for precise, reliable, 
 - **Channel Mapping**: Maintain consistent channel-to-zarr-index mapping throughout the system
 - **Lazy Array Expansion**: Use `_ensure_timepoint_exists_in_zarr()` pattern for memory-efficient timepoint management
 
+### Well Canvas Implementation
+- **`WellZarrCanvas`**: Well-specific implementation with automatic coordinate conversion
+- **Well Center Calculation**: Automatic well center calculation from well plate formats
+- **Canvas Size**: Based on well diameter + configurable padding (default: 2.0mm)
+- **Fileset Naming**: Well-specific naming pattern (well_{row}{column}_{wellplate_type})
+
 ### Image Writing Best Practices
 - **Bounds Validation**: Calculate and validate all coordinate bounds before any zarr write operation
 - **Image Preprocessing**: Apply rotation/cropping operations before multi-scale processing
@@ -512,6 +518,12 @@ This serial communication system provides the foundation for precise, reliable, 
 - **Async Processing**: Use background stitching loops for non-blocking image addition
 - **Scale-Specific Updates**: Choose appropriate scale range based on use case (all scales vs scales 1-5)
 - **Resource Cleanup**: Always implement proper cleanup in `close()` methods and context managers
+
+### Experiment Management
+- **Experiment Creation**: Use `create_experiment()` with optional well initialization
+- **Active Experiment**: Always ensure active experiment before operations using `ensure_active_experiment()`
+- **Well Canvas Lifecycle**: Use `ExperimentManager.get_well_canvas()` for automatic canvas creation/access
+- **Multi-Well Operations**: Support scanning multiple wells in single operation with `wells_to_scan` parameter
 
 ### Export & Storage Guidelines
 - **Export Size Estimation**: Use `get_export_info()` to estimate zip sizes before export operations

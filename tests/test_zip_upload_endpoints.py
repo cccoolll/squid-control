@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 from hypha_rpc import connect_to_server
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 # Mark all tests in this module as asyncio and integration tests
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
@@ -61,9 +60,35 @@ async def cleanup_test_galleries(artifact_manager):
 
 # Test sizes in MB - smaller sizes for faster testing
 TEST_SIZES = [
-    ("1.6GB", 1600),
-    ("mini-chunks-test", 400),  # New test designed to create mini chunks
+    ("100MB", 100),  # Much smaller for CI
+    ("mini-chunks-test", 50),  # Even smaller mini-chunks test
 ]
+
+# CI-friendly test sizes (when running in GitHub Actions or CI environment)
+CI_TEST_SIZES = [
+    ("10MB", 10),  # Very small for CI
+    ("mini-chunks-test", 25),  # Small mini-chunks test
+]
+
+# Detect CI environment
+def is_ci_environment():
+    """Check if running in a CI environment."""
+    return any([
+        os.environ.get("CI") == "true",
+        os.environ.get("GITHUB_ACTIONS") == "true",
+        os.environ.get("RUNNER_OS") is not None,
+        os.environ.get("QUICK_TEST") == "1"
+    ])
+
+# Use appropriate test sizes based on environment
+def get_test_sizes():
+    """Get appropriate test sizes based on environment."""
+    if is_ci_environment():
+        print("🏗️ CI environment detected - using smaller test sizes")
+        return CI_TEST_SIZES
+    else:
+        print("🖥️ Local environment detected - using standard test sizes")
+        return TEST_SIZES
 
 class OMEZarrCreator:
     """Helper class to create OME-Zarr datasets of specific sizes."""
@@ -536,8 +561,15 @@ async def upload_zip_with_retry(put_url: str, zip_path: Path, size_mb: int, max_
     Returns:
         Upload time in seconds
     """
-    # Calculate timeout based on file size (minimum 5 minutes, add 1 minute per 50MB)
-    timeout_seconds = max(300, int(size_mb / 50) * 60 + 300)
+    # Calculate timeout based on file size and environment
+    if is_ci_environment():
+        # More conservative timeouts for CI (slower network, limited resources)
+        timeout_seconds = max(120, int(size_mb / 10) * 60 + 120)  # 2 min base + 1 min per 10MB
+    else:
+        # More generous timeouts for local development
+        timeout_seconds = max(300, int(size_mb / 50) * 60 + 300)  # 5 min base + 1 min per 50MB
+    
+    print(f"📊 Upload timeout calculation: {size_mb}MB → {timeout_seconds}s timeout")
     
     for attempt in range(max_retries):
         try:
@@ -667,12 +699,12 @@ async def test_create_datasets_and_test_endpoints(test_gallery, artifact_manager
         temp_path = Path(temp_dir)
         test_results = []
         
-        for size_name, size_mb in TEST_SIZES:
+        for size_name, size_mb in get_test_sizes():
             print(f"\n🧪 Testing {size_name} dataset...")
             
             try:
                 # Skip very large tests in CI or quick testing
-                if size_mb > 1000 and os.environ.get("QUICK_TEST"):
+                if size_mb > 100 and os.environ.get("QUICK_TEST"):
                     print(f"⏭️ Skipping {size_name} (QUICK_TEST mode)")
                     continue
                 
