@@ -1922,7 +1922,8 @@ class Microscope:
             "set_active_experiment": self.set_active_experiment,
             "remove_experiment": self.remove_experiment,
             "reset_experiment": self.reset_experiment,
-            "get_experiment_info": self.get_experiment_info
+            "get_experiment_info": self.get_experiment_info,
+            "upload_zarr_dataset": self.upload_zarr_dataset,
         }
         
         # Only register get_canvas_chunk when not in local mode
@@ -2926,66 +2927,209 @@ class Microscope:
     
     @schema_function(skip_self=True)
     async def upload_zarr_dataset(self, 
-                                dataset_name: str = Field(..., description="Name for the dataset"),
+                                experiment_name: str = Field(..., description="Name of the experiment to upload (this becomes the dataset name)"),
                                 description: str = Field("", description="Description of the dataset"),
                                 include_acquisition_settings: bool = Field(True, description="Whether to include current acquisition settings as metadata"),
                                 context=None):
         """
-        Upload the current zarr canvas as a dataset to the artifact manager.
+        Upload an experiment's well canvases as individual zip files to the artifact manager.
+        
+        This function uploads each well canvas from the experiment as a separate zip file
+        within a single dataset. The dataset name will be the experiment name.
         
         Args:
-            dataset_name: Name for the dataset
+            experiment_name: Name of the experiment to upload (becomes the dataset name)
             description: Description of the dataset
             include_acquisition_settings: Whether to include current acquisition settings as metadata
             
         Returns:
-            dict: Upload result information
+            dict: Upload result information with details about uploaded well canvases
         """
         
         try:
-            # Check if zarr canvas exists
-            if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
-                raise Exception("No zarr canvas available. Start a scanning operation first to create data.")
-            
-            # Get export info to check feasibility
-            export_info = self.squidController.zarr_canvas.get_export_info()
-            if not export_info.get("export_feasible", False):
-                raise Exception(f"Dataset too large for upload. Estimated size: {export_info.get('estimated_zip_size_mb', 0):.1f} MB")
+            # Check if experiment manager is initialized
+            if not hasattr(self.squidController, 'experiment_manager') or self.squidController.experiment_manager is None:
+                raise Exception("Experiment manager not initialized. Start a scanning operation first to create data.")
             
             # Check if zarr artifact manager is available
             if self.zarr_artifact_manager is None:
                 raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
             
-            zarr_zip_content = self.squidController.zarr_canvas.export_as_zip()
+            # Get experiment information
+            experiment_info = self.squidController.experiment_manager.get_experiment_info(experiment_name)
+            
+            if not experiment_info.get("well_canvases"):
+                raise Exception(f"No well canvases found in experiment '{experiment_name}'. Start a scanning operation first to create data.")
+            
+            # Check total size feasibility
+            total_size_mb = experiment_info.get("total_size_mb", 0)
+            if total_size_mb > 1000:  # 1GB limit for total experiment size
+                raise Exception(f"Experiment too large for upload. Total size: {total_size_mb:.1f} MB")
+            
+            logger.info(f"Uploading experiment '{experiment_name}' with {len(experiment_info['well_canvases'])} well canvases")
             
             # Prepare acquisition settings if requested
             acquisition_settings = None
             if include_acquisition_settings:
-                acquisition_settings = {
-                    "pixel_size_xy_um": export_info.get("canvas_dimensions", {}).get("pixel_size_um"),
-                    "channels": export_info.get("channels", []),
-                    "canvas_dimensions": export_info.get("canvas_dimensions", {}),
-                    "num_scales": export_info.get("num_scales"),
-                    "microscope_service_id": self.service_id
-                }
+                # Get settings from the first available well canvas
+                first_well = experiment_info['well_canvases'][0]
+                well_path = Path(first_well['path'])
+                
+                # Try to get canvas info from the first well
+                try:
+                    # Create a temporary canvas instance to get export info
+                    from squid_control.stitching.zarr_canvas import WellZarrCanvas
+                    from squid_control.control.config import ChannelMapper, CONFIG
+                    
+                    # Parse well info from path (e.g., "well_A1_96.zarr" -> A, 1, 96)
+                    well_name = well_path.stem  # "well_A1_96"
+                    if well_name.startswith("well_"):
+                        well_info = well_name[5:]  # "A1_96"
+                        if "_" in well_info:
+                            well_part, wellplate_type = well_info.rsplit("_", 1)
+                            if len(well_part) >= 2:
+                                well_row = well_part[0]
+                                well_column = int(well_part[1:])
+                                
+                                # Create temporary canvas to get export info
+                                temp_canvas = WellZarrCanvas(
+                                    well_row=well_row,
+                                    well_column=well_column,
+                                    wellplate_type=wellplate_type,
+                                    padding_mm=2.0,
+                                    base_path=str(well_path.parent),
+                                    pixel_size_xy_um=self.squidController.pixel_size_xy,
+                                    channels=ChannelMapper.get_all_human_names(),
+                                    rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
+                                )
+                                
+                                # Get export info from the temporary canvas
+                                export_info = temp_canvas.get_export_info()
+                                temp_canvas.close()
+                                
+                                acquisition_settings = {
+                                    "pixel_size_xy_um": export_info.get("canvas_dimensions", {}).get("pixel_size_um"),
+                                    "channels": export_info.get("channels", []),
+                                    "canvas_dimensions": export_info.get("canvas_dimensions", {}),
+                                    "num_scales": export_info.get("num_scales"),
+                                    "microscope_service_id": self.service_id,
+                                    "experiment_name": experiment_name,
+                                    "wellplate_type": wellplate_type
+                                }
+                except Exception as e:
+                    logger.warning(f"Could not get detailed acquisition settings: {e}")
+                    # Fallback to basic settings
+                    acquisition_settings = {
+                        "microscope_service_id": self.service_id,
+                        "experiment_name": experiment_name,
+                        "total_wells": len(experiment_info['well_canvases']),
+                        "total_size_mb": total_size_mb
+                    }
             
-            # Upload to artifact manager
-            upload_result = await self.zarr_artifact_manager.upload_zarr_dataset(
-                microscope_service_id=self.service_id,
-                dataset_name=dataset_name,
-                zarr_zip_content=zarr_zip_content,
-                acquisition_settings=acquisition_settings,
-                description=description
-            )
+            # Upload each well canvas as a separate zip file
+            uploaded_wells = []
+            total_uploaded_size = 0
+            
+            for well_info in experiment_info['well_canvases']:
+                well_name = well_info['name']
+                well_path = Path(well_info['path'])
+                well_size_mb = well_info['size_mb']
+                
+                logger.info(f"Uploading well canvas: {well_name} ({well_size_mb:.2f} MB)")
+                
+                try:
+                    # Create a temporary canvas instance to export the well
+                    from squid_control.stitching.zarr_canvas import WellZarrCanvas
+                    from squid_control.control.config import ChannelMapper, CONFIG
+                    
+                    # Parse well info from name (e.g., "well_A1_96" -> A, 1, 96)
+                    if well_name.startswith("well_"):
+                        well_info_part = well_name[5:]  # "A1_96"
+                        if "_" in well_info_part:
+                            well_part, wellplate_type = well_info_part.rsplit("_", 1)
+                            if len(well_part) >= 2:
+                                well_row = well_part[0]
+                                well_column = int(well_part[1:])
+                                
+                                # Create temporary canvas for export
+                                temp_canvas = WellZarrCanvas(
+                                    well_row=well_row,
+                                    well_column=well_column,
+                                    wellplate_type=wellplate_type,
+                                    padding_mm=2.0,
+                                    base_path=str(well_path.parent),
+                                    pixel_size_xy_um=self.squidController.pixel_size_xy,
+                                    channels=ChannelMapper.get_all_human_names(),
+                                    rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
+                                )
+                                
+                                # Export the well canvas as zip
+                                well_zip_content = temp_canvas.export_as_zip()
+                                temp_canvas.close()
+                                
+                                # Upload the well canvas zip
+                                well_dataset_name = f"{experiment_name}_{well_name}"
+                                well_description = f"Well canvas {well_name} from experiment {experiment_name}"
+                                
+                                upload_result = await self.zarr_artifact_manager.upload_zarr_dataset(
+                                    microscope_service_id=self.service_id,
+                                    dataset_name=well_dataset_name,
+                                    zarr_zip_content=well_zip_content,
+                                    acquisition_settings={
+                                        "well_info": {
+                                            "well_row": well_row,
+                                            "well_column": well_column,
+                                            "wellplate_type": wellplate_type,
+                                            "well_name": well_name
+                                        },
+                                        "experiment_name": experiment_name,
+                                        "microscope_service_id": self.service_id
+                                    },
+                                    description=well_description
+                                )
+                                
+                                uploaded_wells.append({
+                                    "well_name": well_name,
+                                    "well_row": well_row,
+                                    "well_column": well_column,
+                                    "wellplate_type": wellplate_type,
+                                    "size_mb": well_size_mb,
+                                    "upload_result": upload_result
+                                })
+                                
+                                total_uploaded_size += well_size_mb
+                                logger.info(f"Successfully uploaded well {well_name}")
+                                
+                            else:
+                                logger.warning(f"Could not parse well name: {well_name}")
+                        else:
+                            logger.warning(f"Could not parse well name: {well_name}")
+                    else:
+                        logger.warning(f"Unexpected well name format: {well_name}")
+                        
+                except Exception as e:
+                    logger.error(f"Failed to upload well {well_name}: {e}")
+                    # Continue with other wells
+                    continue
+            
+            if not uploaded_wells:
+                raise Exception("No well canvases were successfully uploaded")
+            
+            logger.info(f"Successfully uploaded {len(uploaded_wells)} well canvases from experiment '{experiment_name}'")
             
             return {
                 "success": True,
-                "upload_result": upload_result,
-                "export_info": export_info
+                "experiment_name": experiment_name,
+                "dataset_name": experiment_name,  # Dataset name is the experiment name
+                "uploaded_wells": uploaded_wells,
+                "total_wells": len(uploaded_wells),
+                "total_size_mb": total_uploaded_size,
+                "acquisition_settings": acquisition_settings,
+                "description": description or f"Experiment {experiment_name} with {len(uploaded_wells)} well canvases"
             }
             
         except Exception as e:
-            logger.error(f"Error uploading zarr dataset: {e}")
+            logger.error(f"Error uploading experiment dataset: {e}")
             raise e
     
     @schema_function(skip_self=True)
