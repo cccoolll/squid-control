@@ -1272,7 +1272,7 @@ async def test_webrtc_end_to_end(webrtc_test_services):
             print("4. Testing microscope controls...")
             
             # Test movement
-            move_result = await microscope_svc.move_by_distance(x=0.1, y=0.1, z=0.0)
+            move_result = await microscope_svc.move_by_distance(x=10, y=10, z=0.0)
             assert isinstance(move_result, dict)
             print("✅ Movement control works")
             
