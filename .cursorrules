@@ -378,8 +378,8 @@ This serial communication system provides the foundation for precise, reliable, 
 ### API Design
 - Use Pydantic models for input validation (see BaseModel classes)
 - Include detailed Field descriptions for all parameters
-- Implement permission checks using `check_permission()`
 - Add schema validation with `@schema_function` decorator
+- If exception occurs, use raise.
 
 ### Configuration Management
 - Use INI files for hardware configuration
@@ -446,7 +446,7 @@ This serial communication system provides the foundation for precise, reliable, 
 ### API Development
 - Follow existing schema patterns
 - Add input validation with Pydantic
-- Implement proper error responses
+- Implement proper error responses using `raise` instead of return JSON for failures
 - Include detailed API documentation
 
 ### GUI Development
@@ -477,11 +477,72 @@ This serial communication system provides the foundation for precise, reliable, 
 - Support both single frame and time-lapse acquisition
 - Implement proper camera triggering modes
 
+## Zarr Canvas & Image Stitching Guidelines
+
+### Zarr Canvas Management (`squid_control/stitching/zarr_canvas.py`)
+- **Chunk Size Optimization**: Use standardized 256x256 pixel chunks for optimal I/O performance
+- **Canvas Dimension Alignment**: Always ensure canvas dimensions are divisible by chunk_size to prevent partial chunks
+- **Zero-Size Chunk Prevention**: ALWAYS validate bounds before writing to zarr arrays:
+  ```python
+  # CRITICAL: Always check for valid bounds before zarr write operations
+  if y_end > y_start and x_end > x_start:
+      zarr_array[timepoint, channel_idx, z_idx, y_start:y_end, x_start:x_end] = scaled_image[...]
+  ```
+
+### OME-Zarr Structure Standards
+- **Multi-Scale Pyramid**: Implement 4x downsampling between scales (scale0=full, scale1=1/4, scale2=1/16, etc.)
+- **Metadata Compliance**: Follow OME-Zarr 0.4 specification with proper axes definitions (T,C,Z,Y,X)
+- **Channel Mapping**: Maintain consistent channel-to-zarr-index mapping throughout the system
+- **Lazy Array Expansion**: Use `_ensure_timepoint_exists_in_zarr()` pattern for memory-efficient timepoint management
+
+### Image Writing Best Practices
+- **Bounds Validation**: Calculate and validate all coordinate bounds before any zarr write operation
+- **Image Preprocessing**: Apply rotation/cropping operations before multi-scale processing
+- **Quick Scan Mode**: For performance-critical applications, use `add_image_sync_quick()` that skips scale0
+- **Thread Safety**: Use `zarr_lock` for all zarr array access in multi-threaded environments
+
+### Chunk Management Patterns
+- **No Empty Chunks**: Never write zero-filled or empty regions that create unnecessary chunk files
+- **Chunk Deletion**: Use `_delete_timepoint_chunks()` pattern for efficient timepoint cleanup
+- **Coordinate Alignment**: Ensure image placement aligns well with chunk boundaries when possible
+- **Size Validation**: Validate image dimensions against canvas bounds before processing
+
+### Memory & Performance Optimization
+- **Lazy Loading**: Initialize zarr resources only when needed
+- **Async Processing**: Use background stitching loops for non-blocking image addition
+- **Scale-Specific Updates**: Choose appropriate scale range based on use case (all scales vs scales 1-5)
+- **Resource Cleanup**: Always implement proper cleanup in `close()` methods and context managers
+
+### Export & Storage Guidelines
+- **Export Size Estimation**: Use `get_export_info()` to estimate zip sizes before export operations
+- **Metadata Preservation**: Include comprehensive metadata in exports (channel mapping, stage limits, etc.)
+- **File Structure Validation**: Verify zarr directory structure before export operations
+- **ZIP64 Support**: Always use `allowZip64=True` for large archives (>4GB or >65,535 files):
+  ```python
+  # CORRECT: ZIP64 support for large archives
+  with zipfile.ZipFile(zip_buffer, 'w', allowZip64=True, compression=zipfile.ZIP_DEFLATED) as zf:
+      # Add files to archive
+  ```
+- **ZIP Path Manipulation**: When creating ZIP files with custom directory names, use direct string concatenation with forward slashes:
+  ```python
+  # CORRECT: Direct string construction for ZIP paths
+  relative_path = file_path.relative_to(zarr_path)
+  arcname = "data.zarr/" + "/".join(relative_path.parts)
+  
+  # WRONG: Path manipulation that can cause ZIP corruption
+  path_parts = relative_path.parts
+  fixed_path_parts = ("data.zarr",) + path_parts[1:]
+  arcname = str(Path(*fixed_path_parts))  # Can cause cross-platform issues
+  ```
+- **ZIP Standard Compliance**: Always use forward slashes (`/`) in ZIP archive paths, regardless of operating system
+- **Cross-Platform Safety**: Avoid `Path(*parts)` reconstruction which can create invalid paths on different OS
+
 ## Debugging & Logging
 - Use the configured logger (`setup_logging()`) 
 - Log hardware operations at INFO level
 - Log errors with full stack traces
 - Include timing information for performance monitoring
+- Log zarr operations at DEBUG level to avoid log spam
 
 ## Security Considerations
 - Implement user authentication for API access
@@ -495,4 +556,5 @@ When working on this codebase:
 3. Add comprehensive error handling and logging
 4. Test thoroughly with both mock and real hardware
 5. Follow the established patterns for new features
-6. Update relevant documentation and tests 
+6. Update relevant documentation and tests
+7. **For Zarr operations**: Always validate bounds and prevent zero-size writes 

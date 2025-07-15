@@ -13,16 +13,46 @@ from PIL import Image
 from datetime import datetime
 import cv2
 
+# Get the logger for this module
 logger = logging.getLogger(__name__)
+
+# Ensure the logger has the same level as the root logger
+# This ensures our INFO messages are actually displayed
+if not logger.handlers:
+    # If no handlers are set up, inherit from the root logger
+    logger.setLevel(logging.INFO)
+    # Add a handler that matches the main service format
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.propagate = False  # Prevent double logging
 
 class ZarrCanvas:
     """
     Manages an OME-Zarr canvas for live microscope image stitching.
     Creates and maintains a multi-scale pyramid structure for efficient viewing.
+    
+    Example usage with zarr upload:
+        # Create and initialize canvas
+        canvas = ZarrCanvas(base_path="/tmp/zarr", pixel_size_xy_um=0.33, stage_limits={...})
+        canvas.initialize_canvas()
+        
+        # Add images during scanning
+        canvas.add_image_sync(image, x_mm=10.0, y_mm=15.0, channel_idx=0, timepoint=0)
+        
+        # Check export feasibility
+        export_info = canvas.get_export_info()
+        if export_info["export_feasible"]:
+            # Export for upload to artifact manager
+            zip_content = canvas.export_as_zip()
+            # Use the zip_content with the microscope service upload_zarr_dataset API
     """
     
     def __init__(self, base_path: str, pixel_size_xy_um: float, stage_limits: Dict[str, float], 
-                 channels: List[str] = None, chunk_size: int = 256, rotation_angle_deg: float = 0.0):
+                 channels: List[str] = None, chunk_size: int = 256, rotation_angle_deg: float = 0.0,
+                 initial_timepoints: int = 20, timepoint_expansion_chunk: int = 10, fileset_name: str = "live_stitching",
+                 initialize_new: bool = False):
         """
         Initialize the Zarr canvas.
         
@@ -33,14 +63,23 @@ class ZarrCanvas:
             channels: List of channel names (human-readable names)
             chunk_size: Size of chunks in pixels (default 256)
             rotation_angle_deg: Rotation angle for stitching in degrees (positive=clockwise, negative=counterclockwise)
+            initial_timepoints: Number of timepoints to pre-allocate during initialization (default 20)
+            timepoint_expansion_chunk: Number of timepoints to add when expansion is needed (default 10)
+            fileset_name: Name of the zarr fileset (default 'live_stitching')
+            initialize_new: If True, create a new fileset (deletes existing). If False, open existing if present.
         """
         self.base_path = Path(base_path)
         self.pixel_size_xy_um = pixel_size_xy_um
         self.stage_limits = stage_limits
-        self.channels = channels or ['BF_LED_matrix_full']
+        self.channels = channels or ['BF LED matrix full']
         self.chunk_size = chunk_size
         self.rotation_angle_deg = rotation_angle_deg
-        self.zarr_path = self.base_path / "live_stitching.zarr"
+        self.fileset_name = fileset_name
+        self.zarr_path = self.base_path / f"{fileset_name}.zarr"
+        
+        # Timepoint allocation strategy
+        self.initial_timepoints = max(1, initial_timepoints)  # Ensure at least 1
+        self.timepoint_expansion_chunk = max(1, timepoint_expansion_chunk)  # Ensure at least 1
         
         # Create channel mapping: channel_name -> local_zarr_index
         self.channel_to_zarr_index = {channel_name: idx for idx, channel_name in enumerate(self.channels)}
@@ -70,13 +109,23 @@ class ZarrCanvas:
         # Lock for thread-safe zarr access
         self.zarr_lock = threading.RLock()
         
-        # Queue for frame stitching
-        self.stitch_queue = asyncio.Queue(maxsize=100)
+        # Queue for frame stitching - increased size for stable FPS with non-blocking puts
+        self.stitch_queue = asyncio.Queue(maxsize=500)
         self.stitching_task = None
         self.is_stitching = False
         
+        # Track available timepoints
+        self.available_timepoints = [0]  # Start with timepoint 0 as a list
+        
+        # Only initialize or open
+        if initialize_new or not self.zarr_path.exists():
+            self.initialize_canvas()
+        else:
+            self.open_existing_canvas()
+        
         logger.info(f"ZarrCanvas initialized: {self.canvas_width_px}x{self.canvas_height_px} px, "
-                    f"{self.num_scales} scales, chunk_size={chunk_size}")
+                    f"{self.num_scales} scales, chunk_size={chunk_size}, "
+                    f"initial_timepoints={self.initial_timepoints}, expansion_chunk={self.timepoint_expansion_chunk}")
     
     def _calculate_num_scales(self) -> int:
         """Calculate the number of pyramid levels needed."""
@@ -125,6 +174,215 @@ class ZarrCanvas:
             raise ValueError(f"Zarr index {zarr_index} not found. Available indices: {list(self.zarr_index_to_channel.keys())}")
         return self.zarr_index_to_channel[zarr_index]
     
+    def get_available_timepoints(self) -> List[int]:
+        """
+        Get a list of available timepoints in the zarr array.
+        
+        Returns:
+            List[int]: Sorted list of available timepoint indices
+        """
+        with self.zarr_lock:
+            return sorted(self.available_timepoints)
+    
+    def create_timepoint(self, timepoint: int):
+        """
+        Create a new timepoint in the zarr array.
+        This is now a lightweight operation that just adds to the available list.
+        Zarr array expansion happens lazily when actually writing data.
+        
+        Args:
+            timepoint: The timepoint index to create
+            
+        Raises:
+            ValueError: If timepoint already exists or is negative
+        """
+        if timepoint < 0:
+            raise ValueError(f"Timepoint must be non-negative, got {timepoint}")
+            
+        with self.zarr_lock:
+            if timepoint in self.available_timepoints:
+                logger.info(f"Timepoint {timepoint} already exists")
+                return
+            
+            logger.info(f"Creating new timepoint {timepoint} (lightweight)")
+            
+            # Simply add to available timepoints - zarr arrays will be expanded when needed
+            self.available_timepoints.append(timepoint)
+            self.available_timepoints.sort()  # Keep sorted for consistency
+            
+            # Update metadata
+            self._update_timepoint_metadata()
+    
+    def pre_allocate_timepoints(self, max_timepoint: int):
+        """
+        Pre-allocate zarr arrays to accommodate timepoints up to max_timepoint.
+        This is useful for time-lapse experiments where you know the number of timepoints in advance.
+        Performing this operation early avoids delays during scanning.
+        
+        Args:
+            max_timepoint: The maximum timepoint index to pre-allocate for
+            
+        Raises:
+            ValueError: If max_timepoint is negative
+        """
+        if max_timepoint < 0:
+            raise ValueError(f"Max timepoint must be non-negative, got {max_timepoint}")
+        
+        with self.zarr_lock:
+            logger.info(f"Pre-allocating zarr arrays for timepoints up to {max_timepoint}")
+            start_time = time.time()
+            
+            # Check if any arrays need expansion
+            expansion_needed = False
+            for scale in range(self.num_scales):
+                if scale in self.zarr_arrays:
+                    zarr_array = self.zarr_arrays[scale]
+                    if max_timepoint >= zarr_array.shape[0]:
+                        expansion_needed = True
+                        break
+            
+            if not expansion_needed:
+                logger.info(f"Zarr arrays already accommodate timepoint {max_timepoint}")
+                return
+                
+            # Expand all arrays to accommodate max_timepoint
+            self._ensure_timepoint_exists_in_zarr(max_timepoint)
+            
+            elapsed_time = time.time() - start_time
+            logger.info(f"Pre-allocation completed in {elapsed_time:.2f} seconds")
+    
+    def remove_timepoint(self, timepoint: int):
+        """
+        Remove a timepoint from the zarr array by deleting its chunk files.
+        
+        Args:
+            timepoint: The timepoint index to remove
+            
+        Raises:
+            ValueError: If timepoint doesn't exist or is the last remaining timepoint
+        """
+        with self.zarr_lock:
+            if timepoint not in self.available_timepoints:
+                raise ValueError(f"Timepoint {timepoint} does not exist")
+            
+            if len(self.available_timepoints) == 1:
+                raise ValueError("Cannot remove the last timepoint")
+            
+            logger.info(f"Removing timepoint {timepoint} and deleting chunk files")
+            
+            # Delete chunk files for this timepoint
+            self._delete_timepoint_chunks(timepoint)
+            
+            # Remove from available timepoints list
+            self.available_timepoints.remove(timepoint)
+            
+            # Update metadata
+            self._update_timepoint_metadata()
+    
+    def clear_timepoint(self, timepoint: int):
+        """
+        Clear all data from a specific timepoint by deleting its chunk files.
+        
+        Args:
+            timepoint: The timepoint index to clear
+            
+        Raises:
+            ValueError: If timepoint doesn't exist
+        """
+        with self.zarr_lock:
+            if timepoint not in self.available_timepoints:
+                raise ValueError(f"Timepoint {timepoint} does not exist")
+            
+            logger.info(f"Clearing data from timepoint {timepoint} by deleting chunk files")
+            
+            # Delete chunk files for this timepoint
+            self._delete_timepoint_chunks(timepoint)
+    
+    def _delete_timepoint_chunks(self, timepoint: int):
+        """
+        Delete all chunk files for a specific timepoint across all scales.
+        This is much more efficient than zeroing out data.
+        
+        Args:
+            timepoint: The timepoint index to delete chunks for
+        """
+        try:
+            # For each scale, find and delete chunk files containing this timepoint
+            for scale in range(self.num_scales):
+                scale_path = self.zarr_path / str(scale)
+                if not scale_path.exists():
+                    continue
+                
+                # Zarr stores chunks in directories, timepoint is the first dimension
+                # Chunk filename format: "t.c.z.y.x" where t is timepoint
+                deleted_count = 0
+                
+                try:
+                    # Look for chunk files that start with this timepoint
+                    for chunk_file in scale_path.iterdir():
+                        if chunk_file.is_file() and chunk_file.name.startswith(f"{timepoint}."):
+                            try:
+                                chunk_file.unlink()  # Delete the file
+                                deleted_count += 1
+                            except OSError as e:
+                                logger.warning(f"Could not delete chunk file {chunk_file}: {e}")
+                
+                except OSError as e:
+                    logger.warning(f"Could not access scale directory {scale_path}: {e}")
+                
+                if deleted_count > 0:
+                    logger.debug(f"Deleted {deleted_count} chunk files for timepoint {timepoint} at scale {scale}")
+                    
+        except Exception as e:
+            logger.error(f"Error deleting timepoint chunks: {e}")
+    
+    def _ensure_timepoint_exists_in_zarr(self, timepoint: int):
+        """
+        Ensure that the zarr arrays are large enough to accommodate the given timepoint.
+        This is called lazily only when actually writing data.
+        Expands arrays in chunks to minimize expensive resize operations.
+        
+        Args:
+            timepoint: The timepoint index that needs to exist in zarr
+        """
+        # Check if we need to expand any zarr arrays
+        for scale in range(self.num_scales):
+            if scale in self.zarr_arrays:
+                zarr_array = self.zarr_arrays[scale]
+                current_shape = zarr_array.shape
+                
+                # If the timepoint is beyond current array size, resize in chunks
+                if timepoint >= current_shape[0]:
+                    # Calculate new size with expansion chunk strategy
+                    # Round up to the next chunk boundary to minimize future resizes
+                    required_size = timepoint + 1
+                    chunks_needed = (required_size + self.timepoint_expansion_chunk - 1) // self.timepoint_expansion_chunk
+                    new_timepoint_count = chunks_needed * self.timepoint_expansion_chunk
+                    
+                    new_shape = list(current_shape)
+                    new_shape[0] = new_timepoint_count
+                    
+                    # Resize the array with chunk-based expansion
+                    logger.info(f"Expanding zarr scale {scale} from {current_shape[0]} to {new_timepoint_count} timepoints "
+                               f"(required: {required_size}, chunk_size: {self.timepoint_expansion_chunk})")
+                    start_time = time.time()
+                    zarr_array.resize(new_shape)
+                    elapsed_time = time.time() - start_time
+                    logger.info(f"Zarr scale {scale} resize completed in {elapsed_time:.2f} seconds")
+    
+    def _update_timepoint_metadata(self):
+        """Update the OME-Zarr metadata to reflect current timepoints."""
+        if hasattr(self, 'zarr_root'):
+            root = self.zarr_root
+            if 'omero' in root.attrs:
+                if self.available_timepoints:
+                    root.attrs['omero']['rdefs']['defaultT'] = min(self.available_timepoints)
+            
+            # Update custom metadata
+            if 'squid_canvas' in root.attrs:
+                root.attrs['squid_canvas']['available_timepoints'] = sorted(self.available_timepoints)
+                root.attrs['squid_canvas']['num_timepoints'] = len(self.available_timepoints)
+    
     def initialize_canvas(self):
         """Initialize the OME-Zarr structure with proper metadata."""
         logger.info(f"Initializing OME-Zarr canvas at {self.zarr_path}")
@@ -142,6 +400,7 @@ class ZarrCanvas:
             # Create the root group
             store = zarr.DirectoryStore(str(self.zarr_path))
             root = zarr.open_group(store=store, mode='w')
+            self.zarr_root = root  # Store reference for metadata updates
             
             # Import ChannelMapper for better metadata
             from squid_control.control.config import ChannelMapper
@@ -197,12 +456,12 @@ class ZarrCanvas:
                         {"name": "x", "type": "space", "unit": "micrometer"}
                     ],
                     "datasets": [],
-                    "name": "live_stitching",
+                    "name": self.fileset_name,
                     "version": "0.4"
                 }],
                 "omero": {
                     "id": 1,
-                    "name": "Squid Microscope Live Stitching",
+                    "name": f"Squid Microscope Live Stitching ({self.fileset_name})",
                     "channels": omero_channels,
                     "rdefs": {
                         "defaultT": 0,
@@ -216,7 +475,10 @@ class ZarrCanvas:
                     "rotation_angle_deg": self.rotation_angle_deg,
                     "pixel_size_xy_um": self.pixel_size_xy_um,
                     "stage_limits": self.stage_limits,
-                    "version": "1.0"
+                    "available_timepoints": sorted(self.available_timepoints),
+                    "num_timepoints": len(self.available_timepoints),
+                    "version": "1.0",
+                    "fileset_name": self.fileset_name
                 }
             }
             
@@ -227,10 +489,10 @@ class ZarrCanvas:
                 height = self.canvas_height_px // scale_factor
                 
                 # Create the array (T, C, Z, Y, X)
-                # For now: 1 timepoint, len(channels) channels, 1 z-slice
+                # Pre-allocate initial timepoints to avoid frequent resizing
                 array = root.create_dataset(
                     str(scale),
-                    shape=(1, len(self.channels), 1, height, width),
+                    shape=(self.initial_timepoints, len(self.channels), 1, height, width),
                     chunks=(1, 1, 1, self.chunk_size, self.chunk_size),
                     dtype='uint8',
                     fill_value=0,
@@ -261,6 +523,24 @@ class ZarrCanvas:
         except Exception as e:
             logger.error(f"Failed to initialize OME-Zarr canvas: {e}")
             raise RuntimeError(f"Cannot initialize zarr canvas: {e}")
+    
+    def open_existing_canvas(self):
+        """Open an existing OME-Zarr structure from disk without deleting data."""
+        import zarr
+        store = zarr.DirectoryStore(str(self.zarr_path))
+        root = zarr.open_group(store=store, mode='r+')
+        self.zarr_root = root
+        # Load arrays for each scale
+        self.zarr_arrays = {}
+        for scale in range(self.num_scales):
+            if str(scale) in root:
+                self.zarr_arrays[scale] = root[str(scale)]
+        # Try to load available timepoints from metadata
+        if 'squid_canvas' in root.attrs and 'available_timepoints' in root.attrs['squid_canvas']:
+            self.available_timepoints = list(root.attrs['squid_canvas']['available_timepoints'])
+        else:
+            self.available_timepoints = [0]
+        logger.info(f"Opened existing Zarr canvas at {self.zarr_path}")
     
     def stage_to_pixel_coords(self, x_mm: float, y_mm: float, scale: int = 0) -> Tuple[int, int]:
         """
@@ -314,25 +594,24 @@ class ZarrCanvas:
         
         # Crop to 95% of original size to remove black borders
         crop_factor = 0.96
-        new_height = int(height * crop_factor)
-        new_width = int(width * crop_factor)
+        image_size = min(int(height * crop_factor), int(width * crop_factor))
         
         # Calculate crop bounds (center crop)
-        y_start = (height - new_height) // 2
-        y_end = y_start + new_height
-        x_start = (width - new_width) // 2
-        x_end = x_start + new_width
+        y_start = (height - image_size) // 2
+        y_end = y_start + image_size
+        x_start = (width - image_size) // 2
+        x_end = x_start + image_size
         
         cropped = rotated[y_start:y_end, x_start:x_end]
         
-        logger.debug(f"Rotated image by {self.rotation_angle_deg}° and cropped from {width}x{height} to {new_width}x{new_height}")
+        logger.debug(f"Rotated image by {self.rotation_angle_deg}° and cropped from {width}x{height} to {image_size}x{image_size}")
         
         return cropped
     
     def add_image_sync(self, image: np.ndarray, x_mm: float, y_mm: float, 
-                       channel_idx: int = 0, z_idx: int = 0):
+                       channel_idx: int = 0, z_idx: int = 0, timepoint: int = 0):
         """
-        Synchronously add an image to the canvas at the specified position.
+        Synchronously add an image to the canvas at the specified position and timepoint.
         Updates all pyramid levels.
         
         Args:
@@ -341,6 +620,7 @@ class ZarrCanvas:
             y_mm: Y position in millimeters
             channel_idx: Local zarr channel index (0, 1, 2, etc.)
             z_idx: Z-slice index (default 0)
+            timepoint: Timepoint index (default 0)
         """
         # Validate channel index
         if channel_idx >= len(self.channels):
@@ -351,10 +631,21 @@ class ZarrCanvas:
             logger.error(f"Channel index {channel_idx} cannot be negative")
             return
         
+        # Ensure timepoint exists in our tracking list
+        if timepoint not in self.available_timepoints:
+            with self.zarr_lock:
+                if timepoint not in self.available_timepoints:
+                    self.available_timepoints.append(timepoint)
+                    self.available_timepoints.sort()
+                    self._update_timepoint_metadata()
+        
         # Apply rotation and cropping first
         processed_image = self._rotate_and_crop_image(image)
         
         with self.zarr_lock:
+            # Ensure zarr arrays are sized correctly for this timepoint (lazy expansion)
+            self._ensure_timepoint_exists_in_zarr(timepoint)
+            
             for scale in range(self.num_scales):
                 scale_factor = 4 ** scale
                 
@@ -388,20 +679,20 @@ class ZarrCanvas:
                 img_x_start = max(0, -x_px + scaled_image.shape[1] // 2)
                 img_x_end = img_x_start + (x_end - x_start)
                 
-                # Write to zarr
+                # Write to zarr at the specified timepoint
                 if y_end > y_start and x_end > x_start:
                     try:
-                        zarr_array[0, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
+                        zarr_array[timepoint, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
                             scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
-                        logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx}")
+                        logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx}, timepoint {timepoint}")
                     except IndexError as e:
-                        logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}: {e}")
-                        logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access channel {channel_idx}")
+                        logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
+                        logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access timepoint {timepoint}")
                     except Exception as e:
-                        logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}: {e}")
+                        logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
     
     def add_image_sync_quick(self, image: np.ndarray, x_mm: float, y_mm: float, 
-                           channel_idx: int = 0, z_idx: int = 0):
+                           channel_idx: int = 0, z_idx: int = 0, timepoint: int = 0):
         """
         Synchronously add an image to the canvas for quick scan mode.
         Only updates scales 1-5 (skips scale 0 for performance).
@@ -413,6 +704,7 @@ class ZarrCanvas:
             y_mm: Y position in millimeters
             channel_idx: Local zarr channel index (0, 1, 2, etc.)
             z_idx: Z-slice index (default 0)
+            timepoint: Timepoint index (default 0)
         """
         # Validate channel index
         if channel_idx >= len(self.channels):
@@ -423,11 +715,22 @@ class ZarrCanvas:
             logger.error(f"Channel index {channel_idx} cannot be negative")
             return
         
+        # Ensure timepoint exists in our tracking list
+        if timepoint not in self.available_timepoints:
+            with self.zarr_lock:
+                if timepoint not in self.available_timepoints:
+                    self.available_timepoints.append(timepoint)
+                    self.available_timepoints.sort()
+                    self._update_timepoint_metadata()
+        
         # For quick scan, we skip rotation to reduce computation pressure
         # The image should already be rotated and flipped by the caller
         processed_image = image
         
         with self.zarr_lock:
+            # Ensure zarr arrays are sized correctly for this timepoint (lazy expansion)
+            self._ensure_timepoint_exists_in_zarr(timepoint)
+            
             # Only process scales 1-5 (skip scale 0 for performance)
             for scale in range(1, min(self.num_scales, 6)):  # scales 1-5
                 scale_factor = 4 ** scale
@@ -467,20 +770,20 @@ class ZarrCanvas:
                 img_x_start = max(0, -x_px + scaled_image.shape[1] // 2)
                 img_x_end = img_x_start + (x_end - x_start)
                 
-                # Write to zarr
+                # Write to zarr at the specified timepoint
                 if y_end > y_start and x_end > x_start:
                     try:
-                        zarr_array[0, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
+                        zarr_array[timepoint, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
                             scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
-                        logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx} (quick scan)")
+                        logger.debug(f"Successfully wrote image to zarr at scale {scale}, channel {channel_idx}, timepoint {timepoint} (quick scan)")
                     except IndexError as e:
-                        logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}: {e}")
-                        logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access channel {channel_idx}")
+                        logger.error(f"IndexError writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
+                        logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access timepoint {timepoint}")
                     except Exception as e:
-                        logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}: {e}")
+                        logger.error(f"Error writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
     
     async def add_image_async(self, image: np.ndarray, x_mm: float, y_mm: float,
-                              channel_idx: int = 0, z_idx: int = 0):
+                              channel_idx: int = 0, z_idx: int = 0, timepoint: int = 0):
         """Add image to the stitching queue for asynchronous processing."""
         await self.stitch_queue.put({
             'image': image.copy(),
@@ -488,6 +791,7 @@ class ZarrCanvas:
             'y_mm': y_mm,
             'channel_idx': channel_idx,
             'z_idx': z_idx,
+            'timepoint': timepoint,
             'timestamp': time.time()
         })
     
@@ -516,6 +820,17 @@ class ZarrCanvas:
                 # Check if this is a quick scan
                 is_quick_scan = frame_data.get('quick_scan', False)
                 
+                # Extract timepoint
+                timepoint = frame_data.get('timepoint', 0)
+                
+                # Ensure timepoint exists in our tracking list
+                if timepoint not in self.available_timepoints:
+                    with self.zarr_lock:
+                        if timepoint not in self.available_timepoints:
+                            self.available_timepoints.append(timepoint)
+                            self.available_timepoints.sort()
+                            self._update_timepoint_metadata()
+                
                 # Process in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
                 if is_quick_scan:
@@ -526,7 +841,8 @@ class ZarrCanvas:
                         frame_data['x_mm'],
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
-                        frame_data['z_idx']
+                        frame_data['z_idx'],
+                        timepoint
                     )
                 else:
                     await loop.run_in_executor(
@@ -536,7 +852,8 @@ class ZarrCanvas:
                         frame_data['x_mm'],
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
-                        frame_data['z_idx']
+                        frame_data['z_idx'],
+                        timepoint
                     )
                 remaining_count += 1
                 
@@ -551,6 +868,12 @@ class ZarrCanvas:
         # Wait for the stitching task to complete
         if self.stitching_task:
             await self.stitching_task
+        
+        # CRITICAL: Wait for all thread pool operations to complete
+        logger.info("Waiting for all zarr operations to complete...")
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._wait_for_zarr_operations_complete)
+        
         logger.info("Stopped background stitching task")
     
     async def _stitching_loop(self):
@@ -566,6 +889,17 @@ class ZarrCanvas:
                 # Check if this is a quick scan (only updates scales 1-5)
                 is_quick_scan = frame_data.get('quick_scan', False)
                 
+                # Extract timepoint
+                timepoint = frame_data.get('timepoint', 0)
+                
+                # Ensure timepoint exists in our tracking list (do this in main thread)
+                if timepoint not in self.available_timepoints:
+                    with self.zarr_lock:
+                        if timepoint not in self.available_timepoints:
+                            self.available_timepoints.append(timepoint)
+                            self.available_timepoints.sort()
+                            self._update_timepoint_metadata()
+                
                 # Process in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
                 if is_quick_scan:
@@ -577,7 +911,8 @@ class ZarrCanvas:
                         frame_data['x_mm'],
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
-                        frame_data['z_idx']
+                        frame_data['z_idx'],
+                        timepoint
                     )
                 else:
                     # Use normal method that updates all scales
@@ -588,7 +923,8 @@ class ZarrCanvas:
                         frame_data['x_mm'],
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
-                        frame_data['z_idx']
+                        frame_data['z_idx'],
+                        timepoint
                     )
                 
             except asyncio.TimeoutError:
@@ -609,6 +945,17 @@ class ZarrCanvas:
                 # Check if this is a quick scan
                 is_quick_scan = frame_data.get('quick_scan', False)
                 
+                # Extract timepoint
+                timepoint = frame_data.get('timepoint', 0)
+                
+                # Ensure timepoint exists in our tracking list
+                if timepoint not in self.available_timepoints:
+                    with self.zarr_lock:
+                        if timepoint not in self.available_timepoints:
+                            self.available_timepoints.append(timepoint)
+                            self.available_timepoints.sort()
+                            self._update_timepoint_metadata()
+                
                 # Process in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
                 if is_quick_scan:
@@ -619,7 +966,8 @@ class ZarrCanvas:
                         frame_data['x_mm'],
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
-                        frame_data['z_idx']
+                        frame_data['z_idx'],
+                        timepoint
                     )
                 else:
                     await loop.run_in_executor(
@@ -629,7 +977,8 @@ class ZarrCanvas:
                         frame_data['x_mm'],
                         frame_data['y_mm'],
                         frame_data['channel_idx'],
-                        frame_data['z_idx']
+                        frame_data['z_idx'],
+                        timepoint
                     )
                 final_count += 1
                 
@@ -642,7 +991,7 @@ class ZarrCanvas:
             logger.info(f"Stitching loop processed {final_count} final images before exiting")
     
     def get_canvas_region(self, x_mm: float, y_mm: float, width_mm: float, height_mm: float,
-                          scale: int = 0, channel_idx: int = 0) -> np.ndarray:
+                          scale: int = 0, channel_idx: int = 0, timepoint: int = 0) -> np.ndarray:
         """
         Get a region from the canvas by zarr channel index.
         
@@ -653,6 +1002,7 @@ class ZarrCanvas:
             height_mm: Height in millimeters
             scale: Scale level to retrieve from
             channel_idx: Local zarr channel index (0, 1, 2, etc.)
+            timepoint: Timepoint index (default 0)
             
         Returns:
             Retrieved image region as numpy array
@@ -662,6 +1012,11 @@ class ZarrCanvas:
             logger.error(f"Channel index {channel_idx} out of bounds. Available channels: {len(self.channels)} (indices 0-{len(self.channels)-1})")
             return None
         
+        # Validate timepoint
+        if timepoint not in self.available_timepoints:
+            logger.error(f"Timepoint {timepoint} not available. Available timepoints: {sorted(self.available_timepoints)}")
+            return None
+        
         with self.zarr_lock:
             # Validate zarr arrays exist
             if not hasattr(self, 'zarr_arrays') or scale not in self.zarr_arrays:
@@ -669,6 +1024,15 @@ class ZarrCanvas:
                 return None
                 
             zarr_array = self.zarr_arrays[scale]
+            
+            # Check if timepoint exists in zarr array (it might not if we're reading before writing)
+            if timepoint >= zarr_array.shape[0]:
+                logger.warning(f"Timepoint {timepoint} not yet written to zarr array (shape: {zarr_array.shape})")
+                # Return zeros of the expected size
+                scale_factor = 4 ** scale
+                width_px = int(width_mm * 1000 / (self.pixel_size_xy_um * scale_factor))
+                height_px = int(height_mm * 1000 / (self.pixel_size_xy_um * scale_factor))
+                return np.zeros((height_px, width_px), dtype=zarr_array.dtype)
             
             # Double-check zarr array dimensions
             if channel_idx >= zarr_array.shape[1]:
@@ -690,19 +1054,19 @@ class ZarrCanvas:
             
             # Read from zarr
             try:
-                region = zarr_array[0, channel_idx, 0, y_start:y_end, x_start:x_end]
-                logger.debug(f"Successfully retrieved region from zarr at scale {scale}, channel {channel_idx}")
+                region = zarr_array[timepoint, channel_idx, 0, y_start:y_end, x_start:x_end]
+                logger.debug(f"Successfully retrieved region from zarr at scale {scale}, channel {channel_idx}, timepoint {timepoint}")
                 return region
             except IndexError as e:
-                logger.error(f"IndexError reading from zarr array at scale {scale}, channel {channel_idx}: {e}")
-                logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access channel {channel_idx}")
+                logger.error(f"IndexError reading from zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
+                logger.error(f"Zarr array shape: {zarr_array.shape}, trying to access timepoint {timepoint}")
                 return None
             except Exception as e:
-                logger.error(f"Error reading from zarr array at scale {scale}, channel {channel_idx}: {e}")
+                logger.error(f"Error reading from zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
                 return None
     
     def get_canvas_region_by_channel_name(self, x_mm: float, y_mm: float, width_mm: float, height_mm: float,
-                                         channel_name: str, scale: int = 0) -> np.ndarray:
+                                         channel_name: str, scale: int = 0, timepoint: int = 0) -> np.ndarray:
         """
         Get a region from the canvas by channel name.
         
@@ -713,6 +1077,7 @@ class ZarrCanvas:
             height_mm: Height in millimeters
             channel_name: Human-readable channel name
             scale: Scale level to retrieve from
+            timepoint: Timepoint index (default 0)
             
         Returns:
             Retrieved image region as numpy array
@@ -724,7 +1089,7 @@ class ZarrCanvas:
             logger.error(f"Channel not found: {e}")
             return None
             
-        return self.get_canvas_region(x_mm, y_mm, width_mm, height_mm, scale, channel_idx)
+        return self.get_canvas_region(x_mm, y_mm, width_mm, height_mm, scale, channel_idx, timepoint)
     
     def close(self):
         """Clean up resources."""
@@ -732,64 +1097,435 @@ class ZarrCanvas:
         logger.info("ZarrCanvas closed")
     
     def save_preview(self, action_ID: str = "canvas_preview"):
-        """Save a preview image of the entire canvas from the lowest resolution scale."""
-        if not hasattr(self, 'zarr_arrays') or not self.zarr_arrays:
-            logger.warning('No zarr arrays available for preview generation')
-            return None
+        """Save a preview image of the canvas at different scales."""
+        try:
+            preview_dir = self.base_path / "previews"
+            preview_dir.mkdir(exist_ok=True)
+            
+            for scale in range(min(2, self.num_scales)):  # Save first 2 scales
+                if scale in self.zarr_arrays:
+                    # Get the first channel (usually brightfield)
+                    array = self.zarr_arrays[scale]
+                    if array.shape[1] > 0:  # Check if we have channels
+                        # Get the image data (T=0, C=0, Z=0, :, :)
+                        image_data = array[0, 0, 0, :, :]
+                        
+                        # Convert to PIL Image and save
+                        if image_data.max() > image_data.min():  # Only save if there's actual data
+                            # Normalize to 0-255
+                            normalized = ((image_data - image_data.min()) / 
+                                        (image_data.max() - image_data.min()) * 255).astype(np.uint8)
+                            image = Image.fromarray(normalized)
+                            preview_path = preview_dir / f"{action_ID}_scale{scale}.png"
+                            image.save(preview_path)
+                            logger.info(f"Saved preview: {preview_path}")
+                        
+        except Exception as e:
+            logger.warning(f"Failed to save preview: {e}")
+    
+    def _flush_and_sync_zarr_arrays(self):
+        """
+        Flush and synchronize all zarr arrays to ensure all data is written to disk.
+        This is critical before ZIP export to prevent race conditions.
+        """
+        try:
+            with self.zarr_lock:
+                if hasattr(self, 'zarr_arrays'):
+                    for scale, zarr_array in self.zarr_arrays.items():
+                        try:
+                            # Flush any pending writes to disk
+                            if hasattr(zarr_array, 'flush'):
+                                zarr_array.flush()
+                            # Sync the underlying store
+                            if hasattr(zarr_array.store, 'sync'):
+                                zarr_array.store.sync()
+                            logger.debug(f"Flushed and synced zarr array scale {scale}")
+                        except Exception as e:
+                            logger.warning(f"Error flushing zarr array scale {scale}: {e}")
+                
+                # Also shutdown and recreate the thread pool to ensure all tasks are complete
+                if hasattr(self, 'executor'):
+                    self.executor.shutdown(wait=True)
+                    self.executor = ThreadPoolExecutor(max_workers=4)
+                    logger.info("Thread pool shutdown and recreated to ensure all zarr operations complete")
+                
+                # Give the filesystem a moment to complete any pending I/O
+                import time
+                time.sleep(0.1)
+                
+                logger.info("All zarr arrays flushed and synchronized")
+                
+        except Exception as e:
+            logger.error(f"Error during zarr flush and sync: {e}")
+            raise RuntimeError(f"Failed to flush zarr arrays: {e}")
+
+    def export_as_zip(self) -> bytes:
+        """
+        Export the entire zarr canvas as a zip file for upload to artifact manager.
+        Uses robust ZIP64 creation that's compatible with S3 ZIP parsers.
+        Creates ZIP directly to temporary file to avoid memory corruption with large files.
+        
+        Returns:
+            bytes: The zip file content containing the entire zarr directory structure
+        """
+        # Use the file-based export and read into memory for backward compatibility
+        temp_path = self.export_as_zip_file()
+        try:
+            with open(temp_path, 'rb') as f:
+                return f.read()
+        finally:
+            try:
+                os.unlink(temp_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary ZIP file {temp_path}: {e}")
+    
+    def export_as_zip_file(self) -> str:
+        """
+        Export the entire zarr canvas as a zip file to a temporary file.
+        Uses robust ZIP64 creation that's compatible with S3 ZIP parsers.
+        Avoids memory corruption by writing directly to file.
+        
+        Returns:
+            str: Path to the temporary ZIP file (caller must clean up)
+        """
+        import zipfile
+        import tempfile
+        import os
+        
+        # Create temporary file for ZIP creation to avoid memory issues
+        temp_fd, temp_path = tempfile.mkstemp(suffix='.zip', prefix='zarr_export_')
         
         try:
-            # Use the highest scale level (lowest resolution)
-            scale_level = self.num_scales - 1
+            # Close file descriptor immediately to avoid issues
+            os.close(temp_fd)
+            temp_fd = None  # Mark as closed
             
-            logger.info(f'Generating preview image from scale{scale_level} for entire canvas')
+            # CRITICAL: Ensure all zarr operations are complete before ZIP export
+            logger.info("Preparing zarr canvas for ZIP export...")
+            self._flush_and_sync_zarr_arrays()
             
-            # Get the entire canvas at the lowest resolution
-            with self.zarr_lock:
-                zarr_array = self.zarr_arrays[scale_level]
-                # Get the entire array for the first channel (T=0, C=0, Z=0, all Y, all X)
-                preview_region = zarr_array[0, 0, 0, :, :]
+            # Force ZIP64 format explicitly for compatibility with S3 parser
+            # Use minimal compression for reliability with many small files
+            zip_kwargs = {
+                'mode': 'w',
+                'compression': zipfile.ZIP_STORED,  # No compression for reliability
+                'allowZip64': True,
+                'strict_timestamps': False  # Handle timestamp edge cases
+            }
             
-            if preview_region.size == 0:
-                logger.warning('Preview region is empty, skipping preview generation')
-                return None
+            # Create ZIP file with explicit ZIP64 support
+            with zipfile.ZipFile(temp_path, **zip_kwargs) as zip_file:
+                logger.info("Creating ZIP archive with explicit ZIP64 support...")
+                
+                # Build file list first to validate and count
+                files_to_add = []
+                total_size = 0
+                
+                for root, dirs, files in os.walk(self.zarr_path):
+                    for file in files:
+                        file_path = Path(root) / file
+                        
+                        # Skip files that don't exist or can't be read
+                        if not file_path.exists() or not file_path.is_file():
+                            logger.warning(f"Skipping non-existent or non-file: {file_path}")
+                            continue
+                            
+                        try:
+                            # Verify file is readable and get size
+                            file_size = file_path.stat().st_size
+                            total_size += file_size
+                            
+                            # Create relative path for ZIP archive
+                            relative_path = file_path.relative_to(self.zarr_path)
+                            # Use forward slashes for ZIP compatibility (standard requirement)
+                            arcname = "data.zarr/" + str(relative_path).replace(os.sep, '/')
+                            
+                            files_to_add.append((file_path, arcname, file_size))
+                            
+                        except (OSError, IOError) as e:
+                            logger.warning(f"Skipping unreadable file {file_path}: {e}")
+                            continue
+                
+                logger.info(f"Validated {len(files_to_add)} files for ZIP archive (total: {total_size / (1024*1024):.1f} MB)")
+                
+                # Check if we need ZIP64 format (more than 65535 files or 4GB total)
+                needs_zip64 = len(files_to_add) >= 65535 or total_size >= (4 * 1024 * 1024 * 1024)
+                if needs_zip64:
+                    logger.info(f"ZIP64 format required: {len(files_to_add)} files, {total_size / (1024*1024):.1f} MB")
+                
+                # Add files to ZIP in sorted order for consistent central directory
+                files_to_add.sort(key=lambda x: x[1])  # Sort by arcname
+                
+                processed_files = 0
+                for file_path, arcname, file_size in files_to_add:
+                    try:
+                        # Add file with explicit error handling
+                        zip_file.write(file_path, arcname=arcname)
+                        processed_files += 1
+                        
+                        # Progress logging every 1000 files
+                        if processed_files % 1000 == 0:
+                            logger.info(f"ZIP progress: {processed_files}/{len(files_to_add)} files processed")
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to add file to ZIP: {file_path} -> {arcname}: {e}")
+                        continue
+                
+                # Add metadata with proper JSON formatting
+                metadata = {
+                    "canvas_info": {
+                        "pixel_size_xy_um": self.pixel_size_xy_um,
+                        "rotation_angle_deg": self.rotation_angle_deg,
+                        "stage_limits": self.stage_limits,
+                        "channels": self.channels,
+                        "num_scales": self.num_scales,
+                        "canvas_size_px": {
+                            "width": self.canvas_width_px,
+                            "height": self.canvas_height_px
+                        },
+                        "export_timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+                        "squid_canvas_version": "1.0",
+                        "zip_format": "ZIP64" if needs_zip64 else "standard"
+                    }
+                }
+                
+                metadata_json = json.dumps(metadata, indent=2, ensure_ascii=False)
+                zip_file.writestr("squid_canvas_metadata.json", metadata_json.encode('utf-8'))
+                processed_files += 1
+                
+                logger.info(f"ZIP creation completed: {processed_files} files processed")
+                
+            # Get file size for validation
+            zip_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
             
-            # Convert to PIL Image
-            from PIL import Image
-            from datetime import datetime
+            # Enhanced ZIP validation specifically for S3 compatibility
+            with open(temp_path, 'rb') as f:
+                zip_content_for_validation = f.read()
+            self._validate_zip_structure_for_s3(zip_content_for_validation)
             
-            # Ensure data is uint8
-            if preview_region.dtype != np.uint8:
-                # Scale to 8-bit
-                if preview_region.max() > 0:
-                    preview_region = (preview_region / preview_region.max() * 255).astype(np.uint8)
-                else:
-                    preview_region = preview_region.astype(np.uint8)
-            
-            # Create PIL image
-            preview_img = Image.fromarray(preview_region)
-            
-            # Generate filename with timestamp
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            preview_filename = f'{action_ID}_preview.png'
-            
-            # Save in the same directory as the zarr canvas
-            preview_path = self.base_path / preview_filename
-            
-            # Save the image
-            preview_img.save(preview_path, 'PNG')
-            
-            # Calculate physical dimensions
-            scale_factor = 4 ** scale_level
-            pixel_size_at_scale = self.pixel_size_xy_um * scale_factor
-            width_mm = preview_region.shape[1] * pixel_size_at_scale / 1000
-            height_mm = preview_region.shape[0] * pixel_size_at_scale / 1000
-            
-            logger.info(f'Saved canvas preview image: {preview_path}')
-            logger.info(f'Preview image size: {preview_region.shape[1]}x{preview_region.shape[0]} pixels, '
-                        f'covering {width_mm:.1f}x{height_mm:.1f}mm canvas area')
-            
-            return str(preview_path)
+            logger.info(f"ZIP export successful: {zip_size_mb:.2f} MB, {processed_files} files")
+            return temp_path
             
         except Exception as e:
-            logger.error(f'Error generating canvas preview: {e}')
-            return None 
+            logger.error(f"Failed to export zarr canvas as zip: {e}")
+            # Clean up temp file on error
+            try:
+                if 'temp_path' in locals() and os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except Exception:
+                pass
+            raise RuntimeError(f"Cannot export zarr canvas: {e}")
+        finally:
+            # Clean up file descriptor if still open
+            if temp_fd is not None:
+                try:
+                    os.close(temp_fd)
+                except Exception:
+                    pass  # Ignore errors closing fd
+
+    def _validate_zip_structure_for_s3(self, zip_content: bytes) -> None:
+        """
+        Validate ZIP file structure specifically for S3 ZIP parser compatibility.
+        Checks for proper central directory structure and ZIP64 format compliance.
+        
+        Args:
+            zip_content (bytes): The ZIP file content to validate
+            
+        Raises:
+            RuntimeError: If ZIP file structure is incompatible with S3 parser
+        """
+        try:
+            import zipfile
+            import io
+            
+            # Basic ZIP file validation
+            zip_buffer = io.BytesIO(zip_content)
+            with zipfile.ZipFile(zip_buffer, 'r') as zip_file:
+                file_list = zip_file.namelist()
+                if not file_list:
+                    raise RuntimeError("ZIP file is empty")
+                
+                zip_size_mb = len(zip_content) / (1024 * 1024)
+                file_count = len(file_list)
+                
+                logger.info(f"Basic ZIP validation passed: {file_count} files, {zip_size_mb:.2f} MB")
+                
+                # Check for ZIP64 indicators (critical for S3 parser)
+                is_zip64 = file_count >= 65535 or zip_size_mb >= 4000
+                
+                if is_zip64:
+                    # For ZIP64 files, check that central directory can be found
+                    # This mimics what the S3 ZIP parser does
+                    logger.info("Validating ZIP64 central directory structure...")
+                    
+                    # Look for ZIP64 signatures in the file
+                    zip64_eocd_locator = b"PK\x06\x07"  # ZIP64 End of Central Directory Locator
+                    zip64_eocd = b"PK\x06\x06"          # ZIP64 End of Central Directory
+                    standard_eocd = b"PK\x05\x06"       # Standard End of Central Directory
+                    
+                    # Check the last 128KB for these signatures (like S3 parser does)
+                    tail_size = min(128 * 1024, len(zip_content))
+                    tail_data = zip_content[-tail_size:]
+                    
+                    has_zip64_locator = zip64_eocd_locator in tail_data
+                    has_zip64_eocd = zip64_eocd in tail_data
+                    has_standard_eocd = standard_eocd in tail_data
+                    
+                    logger.info(f"ZIP64 structure check: locator={has_zip64_locator}, eocd={has_zip64_eocd}, standard_eocd={has_standard_eocd}")
+                    
+                    # ZIP64 files should have proper directory structures
+                    if not (has_zip64_locator and has_standard_eocd):
+                        logger.warning("ZIP64 format validation issues detected")
+                    
+                    # Verify we can read file info (this is what S3 parser tries to do)
+                    test_files = min(10, len(file_list))
+                    for i in range(test_files):
+                        try:
+                            info = zip_file.getinfo(file_list[i])
+                            # Try to access file info that S3 parser needs
+                            _ = info.filename
+                            _ = info.file_size
+                            _ = info.compress_size
+                            _ = info.date_time
+                        except Exception as e:
+                            logger.warning(f"File info access issue for {file_list[i]}: {e}")
+                
+                # Test random file access (S3 parser does this)
+                test_count = min(5, len(file_list))
+                for i in range(0, len(file_list), max(1, len(file_list) // test_count)):
+                    try:
+                        with zip_file.open(file_list[i]) as f:
+                            # Read just 1 byte to verify file can be opened
+                            f.read(1)
+                    except Exception as e:
+                        logger.warning(f"File access test failed for {file_list[i]}: {e}")
+                
+                logger.info("S3-compatible ZIP validation completed successfully")
+                
+        except zipfile.BadZipFile as e:
+            logger.error(f"Invalid ZIP file format: {e}")
+            raise RuntimeError(f"Invalid ZIP file format: {e}")
+        except Exception as e:
+            logger.error(f"ZIP validation failed: {e}")
+            raise RuntimeError(f"ZIP validation failed: {e}")
+
+    def get_export_info(self) -> dict:
+        """
+        Get information about the current canvas for export planning.
+        
+        Returns:
+            dict: Information about canvas size, data, and export feasibility
+        """
+        try:
+            # Calculate actual disk usage instead of theoretical array size
+            total_size_bytes = 0
+            data_arrays = 0
+            file_count = 0
+            
+            # Get actual file size on disk by walking the zarr directory
+            if self.zarr_path.exists():
+                try:
+                    for file_path in self.zarr_path.rglob('*'):
+                        if file_path.is_file():
+                            try:
+                                size = file_path.stat().st_size
+                                total_size_bytes += size
+                                file_count += 1
+                            except (OSError, PermissionError) as e:
+                                logger.warning(f"Could not read size of {file_path}: {e}")
+                except Exception as e:
+                    logger.error(f"Error walking zarr directory {self.zarr_path}: {e}")
+                    # Fallback: try to get directory size using os.path.getsize
+                    try:
+                        import os
+                        total_size_bytes = sum(os.path.getsize(os.path.join(dirpath, filename))
+                                             for dirpath, dirnames, filenames in os.walk(self.zarr_path)
+                                             for filename in filenames)
+                    except Exception as fallback_e:
+                        logger.error(f"Fallback size calculation also failed: {fallback_e}")
+                        total_size_bytes = 0
+            else:
+                logger.warning(f"Zarr path does not exist: {self.zarr_path}")
+            
+            # Check which arrays have actual data
+            for scale in range(self.num_scales):
+                if scale in self.zarr_arrays:
+                    array = self.zarr_arrays[scale]
+                    
+                    # Check if array has any data (non-zero values)
+                    if array.size > 0:
+                        try:
+                            # Sample a small region to check for data
+                            sample_size = min(100, array.shape[3], array.shape[4])
+                            sample = array[0, 0, 0, :sample_size, :sample_size]
+                            if sample.max() > 0:
+                                data_arrays += 1
+                        except Exception as e:
+                            logger.warning(f"Could not sample array at scale {scale}: {e}")
+            
+            # For empty arrays, estimate zip size based on actual disk usage
+            # Zarr metadata and empty arrays compress very well
+            if data_arrays == 0:
+                # Empty zarr structures are mostly metadata, compress to ~10% of disk size
+                estimated_zip_size_mb = (total_size_bytes * 0.1) / (1024 * 1024)
+            else:
+                # Arrays with data compress moderately (20-40% depending on content)
+                estimated_zip_size_mb = (total_size_bytes * 0.3) / (1024 * 1024)
+            
+            logger.info(f"Export info: {total_size_bytes / (1024*1024):.1f} MB on disk ({file_count} files), "
+                       f"{data_arrays} arrays with data, estimated zip: {estimated_zip_size_mb:.1f} MB")
+            
+            return {
+                "canvas_path": str(self.zarr_path),
+                "total_size_bytes": total_size_bytes,
+                "total_size_mb": total_size_bytes / (1024 * 1024),
+                "estimated_zip_size_mb": estimated_zip_size_mb,
+                "file_count": file_count,
+                "num_scales": self.num_scales,
+                "num_channels": len(self.channels),
+                "channels": self.channels,
+                "arrays_with_data": data_arrays,
+                "canvas_dimensions": {
+                    "width_px": self.canvas_width_px,
+                    "height_px": self.canvas_height_px,
+                    "pixel_size_um": self.pixel_size_xy_um
+                },
+                "export_feasible": True  # Removed arbitrary size limit - let S3 handle large files
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get export info: {e}")
+            return {
+                "error": str(e),
+                "export_feasible": False
+            } 
+
+    def _wait_for_zarr_operations_complete(self):
+        """
+        Wait for all zarr operations to complete and ensure filesystem sync.
+        This prevents race conditions with ZIP export.
+        """
+        import time
+        
+        with self.zarr_lock:
+            # Shutdown thread pool and wait for all tasks to complete
+            if hasattr(self, 'executor'):
+                self.executor.shutdown(wait=True)
+                self.executor = ThreadPoolExecutor(max_workers=4)
+                logger.debug("Thread pool shutdown and recreated after stitching")
+            
+            # Flush all zarr arrays to ensure data is written
+            if hasattr(self, 'zarr_arrays'):
+                for scale, zarr_array in self.zarr_arrays.items():
+                    try:
+                        if hasattr(zarr_array, 'flush'):
+                            zarr_array.flush()
+                        if hasattr(zarr_array.store, 'sync'):
+                            zarr_array.store.sync()
+                    except Exception as e:
+                        logger.warning(f"Error flushing zarr array scale {scale}: {e}")
+            
+            # Small delay to ensure filesystem operations complete
+            time.sleep(0.2)
+            
+        logger.info("All zarr operations completed and synchronized") 

@@ -1139,7 +1139,20 @@ async def webrtc_test_services():
                 if microscope and hasattr(microscope, 'stop_video_buffering'):
                     try:
                         if microscope.frame_acquisition_running:
-                            await microscope.stop_video_buffering()
+                            # Add timeout for test environment to prevent hanging
+                            await asyncio.wait_for(
+                                microscope.stop_video_buffering(),
+                                timeout=5.0  # 5 second timeout for tests
+                            )
+                    except asyncio.TimeoutError:
+                        print("⚠️ Video buffering stop timed out in WebRTC test, forcing cleanup...")
+                        # Force stop the video buffering by setting flags directly
+                        microscope.frame_acquisition_running = False
+                        if microscope.frame_acquisition_task:
+                            microscope.frame_acquisition_task.cancel()
+                        if microscope.video_idle_check_task:
+                            microscope.video_idle_check_task.cancel()
+                        print("✅ Video buffering force stopped")
                     except Exception as e:
                         print(f"Error stopping video buffering: {e}")
                 
@@ -1150,7 +1163,13 @@ async def webrtc_test_services():
                             camera = microscope.squidController.camera
                             if hasattr(camera, 'cleanup_zarr_resources_async'):
                                 try:
-                                    await camera.cleanup_zarr_resources_async()
+                                    # Add timeout for zarr cleanup as well
+                                    await asyncio.wait_for(
+                                        camera.cleanup_zarr_resources_async(),
+                                        timeout=3.0  # 3 second timeout for zarr cleanup
+                                    )
+                                except asyncio.TimeoutError:
+                                    print("⚠️ Zarr cleanup timed out in WebRTC test, skipping...")
                                 except Exception as e:
                                     print(f"Camera cleanup error: {e}")
                         
