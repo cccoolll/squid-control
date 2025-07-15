@@ -1254,12 +1254,14 @@ class SquidController:
                                     else:
                                         image = image.astype(np.uint8)
                                 
-                                # Add to stitching queue using absolute coordinates (WellZarrCanvas handles conversion)
-                                await canvas.add_image_from_absolute_coords_async(
+                                # Add to stitching queue using the new well-based routing method (like quick scan)
+                                await self._add_image_to_zarr_normal_well_based(
                                     image, actual_x_mm, actual_y_mm,
-                                    channel_idx=zarr_channel_idx,  # Use local zarr index
-                                    z_idx=0,
-                                    timepoint=timepoint
+                                    zarr_channel_idx=zarr_channel_idx,
+                                    timepoint=timepoint,
+                                    wellplate_type=wellplate_type,
+                                    well_padding_mm=well_padding_mm,
+                                    channel_name=channel_name
                                 )
                                 
                                 logger.debug(f'Added image at position ({actual_x_mm:.2f}, {actual_y_mm:.2f}) for well {well_row}{well_column}, channel {channel_name}, timepoint={timepoint}')
@@ -2054,56 +2056,6 @@ class SquidController:
         
         return frames_acquired
     
-    async def _route_image_to_well_canvas(self, image, x_mm, y_mm, wellplate_type, well_padding_mm, 
-                                        channel_name, timepoint=0):
-        """
-        Route an image to the appropriate well canvas based on its coordinates.
-        
-        Args:
-            image: Processed image array
-            x_mm: X position in mm
-            y_mm: Y position in mm
-            wellplate_type: Well plate type
-            well_padding_mm: Padding around wells
-            channel_name: Channel name
-            timepoint: Timepoint index
-        """
-        # Determine which well this position belongs to
-        well_info = self.get_well_from_position(wellplate_type, x_mm, y_mm)
-        
-        if well_info['position_status'] == 'in_well':
-            # Image is inside a well - route to well canvas
-            well_row = well_info['row']
-            well_column = well_info['column']
-            
-            # Get or create well canvas using experiment manager
-            well_canvas = self.experiment_manager.get_well_canvas(well_row, well_column, wellplate_type, well_padding_mm)
-            
-            # Start stitching for this canvas if not already started
-            if not well_canvas.is_stitching:
-                await well_canvas.start_stitching()
-            
-            # Get zarr channel index for this well canvas
-            try:
-                zarr_channel_idx = well_canvas.get_zarr_channel_index(channel_name)
-            except ValueError:
-                logger.warning(f"Channel '{channel_name}' not found in well canvas {well_row}{well_column}")
-                return
-            
-            # Convert to well-relative coordinates and add to well canvas
-            well_relative_x = x_mm - well_canvas.well_center_x
-            well_relative_y = y_mm - well_canvas.well_center_y
-            
-            await well_canvas.add_image_async(
-                image, well_relative_x, well_relative_y,
-                channel_idx=zarr_channel_idx, z_idx=0, timepoint=timepoint
-            )
-            
-            logger.debug(f'Routed image to well {well_row}{well_column} at well-relative coords ({well_relative_x:.2f}, {well_relative_y:.2f})')
-        else:
-            # Image is outside wells - log and skip
-            logger.debug(f'Image at ({x_mm:.2f}, {y_mm:.2f}) is {well_info["position_status"]} - skipping')
-
     async def _acquire_and_process_frame(self, zarr_channel_idx, timepoint=0, 
                                        wellplate_type='96', well_padding_mm=2.0, channel_name='BF LED matrix full'):
         """Acquire a single frame and add it to the stitching queue for quick scan."""
@@ -2755,6 +2707,81 @@ class SquidController:
                 continue
         
         return converted_wells
+
+    async def _add_image_to_zarr_normal_well_based(self, image: np.ndarray, x_mm: float, y_mm: float,
+                                                 zarr_channel_idx: int, timepoint: int = 0, 
+                                                 wellplate_type='96', well_padding_mm=2.0, channel_name='BF LED matrix full'):
+        """
+        Add image to well canvas stitching queue for normal scan - updates all scales (0-5).
+        Uses the same routing logic as quick scan but with full scale processing.
+        
+        Args:
+            image: Processed image (original resolution)
+            x_mm: Absolute X position in mm
+            y_mm: Absolute Y position in mm
+            zarr_channel_idx: Zarr channel index
+            timepoint: Timepoint index
+            wellplate_type: Well plate type
+            well_padding_mm: Well padding in mm
+            channel_name: Channel name for validation
+        """
+        logger.info(f'ZARR_NORMAL: Attempting to queue image at position ({x_mm:.2f}, {y_mm:.2f}), timepoint={timepoint}, channel={channel_name}')
+        
+        # Determine which well this position belongs to using padded boundaries for stitching
+        well_info = self.get_well_from_position(wellplate_type, x_mm, y_mm, well_padding_mm)
+        
+        logger.info(f'ZARR_NORMAL: Well detection result - status={well_info["position_status"]}, well={well_info.get("well_id", "None")}, distance={well_info["distance_from_center"]:.2f}mm')
+        
+        if well_info["position_status"] == "in_well":
+            well_row = well_info["row"]
+            well_column = well_info["column"]
+            
+            logger.info(f'ZARR_NORMAL: Position is inside well {well_row}{well_column}')
+            
+            # Get or create well canvas
+            try:
+                well_canvas = self.experiment_manager.get_well_canvas(well_row, well_column, wellplate_type, well_padding_mm)
+                logger.info(f'ZARR_NORMAL: Got well canvas for {well_row}{well_column}, stitching_active={well_canvas.is_stitching}')
+            except Exception as e:
+                logger.error(f"ZARR_NORMAL: Failed to get well canvas for {well_row}{well_column}: {e}")
+                return f"Failed to get well canvas: {e}"
+            
+            # Validate channel exists in this well canvas
+            if channel_name not in well_canvas.channel_to_zarr_index:
+                logger.warning(f"ZARR_NORMAL: Channel '{channel_name}' not found in well canvas {well_row}{well_column}")
+                logger.warning(f"ZARR_NORMAL: Available channels: {list(well_canvas.channel_to_zarr_index.keys())}")
+                return f"Channel {channel_name} not found"
+            
+            logger.info(f'ZARR_NORMAL: Well center: ({well_canvas.well_center_x:.2f}, {well_canvas.well_center_y:.2f})')
+            
+            # Add to stitching queue with normal scan flag (all scales)
+            try:
+                queue_item = {
+                    'image': image.copy(),
+                    'x_mm': x_mm,  # Use absolute coordinates - WellZarrCanvas will convert to well-relative (same as quick scan)
+                    'y_mm': y_mm,  # Use absolute coordinates - WellZarrCanvas will convert to well-relative (same as quick scan)
+                    'channel_idx': zarr_channel_idx,
+                    'z_idx': 0,
+                    'timepoint': timepoint,
+                    'timestamp': time.time(),
+                    'quick_scan': False  # Flag to indicate this is normal scan (all scales)
+                }
+                
+                # Check queue size before adding
+                queue_size_before = well_canvas.stitch_queue.qsize()
+                await well_canvas.stitch_queue.put(queue_item)
+                queue_size_after = well_canvas.stitch_queue.qsize()
+                
+                logger.info(f'ZARR_NORMAL: Queue size before={queue_size_before}, after={queue_size_after}')
+                return f"Queued for well {well_row}{well_column}"
+                
+            except Exception as e:
+                logger.error(f"ZARR_NORMAL: Failed to add image to stitching queue for well {well_row}{well_column}: {e}")
+                return f"Failed to queue: {e}"
+        else:
+            # Image is outside wells - log and skip
+            logger.warning(f'ZARR_NORMAL: Image at ({x_mm:.2f}, {y_mm:.2f}) is {well_info["position_status"]} - skipping')
+            return f"Position outside well: {well_info['position_status']}"
 
 async def try_microscope():
     squid_controller = SquidController(is_simulation=False)
