@@ -1109,7 +1109,7 @@ class SquidController:
             action_ID (str): Identifier for this scan
             timepoint (int): Timepoint index for the scan (default 0)
             experiment_name (str, optional): Name of the experiment to use. If None, uses active experiment or creates "default"
-            wells_to_scan (list): List of (row, column) tuples for wells to scan. If None, scans single well at current position
+            wells_to_scan (list): List of well strings (e.g., ['A1', 'B2']) or (row, column) tuples. If None, scans single well at current position
             wellplate_type (str): Well plate type ('6', '12', '24', '96', '384')
             well_padding_mm (float): Padding around well in mm
         """
@@ -1133,9 +1133,12 @@ class SquidController:
             wells_to_scan = [(well_info['row'], well_info['column'])]
             logger.info(f"Auto-detected current well: {well_info['row']}{well_info['column']}")
         
+        # Convert wells_to_scan to tuple format if needed
+        wells_to_scan = self._convert_well_strings_to_tuples(wells_to_scan)
+        
         # Validate wells_to_scan format
         if not isinstance(wells_to_scan, list) or not wells_to_scan:
-            raise ValueError("wells_to_scan must be a non-empty list of (row, column) tuples")
+            raise ValueError("wells_to_scan must be a non-empty list of well strings or (row, column) tuples")
         
         logger.info(f"Normal scan with stitching for experiment '{self.experiment_manager.current_experiment}', scanning {len(wells_to_scan)} wells")
         
@@ -2704,6 +2707,54 @@ class SquidController:
             "wellplate_type": wellplate_type,
             "message": f"Removed well canvas for {well_row}{well_column}"
         }
+
+    def _convert_well_strings_to_tuples(self, wells_to_scan):
+        """
+        Convert a list of well strings (e.g., ['A1', 'B2', 'C3']) to a list of tuples (e.g., [('A', 1), ('B', 2), ('C', 3)]).
+        
+        Args:
+            wells_to_scan: List of well strings or tuples
+            
+        Returns:
+            List of (row, column) tuples
+        """
+        if not wells_to_scan:
+            return []
+        
+        converted_wells = []
+        for well in wells_to_scan:
+            if isinstance(well, str):
+                # Parse string format like 'A1', 'B2', etc.
+                if len(well) >= 2:
+                    row = well[0].upper()  # First character is row (A, B, C, etc.)
+                    try:
+                        column = int(well[1:])  # Rest is column number
+                        converted_wells.append((row, column))
+                    except ValueError:
+                        logger.warning(f"Invalid well format '{well}', skipping")
+                        continue
+                else:
+                    logger.warning(f"Invalid well format '{well}', skipping")
+                    continue
+            elif isinstance(well, (list, tuple)) and len(well) == 2:
+                # Already in tuple format
+                row, column = well
+                if isinstance(row, str) and isinstance(column, (int, str)):
+                    if isinstance(column, str):
+                        try:
+                            column = int(column)
+                        except ValueError:
+                            logger.warning(f"Invalid column number '{column}' in well {well}, skipping")
+                            continue
+                    converted_wells.append((row, column))
+                else:
+                    logger.warning(f"Invalid well format {well}, skipping")
+                    continue
+            else:
+                logger.warning(f"Invalid well format {well}, skipping")
+                continue
+        
+        return converted_wells
 
 async def try_microscope():
     squid_controller = SquidController(is_simulation=False)
