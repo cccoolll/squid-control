@@ -1126,7 +1126,6 @@ class WellZarrCanvasBase:
     def close(self):
         """Clean up resources."""
         self.executor.shutdown(wait=True)
-        logger.info("ZarrCanvas closed")
     
     def save_preview(self, action_ID: str = "canvas_preview"):
         """Save a preview image of the canvas at different scales."""
@@ -1786,7 +1785,27 @@ class ExperimentManager:
         # Ensure base directory exists
         self.base_path.mkdir(parents=True, exist_ok=True)
         
+        # Set 'default' as the default experiment
+        self._ensure_default_experiment()
+        
         logger.info(f"ExperimentManager initialized at {self.base_path}")
+    
+    def _ensure_default_experiment(self):
+        """
+        Ensure that a 'default' experiment exists and is set as the current experiment.
+        Creates the experiment if it doesn't exist.
+        """
+        default_experiment_name = 'default'
+        default_experiment_path = self.base_path / default_experiment_name
+        
+        # Create default experiment if it doesn't exist
+        if not default_experiment_path.exists():
+            default_experiment_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created default experiment '{default_experiment_name}'")
+        
+        # Set as current experiment
+        self.current_experiment = default_experiment_name
+        logger.info(f"Set '{default_experiment_name}' as default experiment")
     
     @property
     def current_experiment_name(self) -> str:
