@@ -201,7 +201,7 @@ class OMEZarrCreator:
             # CRITICAL: Use small chunk sizes to create mini chunks
             # This mimics the real-world zarr canvas behavior
             if dataset_name.startswith("mini-chunks"):
-                chunk_size = (1, 1, 1, 128, 128)  # Smaller chunks = more files
+                chunk_size = (1, 1, 1, 3, 3)  # Smaller chunks = more files
             else:
                 chunk_size = (1, 1, 1, 256, 256)  # Standard chunks
             
@@ -972,7 +972,7 @@ async def test_mini_chunk_reproduction(test_gallery, artifact_manager):
         # Test both normal and mini chunk scenarios
         test_scenarios = [
             ("normal-chunks", 400, "Normal 256x256 chunks"),
-            ("mini-chunks-test", 400, "Small 128x128 chunks with sparse data")
+            ("mini-chunks-test", 400, "Small 3x3 chunks with sparse data")
         ]
         
         results = []
