@@ -66,6 +66,12 @@ TEST_SIZES = [
     ("mini-chunks-test", 400),  # New test designed to create mini chunks
 ]
 
+# Quick test sizes for CI/small environments
+QUICK_TEST_SIZES = [
+    ("10MB", 10),
+    ("50MB", 50),  # Smaller test for quick validation
+]
+
 class OMEZarrCreator:
     """Helper class to create OME-Zarr datasets of specific sizes."""
     
@@ -544,24 +550,15 @@ async def upload_zip_with_retry(put_url: str, zip_path: Path, size_mb: int, max_
         try:
             print(f"Upload attempt {attempt + 1}/{max_retries} for {size_mb:.1f}MB ZIP file (timeout: {timeout_seconds}s)")
             
-            # Read file content
-            with open(zip_path, 'rb') as f:
-                zip_content = f.read()
+            # For large files (>100MB), use chunked upload to avoid memory issues
+            if size_mb > 100:
+                print(f"📦 Using chunked upload for large file ({size_mb:.1f}MB)")
+                upload_time = await _upload_large_file_chunked(put_url, zip_path, size_mb, timeout_seconds)
+            else:
+                # For smaller files, use direct upload
+                print(f"📦 Using direct upload for small file ({size_mb:.1f}MB)")
+                upload_time = await _upload_file_direct(put_url, zip_path, timeout_seconds)
             
-            # Upload with httpx (async) and proper timeout
-            upload_start = time.time()
-            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds)) as client:
-                response = await client.put(
-                    put_url, 
-                    content=zip_content,
-                    headers={
-                        'Content-Type': 'application/zip',
-                        'Content-Length': str(len(zip_content))
-                    }
-                )
-                response.raise_for_status()
-            
-            upload_time = time.time() - upload_start
             print(f"Upload successful on attempt {attempt + 1}")
             return upload_time
             
@@ -590,6 +587,72 @@ async def upload_zip_with_retry(put_url: str, zip_path: Path, size_mb: int, max_
             wait_time = 2 ** attempt
             print(f"Waiting {wait_time}s before retry...")
             await asyncio.sleep(wait_time)
+
+async def _upload_file_direct(put_url: str, zip_path: Path, timeout_seconds: int) -> float:
+    """Upload file directly (for smaller files)."""
+    upload_start = time.time()
+    
+    # Read file content
+    with open(zip_path, 'rb') as f:
+        zip_content = f.read()
+    
+    # Upload with httpx (async) and proper timeout
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds)) as client:
+        response = await client.put(
+            put_url, 
+            content=zip_content,
+            headers={
+                'Content-Type': 'application/zip',
+                'Content-Length': str(len(zip_content))
+            }
+        )
+        response.raise_for_status()
+    
+    return time.time() - upload_start
+
+async def _upload_large_file_chunked(put_url: str, zip_path: Path, size_mb: int, timeout_seconds: int) -> float:
+    """Upload large file using chunked transfer to avoid memory issues."""
+    upload_start = time.time()
+    
+    # Use aiohttp for better chunked upload support
+    import aiohttp
+    
+    # Calculate chunk size (1MB chunks)
+    chunk_size = 1024 * 1024
+    file_size = zip_path.stat().st_size
+    
+    print(f"📊 File size: {file_size / (1024*1024):.1f}MB, chunk size: {chunk_size / (1024*1024):.1f}MB")
+    
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_seconds)) as session:
+        async with session.put(
+            put_url,
+            headers={
+                'Content-Type': 'application/zip',
+                'Content-Length': str(file_size)
+            }
+        ) as response:
+            # Stream the file in chunks
+            with open(zip_path, 'rb') as f:
+                chunk_count = 0
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    
+                    await response.write(chunk)
+                    chunk_count += 1
+                    
+                    # Progress reporting every 10 chunks
+                    if chunk_count % 10 == 0:
+                        progress_mb = (chunk_count * chunk_size) / (1024 * 1024)
+                        print(f"📤 Upload progress: {progress_mb:.1f}MB / {size_mb:.1f}MB ({progress_mb/size_mb*100:.1f}%)")
+            
+            # Check response
+            if response.status >= 400:
+                error_text = await response.text()
+                raise Exception(f"Upload failed with HTTP {response.status}: {error_text}")
+    
+    return time.time() - upload_start
 
 @pytest_asyncio.fixture(scope="function")
 async def artifact_manager():
@@ -663,12 +726,20 @@ async def test_create_datasets_and_test_endpoints(test_gallery, artifact_manager
     """Test creating datasets of various sizes and accessing their ZIP endpoints."""
     gallery = test_gallery
     
+    # Choose test sizes based on environment
+    if os.environ.get("QUICK_TEST"):
+        test_sizes = QUICK_TEST_SIZES
+        print("🚀 Running in QUICK_TEST mode - using smaller datasets")
+    else:
+        test_sizes = TEST_SIZES
+        print("🧪 Running full test suite")
+    
     # Create temporary directory for test files
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         test_results = []
         
-        for size_name, size_mb in TEST_SIZES:
+        for size_name, size_mb in test_sizes:
             print(f"\n🧪 Testing {size_name} dataset...")
             
             try:
@@ -923,6 +994,65 @@ async def test_quick_zip_endpoint(test_gallery, artifact_manager):
         else:
             raise Exception(f"HTTP {response.status_code}: {response.text[:200]}")
 
+async def test_simple_upload_validation(test_gallery, artifact_manager):
+    """Simple test to validate upload functionality works."""
+    gallery = test_gallery
+    
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        
+        # Create very small test dataset (5MB)
+        dataset_name = f"simple-test-{uuid.uuid4().hex[:6]}"
+        zarr_path = temp_path / f"{dataset_name}.zarr"
+        
+        dataset_info = OMEZarrCreator.create_ome_zarr_dataset(
+            zarr_path, 5, dataset_name  # 5MB for simple test
+        )
+        
+        zip_path = temp_path / f"{dataset_name}.zip"
+        zip_info = OMEZarrCreator.create_zip_from_zarr(zarr_path, zip_path)
+        
+        print(f"🧪 Simple upload test: {zip_info['size_mb']:.1f}MB ZIP file")
+        
+        # Create and upload dataset
+        dataset_manifest = {
+            "name": "Simple Test Dataset",
+            "description": "Very small dataset for basic upload validation",
+            "test_purpose": "simple_validation"
+        }
+        
+        dataset = await artifact_manager.create(
+            parent_id=gallery["id"],
+            alias=dataset_name,
+            manifest=dataset_manifest,
+            stage=True
+        )
+        
+        put_url = await artifact_manager.put_file(
+            dataset["id"], 
+            file_path="zarr_dataset.zip"
+        )
+        
+        # Test upload with timeout
+        try:
+            upload_time = await asyncio.wait_for(
+                upload_zip_with_retry(put_url, zip_path, zip_info['size_mb']),
+                timeout=120  # 2 minute timeout for simple test
+            )
+            print(f"✅ Simple upload test passed: {upload_time:.1f}s")
+            
+            await artifact_manager.commit(dataset["id"])
+            print(f"✅ Dataset committed successfully")
+            
+        except asyncio.TimeoutError:
+            raise Exception("Simple upload test timed out after 2 minutes")
+        except Exception as e:
+            raise Exception(f"Simple upload test failed: {e}")
+        
+        # Clean up
+        await artifact_manager.delete(artifact_id=dataset["id"], delete_files=True)
+        print(f"✅ Simple test cleanup completed")
+
 @pytest.mark.timeout(1800)  # 30 minute timeout
 async def test_mini_chunk_reproduction(test_gallery, artifact_manager):
     """
@@ -940,8 +1070,8 @@ async def test_mini_chunk_reproduction(test_gallery, artifact_manager):
         
         # Test both normal and mini chunk scenarios
         test_scenarios = [
-            ("normal-chunks", 400, "Normal 256x256 chunks"),
-            ("mini-chunks-test", 400, "Small 3x3 chunks with sparse data")
+            ("normal-chunks", 1000, "Normal 256x256 chunks"),
+            ("mini-chunks-test", 4000, "Small 3x3 chunks with sparse data")
         ]
         
         results = []
