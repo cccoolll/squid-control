@@ -3134,42 +3134,77 @@ class Microscope:
             raise e
     
     @schema_function(skip_self=True)
-    async def list_microscope_datasets(self, experiment_name: str = Field(None, description="Name of the experiment to list datasets for"), context=None):
+    async def list_microscope_galleries(self, microscope_service_id: str = Field(..., description="Microscope service ID to list galleries for"), context=None):
         """
-        List all datasets uploaded by this microscope.
-        
-        Args:
-            experiment_name: Name of the experiment to list datasets for. If None, lists all datasets in the microscope's gallery.
-            
-        Returns:
-            list: List of datasets in the microscope's gallery
+        List all galleries (collections) available for a given microscope's service ID.
+        This includes both standard microscope galleries and experiment-based galleries.
+        Returns a list of gallery info dicts.
         """
-        
         try:
-            # Check if zarr artifact manager is available
             if self.zarr_artifact_manager is None:
                 raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
-            
-            # Get gallery with experiment_id if provided
-            experiment_id = experiment_name if experiment_name else None
-            gallery = await self.zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id, experiment_id)
-            
-            # List datasets in gallery
-            datasets = await self.zarr_artifact_manager._svc.list(gallery["id"])
-            
+
+            # List all collections in the agent-lens workspace (top-level)
+            all_collections = await self.zarr_artifact_manager.navigate_collections(parent_id=None)
+            galleries = []
+            for coll in all_collections:
+                manifest = coll.get('manifest', {})
+                alias = coll.get('alias', '')
+                # Standard gallery
+                if alias == f"agent-lens/microscope-gallery-{microscope_service_id}":
+                    galleries.append(coll)
+                # Experiment-based gallery (for -1 IDs)
+                elif microscope_service_id.endswith('-1') and alias.startswith("agent-lens/1-"):
+                    # Check manifest for matching microscope_service_id
+                    if manifest.get('microscope_service_id') == microscope_service_id:
+                        galleries.append(coll)
+                # Fallback: check manifest field
+                elif manifest.get('microscope_service_id') == microscope_service_id:
+                    galleries.append(coll)
             return {
                 "success": True,
-                "datasets": datasets,
-                "gallery_info": {
-                    "id": gallery["id"], 
-                    "name": gallery.get("manifest", {}).get("name"),
-                    "microscope_service_id": self.service_id,
-                    "experiment_id": experiment_id
-                }
+                "microscope_service_id": microscope_service_id,
+                "galleries": galleries,
+                "total": len(galleries)
             }
-            
         except Exception as e:
-            logger.error(f"Error listing microscope datasets: {e}")
+            logger.error(f"Error listing galleries: {e}")
+            raise e
+
+    @schema_function(skip_self=True)
+    async def list_gallery_datasets(self, gallery_id: str = Field(None, description="Gallery (collection) artifact ID, e.g. agent-lens/microscope-gallery-... or agent-lens/1-..."), microscope_service_id: str = Field(None, description="Microscope service ID (optional, used to find gallery if gallery_id not given)"), experiment_id: str = Field(None, description="Experiment ID (optional, used to find gallery if gallery_id not given)"), context=None):
+        """
+        List all datasets in a gallery (collection).
+        You can specify the gallery by its artifact ID, or provide microscope_service_id and/or experiment_id to find the gallery.
+        Returns a list of datasets in the gallery.
+        """
+        try:
+            if self.zarr_artifact_manager is None:
+                raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
+
+            # Find the gallery if not given
+            gallery = None
+            if gallery_id:
+                # Try to read the gallery directly
+                gallery = await self.zarr_artifact_manager._svc.read(artifact_id=gallery_id)
+            else:
+                # Use microscope_service_id and/or experiment_id to find the gallery
+                if microscope_service_id is None and experiment_id is None:
+                    raise Exception("You must provide either gallery_id, microscope_service_id, or experiment_id.")
+                gallery = await self.zarr_artifact_manager.create_or_get_microscope_gallery(
+                    microscope_service_id or '', experiment_id=experiment_id)
+            # List datasets in the gallery
+            datasets = await self.zarr_artifact_manager._svc.list(gallery["id"])
+            return {
+                "success": True,
+                "gallery_id": gallery["id"],
+                "gallery_alias": gallery.get("alias"),
+                "gallery_name": gallery.get("manifest", {}).get("name"),
+                "datasets": datasets,
+                "total": len(datasets)
+            }
+        except Exception as e:
+            logger.error(f"Error listing gallery datasets: {e}")
             raise e
 
     def get_microscope_configuration_schema(self, config: GetMicroscopeConfigurationInput, context=None):
