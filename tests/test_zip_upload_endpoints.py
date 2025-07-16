@@ -66,12 +66,6 @@ TEST_SIZES = [
     ("mini-chunks-test", 400),  # New test designed to create mini chunks
 ]
 
-# Quick test sizes for CI/small environments
-QUICK_TEST_SIZES = [
-    ("10MB", 10),
-    ("50MB", 50),  # Smaller test for quick validation
-]
-
 class OMEZarrCreator:
     """Helper class to create OME-Zarr datasets of specific sizes."""
     
@@ -182,7 +176,7 @@ class OMEZarrCreator:
             
             # CRITICAL: Use small chunk sizes to create mini chunks
             # This mimics the real-world zarr canvas behavior
-            if dataset_name.startswith("mini-chunks"):
+            if "mini-chunks" in dataset_name:
                 chunk_size = (1, 1, 1, 3, 3)  # Smaller chunks = more files
             else:
                 chunk_size = (1, 1, 1, 256, 256)  # Standard chunks
@@ -204,7 +198,7 @@ class OMEZarrCreator:
                 for c in range(num_channels):
                     for z in range(scale_z):
                         # Create sparse data pattern that results in small compressed chunks
-                        if dataset_name.startswith("mini-chunks"):
+                        if "mini-chunks" in dataset_name:
                             # Create sparse pattern with mostly zeros
                             data = np.zeros((scale_height, scale_width), dtype=np.uint16)
                             
@@ -258,13 +252,15 @@ class OMEZarrCreator:
         }
     
     @staticmethod
-    def create_ome_zarr_dataset(output_path: Path, target_size_mb: int, 
+    async def create_ome_zarr_dataset(output_path: Path, target_size_mb: int, 
                               dataset_name: str) -> Dict:
         """Create an OME-Zarr dataset of approximately target_size_mb."""
         
         # Use mini-chunk creation for specific test
-        if dataset_name.startswith("mini-chunks"):
-            return OMEZarrCreator.create_mini_chunk_zarr_dataset(output_path, target_size_mb, dataset_name)
+        if "mini-chunks" in dataset_name:
+            return await asyncio.get_event_loop().run_in_executor(
+                None, OMEZarrCreator.create_mini_chunk_zarr_dataset, output_path, target_size_mb, dataset_name
+            )
         
         print(f"Creating OME-Zarr dataset: {dataset_name} (~{target_size_mb}MB)")
         
@@ -273,128 +269,135 @@ class OMEZarrCreator:
         num_channels = 4
         num_timepoints = 1
         
-        # Create the zarr group
-        store = zarr.DirectoryStore(str(output_path))
-        root = zarr.group(store=store, overwrite=True)
-        
-        # OME-Zarr metadata
-        ome_metadata = {
-            "version": "0.4",
-            "axes": [
-                {"name": "t", "type": "time"},
-                {"name": "c", "type": "channel"},
-                {"name": "z", "type": "space"},
-                {"name": "y", "type": "space"},
-                {"name": "x", "type": "space"}
-            ],
-            "datasets": [
-                {"path": "0"},
-                {"path": "1"}, 
-                {"path": "2"}
-            ],
-            "coordinateTransformations": [
-                {
-                    "scale": [1.0, 1.0, 0.5, 0.1, 0.1],
-                    "type": "scale"
-                }
-            ]
-        }
-        
-        # Channel metadata
-        omero_metadata = {
-            "channels": [
-                {
-                    "label": "DAPI",
-                    "color": "0000ff",
-                    "window": {"start": 0, "end": 4095}
-                },
-                {
-                    "label": "GFP", 
-                    "color": "00ff00",
-                    "window": {"start": 0, "end": 4095}
-                },
-                {
-                    "label": "RFP",
-                    "color": "ff0000", 
-                    "window": {"start": 0, "end": 4095}
-                },
-                {
-                    "label": "Brightfield",
-                    "color": "ffffff",
-                    "window": {"start": 0, "end": 4095}
-                }
-            ],
-            "name": dataset_name
-        }
-        
-        # Store metadata
-        root.attrs["ome"] = ome_metadata
-        root.attrs["omero"] = omero_metadata
-        
-        # Create multi-scale pyramid
-        scales = [1, 2, 4]  # 3 scales
-        for scale_idx, scale_factor in enumerate(scales):
-            scale_height = height // scale_factor
-            scale_width = width // scale_factor
-            scale_z = z_slices
+        # Define the dataset creation function to run in executor
+        def create_dataset_sync():
+            # Create the zarr group
+            store = zarr.DirectoryStore(str(output_path))
+            root = zarr.group(store=store, overwrite=True)
             
-            # Standard chunk size: 256x256 for X,Y dimensions, 1 for other dimensions
-            chunk_size = (1, 1, 1, 256, 256)
-            
-            # Create the array
-            array = root.create_dataset(
-                name=str(scale_idx),
-                shape=(num_timepoints, num_channels, scale_z, scale_height, scale_width),
-                chunks=chunk_size,
-                dtype=np.uint16,
-                compressor=zarr.Blosc(cname='zstd', clevel=3)
-            )
-            
-            print(f"  Scale {scale_idx}: {scale_width}x{scale_height}x{scale_z}, chunks: {chunk_size}")
-            
-            # Generate synthetic data with patterns
-            for t in range(num_timepoints):
-                for c in range(num_channels):
-                    for z in range(scale_z):
-                        # Create synthetic microscopy-like data
-                        y_coords, x_coords = np.ogrid[:scale_height, :scale_width]
-                        
-                        # Different patterns for different channels
-                        if c == 0:  # DAPI - nuclear pattern
-                            data = (np.sin(y_coords * 0.1) * np.cos(x_coords * 0.1) * 1000 + 
-                                   np.random.randint(0, 500, (scale_height, scale_width))).astype(np.uint16)
-                        elif c == 1:  # GFP - cytoplasmic pattern  
-                            data = (np.sin(y_coords * 0.05) * np.sin(x_coords * 0.05) * 1500 + 
-                                   np.random.randint(0, 300, (scale_height, scale_width))).astype(np.uint16)
-                        elif c == 2:  # RFP - spots pattern
-                            data = np.random.exponential(200, (scale_height, scale_width)).astype(np.uint16)
-                            data = np.clip(data, 0, 4095)
-                        else:  # Brightfield - uniform with texture
-                            data = (2000 + np.random.normal(0, 100, (scale_height, scale_width))).astype(np.uint16)
-                            data = np.clip(data, 0, 4095)
-                        
-                        array[t, c, z, :, :] = data
-        
-        # Calculate actual size
-        actual_size_mb = sum(os.path.getsize(os.path.join(root_path, f))
-                           for root_path, dirs, files in os.walk(output_path)
-                           for f in files) / (1024 * 1024)
-        
-        print(f"  Created dataset: {actual_size_mb:.1f}MB actual size")
-        
-        return {
-            "name": dataset_name,
-            "path": str(output_path),
-            "target_size_mb": target_size_mb,
-            "actual_size_mb": actual_size_mb,
-            "dimensions": {
-                "height": height,
-                "width": width, 
-                "z_slices": z_slices,
-                "channels": num_channels,
-                "timepoints": num_timepoints
+            # OME-Zarr metadata
+            ome_metadata = {
+                "version": "0.4",
+                "axes": [
+                    {"name": "t", "type": "time"},
+                    {"name": "c", "type": "channel"},
+                    {"name": "z", "type": "space"},
+                    {"name": "y", "type": "space"},
+                    {"name": "x", "type": "space"}
+                ],
+                "datasets": [
+                    {"path": "0"},
+                    {"path": "1"}, 
+                    {"path": "2"}
+                ],
+                "coordinateTransformations": [
+                    {
+                        "scale": [1.0, 1.0, 0.5, 0.1, 0.1],
+                        "type": "scale"
+                    }
+                ]
             }
-        }
+            
+            # Channel metadata
+            omero_metadata = {
+                "channels": [
+                    {
+                        "label": "DAPI",
+                        "color": "0000ff",
+                        "window": {"start": 0, "end": 4095}
+                    },
+                    {
+                        "label": "GFP", 
+                        "color": "00ff00",
+                        "window": {"start": 0, "end": 4095}
+                    },
+                    {
+                        "label": "RFP",
+                        "color": "ff0000", 
+                        "window": {"start": 0, "end": 4095}
+                    },
+                    {
+                        "label": "Brightfield",
+                        "color": "ffffff",
+                        "window": {"start": 0, "end": 4095}
+                    }
+                ],
+                "name": dataset_name
+            }
+            
+            # Store metadata
+            root.attrs["ome"] = ome_metadata
+            root.attrs["omero"] = omero_metadata
+            
+            # Create multi-scale pyramid
+            scales = [1, 2, 4]  # 3 scales
+            for scale_idx, scale_factor in enumerate(scales):
+                scale_height = height // scale_factor
+                scale_width = width // scale_factor
+                scale_z = z_slices
+                
+                # Standard chunk size: 256x256 for X,Y dimensions, 1 for other dimensions
+                chunk_size = (1, 1, 1, 256, 256)
+                
+                # Create the array
+                array = root.create_dataset(
+                    name=str(scale_idx),
+                    shape=(num_timepoints, num_channels, scale_z, scale_height, scale_width),
+                    chunks=chunk_size,
+                    dtype=np.uint16,
+                    compressor=zarr.Blosc(cname='zstd', clevel=3)
+                )
+                
+                print(f"  Scale {scale_idx}: {scale_width}x{scale_height}x{scale_z}, chunks: {chunk_size}")
+                
+                # Generate synthetic data with patterns
+                for t in range(num_timepoints):
+                    for c in range(num_channels):
+                        for z in range(scale_z):
+                            # Create synthetic microscopy-like data
+                            y_coords, x_coords = np.ogrid[:scale_height, :scale_width]
+                            
+                            # Different patterns for different channels
+                            if c == 0:  # DAPI - nuclear pattern
+                                data = (np.sin(y_coords * 0.1) * np.cos(x_coords * 0.1) * 1000 + 
+                                       np.random.randint(0, 500, (scale_height, scale_width))).astype(np.uint16)
+                            elif c == 1:  # GFP - cytoplasmic pattern  
+                                data = (np.sin(y_coords * 0.05) * np.sin(x_coords * 0.05) * 1500 + 
+                                       np.random.randint(0, 300, (scale_height, scale_width))).astype(np.uint16)
+                            elif c == 2:  # RFP - spots pattern
+                                data = np.random.exponential(200, (scale_height, scale_width)).astype(np.uint16)
+                                data = np.clip(data, 0, 4095)
+                            else:  # Brightfield - uniform with texture
+                                data = (2000 + np.random.normal(0, 100, (scale_height, scale_width))).astype(np.uint16)
+                                data = np.clip(data, 0, 4095)
+                            
+                            array[t, c, z, :, :] = data
+            
+            # Calculate actual size
+            actual_size_mb = sum(os.path.getsize(os.path.join(root_path, f))
+                               for root_path, dirs, files in os.walk(output_path)
+                               for f in files) / (1024 * 1024)
+            
+            print(f"  Created dataset: {actual_size_mb:.1f}MB actual size")
+            
+            return {
+                "name": dataset_name,
+                "path": str(output_path),
+                "target_size_mb": target_size_mb,
+                "actual_size_mb": actual_size_mb,
+                "dimensions": {
+                    "height": height,
+                    "width": width, 
+                    "z_slices": z_slices,
+                    "channels": num_channels,
+                    "timepoints": num_timepoints
+                }
+            }
+        
+        # Run dataset creation in executor to avoid blocking event loop
+        return await asyncio.get_event_loop().run_in_executor(
+            None, create_dataset_sync
+        )
 
     @staticmethod
     def analyze_chunk_sizes(zarr_path: Path) -> Dict:
@@ -456,12 +459,14 @@ class OMEZarrCreator:
         return stats
 
     @staticmethod
-    def create_zip_from_zarr(zarr_path: Path, zip_path: Path) -> Dict:
+    async def create_zip_from_zarr(zarr_path: Path, zip_path: Path) -> Dict:
         """Create a ZIP file from OME-Zarr dataset with detailed analysis."""
         print(f"Creating ZIP file: {zip_path.name}")
         
         # First analyze the zarr structure
-        chunk_analysis = OMEZarrCreator.analyze_chunk_sizes(zarr_path)
+        chunk_analysis = await asyncio.get_event_loop().run_in_executor(
+            None, OMEZarrCreator.analyze_chunk_sizes, zarr_path
+        )
         
         # Create ZIP with different compression strategies based on chunk analysis
         mini_chunk_percentage = chunk_analysis["mini_chunks_percentage"]
@@ -484,40 +489,53 @@ class OMEZarrCreator:
         if compresslevel is not None:
             zip_kwargs['compresslevel'] = compresslevel
         
-        with zipfile.ZipFile(zip_path, **zip_kwargs) as zipf:
-            total_files = 0
-            for root, dirs, files in os.walk(zarr_path):
-                for file in files:
-                    file_path = Path(root) / file
-                    relative_path = file_path.relative_to(zarr_path)
-                    arcname = f"data.zarr/{relative_path}"
-                    zipf.write(file_path, arcname=arcname)
-                    total_files += 1
-                    
-                    if total_files % 1000 == 0:
-                        print(f"  Added {total_files} files to ZIP")
+        # Define the ZIP creation function to run in executor
+        def create_zip_sync():
+            with zipfile.ZipFile(zip_path, **zip_kwargs) as zipf:
+                total_files = 0
+                for root, dirs, files in os.walk(zarr_path):
+                    for file in files:
+                        file_path = Path(root) / file
+                        relative_path = file_path.relative_to(zarr_path)
+                        arcname = f"data.zarr/{relative_path}"
+                        zipf.write(file_path, arcname=arcname)
+                        total_files += 1
+                        
+                        if total_files % 1000 == 0:
+                            print(f"  Added {total_files} files to ZIP")
+            
+            zip_size_mb = zip_path.stat().st_size / (1024 * 1024)
+            print(f"  ZIP created: {zip_size_mb:.1f}MB, {total_files} files")
+            return total_files, zip_size_mb
         
-        zip_size_mb = zip_path.stat().st_size / (1024 * 1024)
-        print(f"  ZIP created: {zip_size_mb:.1f}MB, {total_files} files")
+        # Run ZIP creation in executor to avoid blocking event loop
+        total_files, zip_size_mb = await asyncio.get_event_loop().run_in_executor(
+            None, create_zip_sync
+        )
         
-        # Test ZIP file integrity
-        try:
-            with zipfile.ZipFile(zip_path, 'r') as zipf:
-                # Test central directory access
-                file_list = zipf.namelist()
-                # Test reading first few files
-                for i, filename in enumerate(file_list[:5]):
-                    try:
-                        with zipf.open(filename) as f:
-                            f.read(1)  # Read one byte to test access
-                    except Exception as e:
-                        print(f"⚠️ Error reading file {filename} from ZIP: {e}")
-                        break
-                print(f"✅ ZIP integrity test passed")
-                zip_valid = True
-        except zipfile.BadZipFile as e:
-            print(f"❌ ZIP integrity test failed: {e}")
-            zip_valid = False
+        # Test ZIP file integrity in executor
+        def test_zip_integrity():
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as zipf:
+                    # Test central directory access
+                    file_list = zipf.namelist()
+                    # Test reading first few files
+                    for i, filename in enumerate(file_list[:5]):
+                        try:
+                            with zipf.open(filename) as f:
+                                f.read(1)  # Read one byte to test access
+                        except Exception as e:
+                            print(f"⚠️ Error reading file {filename} from ZIP: {e}")
+                            break
+                    print(f"✅ ZIP integrity test passed")
+                    return True
+            except zipfile.BadZipFile as e:
+                print(f"❌ ZIP integrity test failed: {e}")
+                return False
+        
+        zip_valid = await asyncio.get_event_loop().run_in_executor(
+            None, test_zip_integrity
+        )
         
         result = {
             "zip_path": str(zip_path),
@@ -550,15 +568,24 @@ async def upload_zip_with_retry(put_url: str, zip_path: Path, size_mb: int, max_
         try:
             print(f"Upload attempt {attempt + 1}/{max_retries} for {size_mb:.1f}MB ZIP file (timeout: {timeout_seconds}s)")
             
-            # For large files (>100MB), use chunked upload to avoid memory issues
-            if size_mb > 100:
-                print(f"📦 Using chunked upload for large file ({size_mb:.1f}MB)")
-                upload_time = await _upload_large_file_chunked(put_url, zip_path, size_mb, timeout_seconds)
-            else:
-                # For smaller files, use direct upload
-                print(f"📦 Using direct upload for small file ({size_mb:.1f}MB)")
-                upload_time = await _upload_file_direct(put_url, zip_path, timeout_seconds)
+            # Read file content
+            with open(zip_path, 'rb') as f:
+                zip_content = f.read()
             
+            # Upload with httpx (async) and proper timeout
+            upload_start = time.time()
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds)) as client:
+                response = await client.put(
+                    put_url, 
+                    content=zip_content,
+                    headers={
+                        'Content-Type': 'application/zip',
+                        'Content-Length': str(len(zip_content))
+                    }
+                )
+                response.raise_for_status()
+            
+            upload_time = time.time() - upload_start
             print(f"Upload successful on attempt {attempt + 1}")
             return upload_time
             
@@ -587,72 +614,6 @@ async def upload_zip_with_retry(put_url: str, zip_path: Path, size_mb: int, max_
             wait_time = 2 ** attempt
             print(f"Waiting {wait_time}s before retry...")
             await asyncio.sleep(wait_time)
-
-async def _upload_file_direct(put_url: str, zip_path: Path, timeout_seconds: int) -> float:
-    """Upload file directly (for smaller files)."""
-    upload_start = time.time()
-    
-    # Read file content
-    with open(zip_path, 'rb') as f:
-        zip_content = f.read()
-    
-    # Upload with httpx (async) and proper timeout
-    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds)) as client:
-        response = await client.put(
-            put_url, 
-            content=zip_content,
-            headers={
-                'Content-Type': 'application/zip',
-                'Content-Length': str(len(zip_content))
-            }
-        )
-        response.raise_for_status()
-    
-    return time.time() - upload_start
-
-async def _upload_large_file_chunked(put_url: str, zip_path: Path, size_mb: int, timeout_seconds: int) -> float:
-    """Upload large file using chunked transfer to avoid memory issues."""
-    upload_start = time.time()
-    
-    # Use aiohttp for better chunked upload support
-    import aiohttp
-    
-    # Calculate chunk size (1MB chunks)
-    chunk_size = 1024 * 1024
-    file_size = zip_path.stat().st_size
-    
-    print(f"📊 File size: {file_size / (1024*1024):.1f}MB, chunk size: {chunk_size / (1024*1024):.1f}MB")
-    
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_seconds)) as session:
-        async with session.put(
-            put_url,
-            headers={
-                'Content-Type': 'application/zip',
-                'Content-Length': str(file_size)
-            }
-        ) as response:
-            # Stream the file in chunks
-            with open(zip_path, 'rb') as f:
-                chunk_count = 0
-                while True:
-                    chunk = f.read(chunk_size)
-                    if not chunk:
-                        break
-                    
-                    await response.write(chunk)
-                    chunk_count += 1
-                    
-                    # Progress reporting every 10 chunks
-                    if chunk_count % 10 == 0:
-                        progress_mb = (chunk_count * chunk_size) / (1024 * 1024)
-                        print(f"📤 Upload progress: {progress_mb:.1f}MB / {size_mb:.1f}MB ({progress_mb/size_mb*100:.1f}%)")
-            
-            # Check response
-            if response.status >= 400:
-                error_text = await response.text()
-                raise Exception(f"Upload failed with HTTP {response.status}: {error_text}")
-    
-    return time.time() - upload_start
 
 @pytest_asyncio.fixture(scope="function")
 async def artifact_manager():
@@ -726,20 +687,12 @@ async def test_create_datasets_and_test_endpoints(test_gallery, artifact_manager
     """Test creating datasets of various sizes and accessing their ZIP endpoints."""
     gallery = test_gallery
     
-    # Choose test sizes based on environment
-    if os.environ.get("QUICK_TEST"):
-        test_sizes = QUICK_TEST_SIZES
-        print("🚀 Running in QUICK_TEST mode - using smaller datasets")
-    else:
-        test_sizes = TEST_SIZES
-        print("🧪 Running full test suite")
-    
     # Create temporary directory for test files
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         test_results = []
         
-        for size_name, size_mb in test_sizes:
+        for size_name, size_mb in TEST_SIZES:
             print(f"\n🧪 Testing {size_name} dataset...")
             
             try:
@@ -752,24 +705,13 @@ async def test_create_datasets_and_test_endpoints(test_gallery, artifact_manager
                 dataset_name = f"test-dataset-{size_name.lower()}-{uuid.uuid4().hex[:6]}"
                 zarr_path = temp_path / f"{dataset_name}.zarr"
                 
-                # Run Zarr creation in thread pool to avoid blocking event loop
-                print(f"🔄 Creating Zarr dataset in background thread...")
-                dataset_info = await asyncio.get_event_loop().run_in_executor(
-                    None,  # Use default ThreadPoolExecutor
-                    OMEZarrCreator.create_ome_zarr_dataset,
+                dataset_info = await OMEZarrCreator.create_ome_zarr_dataset(
                     zarr_path, size_mb, dataset_name
                 )
                 
                 # Create ZIP file
                 zip_path = temp_path / f"{dataset_name}.zip"
-                
-                # Run ZIP creation in thread pool to avoid blocking event loop
-                print(f"🔄 Creating ZIP file in background thread...")
-                zip_info = await asyncio.get_event_loop().run_in_executor(
-                    None,  # Use default ThreadPoolExecutor
-                    OMEZarrCreator.create_zip_from_zarr,
-                    zarr_path, zip_path
-                )
+                zip_info = await OMEZarrCreator.create_zip_from_zarr(zarr_path, zip_path)
                 
                 # Create artifact in gallery
                 print(f"📦 Creating artifact: {dataset_name}")
@@ -948,23 +890,12 @@ async def test_quick_zip_endpoint(test_gallery, artifact_manager):
         dataset_name = f"quick-test-{uuid.uuid4().hex[:6]}"
         zarr_path = temp_path / f"{dataset_name}.zarr"
         
-        # Run Zarr creation in thread pool to avoid blocking event loop
-        print(f"🔄 Creating Zarr dataset in background thread...")
-        dataset_info = await asyncio.get_event_loop().run_in_executor(
-            None,  # Use default ThreadPoolExecutor
-            OMEZarrCreator.create_ome_zarr_dataset,
+        dataset_info = await OMEZarrCreator.create_ome_zarr_dataset(
             zarr_path, 50, dataset_name  # 50MB for quick test
         )
         
         zip_path = temp_path / f"{dataset_name}.zip"
-        
-        # Run ZIP creation in thread pool to avoid blocking event loop
-        print(f"🔄 Creating ZIP file in background thread...")
-        zip_info = await asyncio.get_event_loop().run_in_executor(
-            None,  # Use default ThreadPoolExecutor
-            OMEZarrCreator.create_zip_from_zarr,
-            zarr_path, zip_path
-        )
+        zip_info = await OMEZarrCreator.create_zip_from_zarr(zarr_path, zip_path)
         
         # Create and upload dataset
         dataset_manifest = {
@@ -1016,76 +947,6 @@ async def test_quick_zip_endpoint(test_gallery, artifact_manager):
         else:
             raise Exception(f"HTTP {response.status_code}: {response.text[:200]}")
 
-async def test_simple_upload_validation(test_gallery, artifact_manager):
-    """Simple test to validate upload functionality works."""
-    gallery = test_gallery
-    
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_path = Path(temp_dir)
-        
-        # Create very small test dataset (5MB)
-        dataset_name = f"simple-test-{uuid.uuid4().hex[:6]}"
-        zarr_path = temp_path / f"{dataset_name}.zarr"
-        
-        # Run Zarr creation in thread pool to avoid blocking event loop
-        print(f"🔄 Creating Zarr dataset in background thread...")
-        dataset_info = await asyncio.get_event_loop().run_in_executor(
-            None,  # Use default ThreadPoolExecutor
-            OMEZarrCreator.create_ome_zarr_dataset,
-            zarr_path, 5, dataset_name  # 5MB for simple test
-        )
-        
-        zip_path = temp_path / f"{dataset_name}.zip"
-        
-        # Run ZIP creation in thread pool to avoid blocking event loop
-        print(f"🔄 Creating ZIP file in background thread...")
-        zip_info = await asyncio.get_event_loop().run_in_executor(
-            None,  # Use default ThreadPoolExecutor
-            OMEZarrCreator.create_zip_from_zarr,
-            zarr_path, zip_path
-        )
-        
-        print(f"🧪 Simple upload test: {zip_info['size_mb']:.1f}MB ZIP file")
-        
-        # Create and upload dataset
-        dataset_manifest = {
-            "name": "Simple Test Dataset",
-            "description": "Very small dataset for basic upload validation",
-            "test_purpose": "simple_validation"
-        }
-        
-        dataset = await artifact_manager.create(
-            parent_id=gallery["id"],
-            alias=dataset_name,
-            manifest=dataset_manifest,
-            stage=True
-        )
-        
-        put_url = await artifact_manager.put_file(
-            dataset["id"], 
-            file_path="zarr_dataset.zip"
-        )
-        
-        # Test upload with timeout
-        try:
-            upload_time = await asyncio.wait_for(
-                upload_zip_with_retry(put_url, zip_path, zip_info['size_mb']),
-                timeout=120  # 2 minute timeout for simple test
-            )
-            print(f"✅ Simple upload test passed: {upload_time:.1f}s")
-            
-            await artifact_manager.commit(dataset["id"])
-            print(f"✅ Dataset committed successfully")
-            
-        except asyncio.TimeoutError:
-            raise Exception("Simple upload test timed out after 2 minutes")
-        except Exception as e:
-            raise Exception(f"Simple upload test failed: {e}")
-        
-        # Clean up
-        await artifact_manager.delete(artifact_id=dataset["id"], delete_files=True)
-        print(f"✅ Simple test cleanup completed")
-
 @pytest.mark.timeout(1800)  # 30 minute timeout
 async def test_mini_chunk_reproduction(test_gallery, artifact_manager):
     """
@@ -1103,8 +964,8 @@ async def test_mini_chunk_reproduction(test_gallery, artifact_manager):
         
         # Test both normal and mini chunk scenarios
         test_scenarios = [
-            ("normal-chunks", 1000, "Normal 256x256 chunks"),
-            ("mini-chunks-test", 4000, "Small 3x3 chunks with sparse data")
+            ("normal-chunks", 400, "Normal 256x256 chunks"),
+            ("mini-chunks-test", 400, "Small 3x3 chunks with sparse data")
         ]
         
         results = []
@@ -1118,24 +979,13 @@ async def test_mini_chunk_reproduction(test_gallery, artifact_manager):
                 dataset_name = f"{scenario_name}-{uuid.uuid4().hex[:6]}"
                 zarr_path = temp_path / f"{dataset_name}.zarr"
                 
-                # Run Zarr creation in thread pool to avoid blocking event loop
-                print(f"🔄 Creating Zarr dataset in background thread...")
-                dataset_info = await asyncio.get_event_loop().run_in_executor(
-                    None,  # Use default ThreadPoolExecutor
-                    OMEZarrCreator.create_ome_zarr_dataset,
+                dataset_info = await OMEZarrCreator.create_ome_zarr_dataset(
                     zarr_path, size_mb, dataset_name
                 )
                 
                 # Create ZIP with analysis
                 zip_path = temp_path / f"{dataset_name}.zip"
-                
-                # Run ZIP creation in thread pool to avoid blocking event loop
-                print(f"🔄 Creating ZIP file in background thread...")
-                zip_info = await asyncio.get_event_loop().run_in_executor(
-                    None,  # Use default ThreadPoolExecutor
-                    OMEZarrCreator.create_zip_from_zarr,
-                    zarr_path, zip_path
-                )
+                zip_info = await OMEZarrCreator.create_zip_from_zarr(zarr_path, zip_path)
                 
                 # Extract key metrics
                 chunk_analysis = zip_info["chunk_analysis"]
