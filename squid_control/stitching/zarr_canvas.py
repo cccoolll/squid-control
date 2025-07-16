@@ -114,7 +114,7 @@ class WellZarrCanvasBase:
     
     def _calculate_num_scales(self) -> int:
         """Calculate the number of pyramid levels needed."""
-        min_size = 512  # Minimum size for lowest resolution
+        min_size = 64  # Minimum size for lowest resolution
         num_scales = 1
         width, height = self.canvas_width_px, self.canvas_height_px
         

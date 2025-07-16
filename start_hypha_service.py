@@ -15,6 +15,7 @@ import dotenv
 import sys
 import io
 from PIL import Image  
+from pathlib import Path
 # Now you can import squid_control
 from squid_control.squid_controller import SquidController
 from squid_control.control.camera import TriggerModeSetting
