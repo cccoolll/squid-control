@@ -1574,7 +1574,7 @@ class WellZarrCanvas(WellZarrCanvasBase):
     """
     
     def __init__(self, well_row: str, well_column: int, wellplate_type: str = '96',
-                 padding_mm: float = 2.0, base_path: str = None, 
+                 padding_mm: float = 1.0, base_path: str = None, 
                  pixel_size_xy_um: float = 0.333, channels: List[str] = None, **kwargs):
         """
         Initialize well-specific canvas.
@@ -1794,7 +1794,7 @@ class ExperimentManager:
         return self.current_experiment
     
     def create_experiment(self, experiment_name: str, wellplate_type: str = '96', 
-                         well_padding_mm: float = 2.0, initialize_all_wells: bool = False):
+                         well_padding_mm: float = 1.0, initialize_all_wells: bool = False):
         """
         Create a new experiment folder and optionally initialize all well canvases.
         
@@ -1974,7 +1974,7 @@ class ExperimentManager:
         }
     
     def get_well_canvas(self, well_row: str, well_column: int, wellplate_type: str = '96',
-                       padding_mm: float = 2.0):
+                       padding_mm: float = 1.0):
         """
         Get or create a well canvas for the current experiment.
         

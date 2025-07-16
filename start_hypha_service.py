@@ -2999,7 +2999,7 @@ class Microscope:
                                     well_row=well_row,
                                     well_column=well_column,
                                     wellplate_type=wellplate_type,
-                                    padding_mm=2.0,
+                                    padding_mm=1.0,
                                     base_path=str(well_path.parent),
                                     pixel_size_xy_um=self.squidController.pixel_size_xy,
                                     channels=ChannelMapper.get_all_human_names(),
@@ -3059,7 +3059,7 @@ class Microscope:
                                     well_row=well_row,
                                     well_column=well_column,
                                     wellplate_type=wellplate_type,
-                                    padding_mm=2.0,
+                                    padding_mm=1.0,
                                     base_path=str(well_path.parent),
                                     pixel_size_xy_um=self.squidController.pixel_size_xy,
                                     channels=ChannelMapper.get_all_human_names(),
@@ -3175,7 +3175,7 @@ class Microscope:
             raise e
 
     @schema_function(skip_self=True)
-    async def list_gallery_datasets(self, gallery_id: str = Field(None, description="Gallery (collection) artifact ID, e.g. agent-lens/microscope-gallery-... or agent-lens/1-..."), microscope_service_id: str = Field(None, description="Microscope service ID (optional, used to find gallery if gallery_id not given)"), experiment_id: str = Field(None, description="Experiment ID (optional, used to find gallery if gallery_id not given)"), context=None):
+    async def list_gallery_datasets(self, gallery_id: str = Field(None, description="Gallery (collection) artifact ID, e.g. agent-lens/1-..."), microscope_service_id: str = Field(None, description="Microscope service ID (optional, used to find gallery if gallery_id not given)"), experiment_id: str = Field(None, description="Experiment ID (optional, used to find gallery if gallery_id not given)"), context=None):
         """
         List all datasets in a gallery (collection).
         You can specify the gallery by its artifact ID, or provide microscope_service_id and/or experiment_id to find the gallery.
@@ -3232,7 +3232,7 @@ class Microscope:
                                        experiment_name: Optional[str] = Field(None, description="Name of the experiment to use. If None, uses active experiment or 'default' as fallback"),
                                        wells_to_scan: List[str] = Field(default_factory=lambda: ['A1'], description="List of wells to scan (e.g., ['A1', 'B2', 'C3'])"),
                                        wellplate_type: str = Field('96', description="Well plate type ('6', '12', '24', '96', '384')"),
-                                       well_padding_mm: float = Field(2.0, description="Padding around well in mm"),
+                                       well_padding_mm: float = Field(1.0, description="Padding around well in mm"),
                                        context=None):
         """
         Perform a normal scan with live stitching to OME-Zarr canvas using well-based approach.
@@ -3505,7 +3505,7 @@ class Microscope:
                                       do_contrast_autofocus: bool = Field(False, description="Whether to perform contrast-based autofocus"),
                                       do_reflection_af: bool = Field(False, description="Whether to perform reflection-based autofocus"),
                                       experiment_name: Optional[str] = Field(None, description="Name of the experiment to use. If None, uses active experiment or 'default' as fallback"),
-                                      well_padding_mm: float = Field(2.0, description="Padding around each well in mm"),
+                                      well_padding_mm: float = Field(1.0, description="Padding around each well in mm"),
                                       context=None):
         """
         Perform a quick scan with live stitching to OME-Zarr canvas - brightfield only.
@@ -3670,7 +3670,7 @@ class Microscope:
                            scale_level: int = Field(0, description="Scale level (0=full resolution, 1=1/4, 2=1/16, etc)"),
                            channel_name: str = Field('BF LED matrix full', description="Name of channel to retrieve"),
                            timepoint: int = Field(0, description="Timepoint index to retrieve (default 0)"),
-                           well_padding_mm: float = Field(2.0, description="Padding around wells in mm"),
+                           well_padding_mm: float = Field(1.0, description="Padding around wells in mm"),
                            output_format: str = Field('base64', description="Output format: 'base64' or 'array'"),
                            context=None):
         """
