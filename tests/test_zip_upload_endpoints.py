@@ -211,7 +211,7 @@ class OMEZarrCreator:
             # CRITICAL: Use small chunk sizes to create mini chunks
             # This mimics the real-world zarr canvas behavior
             if dataset_name.startswith("mini-chunks"):
-                chunk_size = (1, 1, 1, 128, 128)  # Smaller chunks = more files
+                chunk_size = (1, 1, 1, 3, 3)  # Smaller chunks = more files
             else:
                 chunk_size = (1, 1, 1, 256, 256)  # Standard chunks
             
