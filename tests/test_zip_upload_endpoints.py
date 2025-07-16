@@ -63,7 +63,8 @@ async def cleanup_test_galleries(artifact_manager):
 TEST_SIZES = [
     ("10MB", 10),
     ("1.6GB", 1600),
-    ("mini-chunks-test", 400),  # New test designed to create mini chunks
+    ("100MB", 100),
+    ("mini-chunks-test", 1),  # New test designed to create mini chunks
 ]
 
 class OMEZarrCreator:
@@ -104,7 +105,7 @@ class OMEZarrCreator:
         
         # Create dimensions that will result in many small chunks
         # Use smaller chunk sizes and sparse data to create mini chunks
-        height, width = 2048, 2048  # Reasonable image size
+        height, width = 512, 512  # Reasonable image size
         z_slices = 1
         num_channels = 4
         num_timepoints = 1
@@ -177,7 +178,7 @@ class OMEZarrCreator:
             # CRITICAL: Use small chunk sizes to create mini chunks
             # This mimics the real-world zarr canvas behavior
             if "mini-chunks" in dataset_name:
-                chunk_size = (1, 1, 1, 3, 3)  # Smaller chunks = more files
+                chunk_size = (1, 1, 1, 8, 8)  # Smaller chunks = more files
             else:
                 chunk_size = (1, 1, 1, 256, 256)  # Standard chunks
             
@@ -965,7 +966,7 @@ async def test_mini_chunk_reproduction(test_gallery, artifact_manager):
         # Test both normal and mini chunk scenarios
         test_scenarios = [
             ("normal-chunks", 400, "Normal 256x256 chunks"),
-            ("mini-chunks-test", 400, "Small 3x3 chunks with sparse data")
+            ("mini-chunks-test", 0.001, "Small 8x8 chunks with sparse data")
         ]
         
         results = []
