@@ -1923,7 +1923,10 @@ class Microscope:
             "remove_experiment": self.remove_experiment,
             "reset_experiment": self.reset_experiment,
             "get_experiment_info": self.get_experiment_info,
+            #Artifact manager functions
             "upload_zarr_dataset": self.upload_zarr_dataset,
+            "list_microscope_galleries": self.list_microscope_galleries,
+            "list_gallery_datasets": self.list_gallery_datasets,
         }
         
         # Only register get_canvas_chunk when not in local mode
