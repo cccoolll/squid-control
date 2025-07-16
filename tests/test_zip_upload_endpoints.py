@@ -752,13 +752,24 @@ async def test_create_datasets_and_test_endpoints(test_gallery, artifact_manager
                 dataset_name = f"test-dataset-{size_name.lower()}-{uuid.uuid4().hex[:6]}"
                 zarr_path = temp_path / f"{dataset_name}.zarr"
                 
-                dataset_info = OMEZarrCreator.create_ome_zarr_dataset(
+                # Run Zarr creation in thread pool to avoid blocking event loop
+                print(f"🔄 Creating Zarr dataset in background thread...")
+                dataset_info = await asyncio.get_event_loop().run_in_executor(
+                    None,  # Use default ThreadPoolExecutor
+                    OMEZarrCreator.create_ome_zarr_dataset,
                     zarr_path, size_mb, dataset_name
                 )
                 
                 # Create ZIP file
                 zip_path = temp_path / f"{dataset_name}.zip"
-                zip_info = OMEZarrCreator.create_zip_from_zarr(zarr_path, zip_path)
+                
+                # Run ZIP creation in thread pool to avoid blocking event loop
+                print(f"🔄 Creating ZIP file in background thread...")
+                zip_info = await asyncio.get_event_loop().run_in_executor(
+                    None,  # Use default ThreadPoolExecutor
+                    OMEZarrCreator.create_zip_from_zarr,
+                    zarr_path, zip_path
+                )
                 
                 # Create artifact in gallery
                 print(f"📦 Creating artifact: {dataset_name}")
@@ -937,12 +948,23 @@ async def test_quick_zip_endpoint(test_gallery, artifact_manager):
         dataset_name = f"quick-test-{uuid.uuid4().hex[:6]}"
         zarr_path = temp_path / f"{dataset_name}.zarr"
         
-        dataset_info = OMEZarrCreator.create_ome_zarr_dataset(
+        # Run Zarr creation in thread pool to avoid blocking event loop
+        print(f"🔄 Creating Zarr dataset in background thread...")
+        dataset_info = await asyncio.get_event_loop().run_in_executor(
+            None,  # Use default ThreadPoolExecutor
+            OMEZarrCreator.create_ome_zarr_dataset,
             zarr_path, 50, dataset_name  # 50MB for quick test
         )
         
         zip_path = temp_path / f"{dataset_name}.zip"
-        zip_info = OMEZarrCreator.create_zip_from_zarr(zarr_path, zip_path)
+        
+        # Run ZIP creation in thread pool to avoid blocking event loop
+        print(f"🔄 Creating ZIP file in background thread...")
+        zip_info = await asyncio.get_event_loop().run_in_executor(
+            None,  # Use default ThreadPoolExecutor
+            OMEZarrCreator.create_zip_from_zarr,
+            zarr_path, zip_path
+        )
         
         # Create and upload dataset
         dataset_manifest = {
@@ -1005,12 +1027,23 @@ async def test_simple_upload_validation(test_gallery, artifact_manager):
         dataset_name = f"simple-test-{uuid.uuid4().hex[:6]}"
         zarr_path = temp_path / f"{dataset_name}.zarr"
         
-        dataset_info = OMEZarrCreator.create_ome_zarr_dataset(
+        # Run Zarr creation in thread pool to avoid blocking event loop
+        print(f"🔄 Creating Zarr dataset in background thread...")
+        dataset_info = await asyncio.get_event_loop().run_in_executor(
+            None,  # Use default ThreadPoolExecutor
+            OMEZarrCreator.create_ome_zarr_dataset,
             zarr_path, 5, dataset_name  # 5MB for simple test
         )
         
         zip_path = temp_path / f"{dataset_name}.zip"
-        zip_info = OMEZarrCreator.create_zip_from_zarr(zarr_path, zip_path)
+        
+        # Run ZIP creation in thread pool to avoid blocking event loop
+        print(f"🔄 Creating ZIP file in background thread...")
+        zip_info = await asyncio.get_event_loop().run_in_executor(
+            None,  # Use default ThreadPoolExecutor
+            OMEZarrCreator.create_zip_from_zarr,
+            zarr_path, zip_path
+        )
         
         print(f"🧪 Simple upload test: {zip_info['size_mb']:.1f}MB ZIP file")
         
@@ -1085,13 +1118,24 @@ async def test_mini_chunk_reproduction(test_gallery, artifact_manager):
                 dataset_name = f"{scenario_name}-{uuid.uuid4().hex[:6]}"
                 zarr_path = temp_path / f"{dataset_name}.zarr"
                 
-                dataset_info = OMEZarrCreator.create_ome_zarr_dataset(
+                # Run Zarr creation in thread pool to avoid blocking event loop
+                print(f"🔄 Creating Zarr dataset in background thread...")
+                dataset_info = await asyncio.get_event_loop().run_in_executor(
+                    None,  # Use default ThreadPoolExecutor
+                    OMEZarrCreator.create_ome_zarr_dataset,
                     zarr_path, size_mb, dataset_name
                 )
                 
                 # Create ZIP with analysis
                 zip_path = temp_path / f"{dataset_name}.zip"
-                zip_info = OMEZarrCreator.create_zip_from_zarr(zarr_path, zip_path)
+                
+                # Run ZIP creation in thread pool to avoid blocking event loop
+                print(f"🔄 Creating ZIP file in background thread...")
+                zip_info = await asyncio.get_event_loop().run_in_executor(
+                    None,  # Use default ThreadPoolExecutor
+                    OMEZarrCreator.create_zip_from_zarr,
+                    zarr_path, zip_path
+                )
                 
                 # Extract key metrics
                 chunk_analysis = zip_info["chunk_analysis"]
