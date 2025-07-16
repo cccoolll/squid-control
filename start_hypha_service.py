@@ -2936,10 +2936,10 @@ class Microscope:
                                 include_acquisition_settings: bool = Field(True, description="Whether to include current acquisition settings as metadata"),
                                 context=None):
         """
-        Upload an experiment's well canvases as individual zip files to the artifact manager.
+        Upload an experiment's well canvases as individual zip files to a single dataset in the artifact manager.
         
         This function uploads each well canvas from the experiment as a separate zip file
-        within a single dataset. The dataset name will be the experiment name.
+        within a single dataset. The dataset name will be '{experiment_name}-{date and time}'.
         
         Args:
             experiment_name: Name of the experiment to upload (becomes the dataset name)
@@ -2970,7 +2970,7 @@ class Microscope:
             if total_size_mb > 1000:  # 1GB limit for total experiment size
                 raise Exception(f"Experiment too large for upload. Total size: {total_size_mb:.1f} MB")
             
-            logger.info(f"Uploading experiment '{experiment_name}' with {len(experiment_info['well_canvases'])} well canvases")
+            logger.info(f"Uploading experiment '{experiment_name}' with {len(experiment_info['well_canvases'])} well canvases to single dataset")
             
             # Prepare acquisition settings if requested
             acquisition_settings = None
@@ -3030,16 +3030,16 @@ class Microscope:
                         "total_size_mb": total_size_mb
                     }
             
-            # Upload each well canvas as a separate zip file
-            uploaded_wells = []
-            total_uploaded_size = 0
+            # Prepare all well canvases for upload to single dataset
+            zarr_files_info = []
+            well_info_list = []
             
             for well_info in experiment_info['well_canvases']:
                 well_name = well_info['name']
                 well_path = Path(well_info['path'])
                 well_size_mb = well_info['size_mb']
                 
-                logger.info(f"Uploading well canvas: {well_name} ({well_size_mb:.2f} MB)")
+                logger.info(f"Preparing well canvas: {well_name} ({well_size_mb:.2f} MB)")
                 
                 try:
                     # Create a temporary canvas instance to export the well
@@ -3071,39 +3071,22 @@ class Microscope:
                                 well_zip_content = temp_canvas.export_as_zip()
                                 temp_canvas.close()
                                 
-                                # Upload the well canvas zip with new naming scheme
-                                # Use experiment_name as experiment_id for the new gallery/dataset naming
-                                well_description = f"Well canvas {well_name} from experiment {experiment_name}"
+                                # Add to files info for batch upload
+                                zarr_files_info.append({
+                                    'name': well_name,
+                                    'content': well_zip_content,
+                                    'size_mb': well_size_mb
+                                })
                                 
-                                upload_result = await self.zarr_artifact_manager.upload_zarr_dataset(
-                                    microscope_service_id=self.service_id,
-                                    dataset_name=f"{experiment_name}_{well_name}",  # This will be overridden by experiment_id
-                                    zarr_zip_content=well_zip_content,
-                                    acquisition_settings={
-                                        "well_info": {
-                                            "well_row": well_row,
-                                            "well_column": well_column,
-                                            "wellplate_type": wellplate_type,
-                                            "well_name": well_name
-                                        },
-                                        "experiment_name": experiment_name,
-                                        "microscope_service_id": self.service_id
-                                    },
-                                    description=well_description,
-                                    experiment_id=experiment_name  # Use experiment_name as experiment_id for new naming
-                                )
-                                
-                                uploaded_wells.append({
+                                well_info_list.append({
                                     "well_name": well_name,
                                     "well_row": well_row,
                                     "well_column": well_column,
                                     "wellplate_type": wellplate_type,
-                                    "size_mb": well_size_mb,
-                                    "upload_result": upload_result
+                                    "size_mb": well_size_mb
                                 })
                                 
-                                total_uploaded_size += well_size_mb
-                                logger.info(f"Successfully uploaded well {well_name}")
+                                logger.info(f"Successfully prepared well {well_name}")
                                 
                             else:
                                 logger.warning(f"Could not parse well name: {well_name}")
@@ -3113,24 +3096,40 @@ class Microscope:
                         logger.warning(f"Unexpected well name format: {well_name}")
                         
                 except Exception as e:
-                    logger.error(f"Failed to upload well {well_name}: {e}")
+                    logger.error(f"Failed to prepare well {well_name}: {e}")
                     # Continue with other wells
                     continue
             
-            if not uploaded_wells:
-                raise Exception("No well canvases were successfully uploaded")
+            if not zarr_files_info:
+                raise Exception("No well canvases were successfully prepared for upload")
             
-            logger.info(f"Successfully uploaded {len(uploaded_wells)} well canvases from experiment '{experiment_name}'")
+            # Upload all well canvases to a single dataset
+            logger.info(f"Uploading {len(zarr_files_info)} well canvases to single dataset...")
+            
+            # Add well information to acquisition settings
+            if acquisition_settings:
+                acquisition_settings["wells"] = well_info_list
+            
+            upload_result = await self.zarr_artifact_manager.upload_multiple_zarr_files_to_dataset(
+                microscope_service_id=self.service_id,
+                experiment_id=experiment_name,
+                zarr_files_info=zarr_files_info,
+                acquisition_settings=acquisition_settings,
+                description=description or f"Experiment {experiment_name} with {len(zarr_files_info)} well canvases"
+            )
+            
+            logger.info(f"Successfully uploaded experiment '{experiment_name}' to single dataset")
             
             return {
                 "success": True,
                 "experiment_name": experiment_name,
-                "dataset_name": experiment_name,  # Dataset name is the experiment name
-                "uploaded_wells": uploaded_wells,
-                "total_wells": len(uploaded_wells),
-                "total_size_mb": total_uploaded_size,
+                "dataset_name": upload_result["dataset_name"],
+                "uploaded_wells": well_info_list,
+                "total_wells": len(well_info_list),
+                "total_size_mb": upload_result["total_size_mb"],
                 "acquisition_settings": acquisition_settings,
-                "description": description or f"Experiment {experiment_name} with {len(uploaded_wells)} well canvases"
+                "description": description or f"Experiment {experiment_name} with {len(well_info_list)} well canvases",
+                "upload_result": upload_result
             }
             
         except Exception as e:
@@ -3151,20 +3150,29 @@ class Microscope:
             # List all collections in the agent-lens workspace (top-level)
             all_collections = await self.zarr_artifact_manager.navigate_collections(parent_id=None)
             galleries = []
+            
+            # Check if microscope service ID ends with a number
+            import re
+            number_match = re.search(r'-(\d+)$', microscope_service_id)
+            
             for coll in all_collections:
                 manifest = coll.get('manifest', {})
                 alias = coll.get('alias', '')
+                
                 # Standard gallery
                 if alias == f"agent-lens/microscope-gallery-{microscope_service_id}":
                     galleries.append(coll)
-                # Experiment-based gallery (for -1 IDs)
-                elif microscope_service_id.endswith('-1') and alias.startswith("agent-lens/1-"):
-                    # Check manifest for matching microscope_service_id
-                    if manifest.get('microscope_service_id') == microscope_service_id:
-                        galleries.append(coll)
+                # Experiment-based gallery (for microscope IDs ending with numbers)
+                elif number_match:
+                    gallery_number = number_match.group(1)
+                    if alias.startswith(f"agent-lens/{gallery_number}-"):
+                        # Check manifest for matching microscope_service_id
+                        if manifest.get('microscope_service_id') == microscope_service_id:
+                            galleries.append(coll)
                 # Fallback: check manifest field
                 elif manifest.get('microscope_service_id') == microscope_service_id:
                     galleries.append(coll)
+                    
             return {
                 "success": True,
                 "microscope_service_id": microscope_service_id,

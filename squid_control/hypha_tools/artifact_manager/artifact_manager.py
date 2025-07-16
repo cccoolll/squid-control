@@ -277,7 +277,7 @@ class SquidArtifactManager:
         
         Args:
             microscope_service_id (str): The hypha service ID of the microscope
-            experiment_id (str, optional): The experiment ID for gallery naming. Required if microscope_service_id ends with '-1'
+            experiment_id (str, optional): The experiment ID for gallery naming. Required if microscope_service_id ends with a number
             
         Returns:
             dict: The gallery artifact information
@@ -285,11 +285,16 @@ class SquidArtifactManager:
         workspace = "agent-lens"
         
         # Determine gallery naming based on microscope service ID
-        if microscope_service_id.endswith('-1'):
-            # Special case: microscope ID ends with '-1', use experiment-based gallery
+        # Check if microscope service ID ends with a number (e.g., '-1', '-2', etc.)
+        import re
+        number_match = re.search(r'-(\d+)$', microscope_service_id)
+        
+        if number_match:
+            # Special case: microscope ID ends with a number, use experiment-based gallery
             if experiment_id is None:
-                raise ValueError("experiment_id is required when microscope_service_id ends with '-1'")
-            gallery_alias = f"1-{experiment_id}"
+                raise ValueError("experiment_id is required when microscope_service_id ends with a number")
+            gallery_number = number_match.group(1)
+            gallery_alias = f"{gallery_number}-{experiment_id}"
         else:
             # Standard case: use microscope-based gallery
             gallery_alias = f"microscope-gallery-{microscope_service_id}"
@@ -310,7 +315,7 @@ class SquidArtifactManager:
                 print(f"Creating new gallery: {gallery_alias}")
                 
                 # Determine gallery name and description based on type
-                if microscope_service_id.endswith('-1'):
+                if number_match:
                     gallery_name = f"Experiment Gallery - {experiment_id}"
                     gallery_description = f"Dataset collection for experiment {experiment_id}"
                     gallery_type = "experiment-gallery"
@@ -355,6 +360,130 @@ class SquidArtifactManager:
                 return gallery
             else:
                 raise e
+
+    async def upload_multiple_zarr_files_to_dataset(self, microscope_service_id, experiment_id, 
+                                                   zarr_files_info, acquisition_settings=None, 
+                                                   description=None):
+        """
+        Upload multiple zarr files to a single dataset within a gallery.
+        
+        Args:
+            microscope_service_id (str): The hypha service ID of the microscope
+            experiment_id (str): The experiment ID for dataset naming
+            zarr_files_info (list): List of dicts with 'name', 'content', 'size_mb' for each file
+            acquisition_settings (dict, optional): Acquisition settings metadata
+            description (str, optional): Description of the dataset
+            
+        Returns:
+            dict: Information about the uploaded dataset
+        """
+        workspace = "agent-lens"
+        
+        # Generate dataset name with timestamp
+        import time
+        timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        dataset_name = f"{experiment_id}-{timestamp}"
+        
+        # Validate all ZIP files before upload
+        total_size_mb = 0
+        for file_info in zarr_files_info:
+            await self._validate_zarr_zip_content(file_info['content'])
+            total_size_mb += file_info['size_mb']
+        
+        # Run detailed ZIP integrity test on first file as representative
+        if zarr_files_info:
+            first_file = zarr_files_info[0]
+            zip_test_results = await self.test_zip_file_integrity(
+                first_file['content'], f"Upload: {dataset_name} (first file)"
+            )
+            if not zip_test_results["valid"]:
+                raise ValueError(f"ZIP file integrity test failed: {', '.join(zip_test_results['issues'])}")
+        
+        # Ensure gallery exists
+        gallery = await self.create_or_get_microscope_gallery(microscope_service_id, experiment_id)
+        
+        # Check name availability
+        name_check = await self.check_dataset_name_availability(microscope_service_id, dataset_name)
+        if not name_check["available"]:
+            raise ValueError(f"Dataset name '{dataset_name}' is not available: {name_check['reason']}")
+        
+        # Create dataset manifest
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        
+        dataset_manifest = {
+            "name": dataset_name,
+            "description": description or f"Zarr dataset from microscope {microscope_service_id}",
+            "record_type": "zarr-dataset",
+            "microscope_service_id": microscope_service_id,
+            "experiment_id": experiment_id,
+            "timestamp": timestamp,
+            "acquisition_settings": acquisition_settings or {},
+            "file_format": "ome-zarr",
+            "upload_method": "squid-control-api",
+            "total_size_mb": total_size_mb,
+            "file_count": len(zarr_files_info),
+            "zip_format": "ZIP64-compatible"
+        }
+        
+        # Create dataset in staging mode
+        dataset_alias = f"{workspace}/{dataset_name}"
+        dataset = await self._svc.create(
+            parent_id=gallery["id"],
+            alias=dataset_alias,
+            manifest=dataset_manifest,
+            stage=True
+        )
+        
+        uploaded_files = []
+        
+        try:
+            # Upload each zarr zip file with retry logic
+            for i, file_info in enumerate(zarr_files_info):
+                file_name = file_info['name']
+                file_content = file_info['content']
+                file_size_mb = file_info['size_mb']
+                
+                print(f"Uploading file {i+1}/{len(zarr_files_info)}: {file_name} ({file_size_mb:.2f} MB)")
+                
+                # Upload zarr zip file with retry logic
+                await self._upload_large_zip_with_retry(
+                    dataset["id"], 
+                    file_content, 
+                    max_retries=3,
+                    file_path=f"{file_name}.zip"
+                )
+                
+                uploaded_files.append({
+                    "name": file_name,
+                    "size_mb": file_size_mb,
+                    "file_index": i+1
+                })
+                
+                print(f"Successfully uploaded file: {file_name}")
+            
+            # Commit the dataset only after all files are uploaded
+            await self._svc.commit(dataset["id"])
+            
+            print(f"Successfully uploaded zarr dataset: {dataset_name} ({total_size_mb:.2f} MB, {len(uploaded_files)} files)")
+            return {
+                "success": True,
+                "dataset_id": dataset["id"],
+                "dataset_name": dataset_name,
+                "gallery_id": gallery["id"],
+                "experiment_id": experiment_id,
+                "upload_timestamp": timestamp,
+                "total_size_mb": total_size_mb,
+                "uploaded_files": uploaded_files,
+                "file_count": len(uploaded_files)
+            }
+            
+        except Exception as e:
+            # If upload fails, try to clean up the staged dataset
+            try:
+                await self._svc.discard(dataset["id"])
+            except:
+                pass
+            raise e
     
     async def check_dataset_name_availability(self, microscope_service_id, dataset_name):
         """
@@ -561,7 +690,7 @@ class SquidArtifactManager:
         except Exception as e:
             raise ValueError(f"ZIP file validation failed: {e}")
 
-    async def _upload_large_zip_with_retry(self, dataset_id: str, zarr_zip_content: bytes, max_retries: int = 3) -> None:
+    async def _upload_large_zip_with_retry(self, dataset_id: str, zarr_zip_content: bytes, max_retries: int = 3, file_path: str = "zarr_dataset.zip") -> None:
         """
         Upload large ZIP file with retry logic and appropriate timeouts.
         
@@ -569,6 +698,7 @@ class SquidArtifactManager:
             dataset_id (str): The dataset ID
             zarr_zip_content (bytes): The ZIP file content
             max_retries (int): Maximum number of retry attempts
+            file_path (str): The file path within the dataset
             
         Raises:
             Exception: If upload fails after all retries
@@ -580,12 +710,12 @@ class SquidArtifactManager:
         
         for attempt in range(max_retries):
             try:
-                print(f"Upload attempt {attempt + 1}/{max_retries} for {zip_size_mb:.2f} MB ZIP file (timeout: {timeout_seconds}s)")
+                print(f"Upload attempt {attempt + 1}/{max_retries} for {zip_size_mb:.2f} MB ZIP file to {file_path} (timeout: {timeout_seconds}s)")
                 
                 # Get upload URL
                 put_url = await self._svc.put_file(
                     dataset_id, 
-                    file_path="zarr_dataset.zip", 
+                    file_path=file_path, 
                     download_weight=1.0
                 )
                 
