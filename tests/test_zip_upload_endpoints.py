@@ -61,6 +61,7 @@ async def cleanup_test_galleries(artifact_manager):
 
 # Test sizes in MB - smaller sizes for faster testing
 TEST_SIZES = [
+    ("10MB", 10),
     ("1.6GB", 1600),
     ("mini-chunks-test", 400),  # New test designed to create mini chunks
 ]
