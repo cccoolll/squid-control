@@ -475,13 +475,15 @@ class WellZarrCanvasBase:
                 
                 # Create the array (T, C, Z, Y, X)
                 # Pre-allocate initial timepoints to avoid frequent resizing
+                # Use no compression for direct access and fastest performance
                 array = root.create_dataset(
                     str(scale),
                     shape=(self.initial_timepoints, len(self.channels), 1, height, width),
                     chunks=(1, 1, 1, self.chunk_size, self.chunk_size),
                     dtype='uint8',
                     fill_value=0,
-                    overwrite=True
+                    overwrite=True,
+                    compressor=None  # No compression for raw data access
                 )
                 
                 # Add scale metadata
@@ -679,8 +681,39 @@ class WellZarrCanvasBase:
                     if img_y_end > img_y_start and img_x_end > img_x_start:
                         try:
                             logger.info(f"ZARR_WRITE: Attempting to write to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}")
-                            zarr_array[timepoint, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
-                                scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
+                            # Ensure image is uint8 before writing to zarr
+                            image_to_write = scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
+                            logger.info(f"ZARR_WRITE: Original image_to_write dtype: {image_to_write.dtype}, shape: {image_to_write.shape}, min: {image_to_write.min()}, max: {image_to_write.max()}")
+                            
+                            if image_to_write.dtype != np.uint8:
+                                # Convert to uint8 if needed
+                                if image_to_write.dtype == np.uint16:
+                                    image_to_write = (image_to_write / 256).astype(np.uint8)
+                                    logger.info(f"ZARR_WRITE: Converted uint16 to uint8: min={image_to_write.min()}, max={image_to_write.max()}")
+                                elif image_to_write.dtype in [np.float32, np.float64]:
+                                    # Normalize float data to 0-255
+                                    if image_to_write.max() > image_to_write.min():
+                                        image_to_write = ((image_to_write - image_to_write.min()) / 
+                                                        (image_to_write.max() - image_to_write.min()) * 255).astype(np.uint8)
+                                        logger.info(f"ZARR_WRITE: Normalized float to uint8: min={image_to_write.min()}, max={image_to_write.max()}")
+                                    else:
+                                        image_to_write = np.zeros_like(image_to_write, dtype=np.uint8)
+                                        logger.info(f"ZARR_WRITE: Created zero uint8 array")
+                                else:
+                                    image_to_write = image_to_write.astype(np.uint8)
+                                    logger.info(f"ZARR_WRITE: Direct conversion to uint8: min={image_to_write.min()}, max={image_to_write.max()}")
+                                logger.info(f"ZARR_WRITE: Converted image from {scaled_image.dtype} to uint8")
+                            else:
+                                logger.info(f"ZARR_WRITE: Image already uint8: min={image_to_write.min()}, max={image_to_write.max()}")
+                            
+                            # Double-check the final data type
+                            if image_to_write.dtype != np.uint8:
+                                logger.error(f"ZARR_WRITE: CRITICAL ERROR - image_to_write is still {image_to_write.dtype}, not uint8!")
+                                # Force conversion as fallback
+                                image_to_write = image_to_write.astype(np.uint8)
+                                logger.info(f"ZARR_WRITE: Forced conversion to uint8: min={image_to_write.min()}, max={image_to_write.max()}")
+                            
+                            zarr_array[timepoint, channel_idx, z_idx, y_start:y_end, x_start:x_end] = image_to_write
                             logger.info(f"ZARR_WRITE: Successfully wrote image to zarr at scale {scale}, channel {channel_idx}, timepoint {timepoint}")
                         except IndexError as e:
                             logger.error(f"ZARR_WRITE: IndexError writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
@@ -793,8 +826,39 @@ class WellZarrCanvasBase:
                     if img_y_end > img_y_start and img_x_end > img_x_start:
                         try:
                             logger.info(f"QUICK_SYNC: Attempting to write to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}")
-                            zarr_array[timepoint, channel_idx, z_idx, y_start:y_end, x_start:x_end] = \
-                                scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
+                            # Ensure image is uint8 before writing to zarr
+                            image_to_write = scaled_image[img_y_start:img_y_end, img_x_start:img_x_end]
+                            logger.info(f"QUICK_SYNC: Original image_to_write dtype: {image_to_write.dtype}, shape: {image_to_write.shape}, min: {image_to_write.min()}, max: {image_to_write.max()}")
+                            
+                            if image_to_write.dtype != np.uint8:
+                                # Convert to uint8 if needed
+                                if image_to_write.dtype == np.uint16:
+                                    image_to_write = (image_to_write / 256).astype(np.uint8)
+                                    logger.info(f"QUICK_SYNC: Converted uint16 to uint8: min={image_to_write.min()}, max={image_to_write.max()}")
+                                elif image_to_write.dtype in [np.float32, np.float64]:
+                                    # Normalize float data to 0-255
+                                    if image_to_write.max() > image_to_write.min():
+                                        image_to_write = ((image_to_write - image_to_write.min()) / 
+                                                        (image_to_write.max() - image_to_write.min()) * 255).astype(np.uint8)
+                                        logger.info(f"QUICK_SYNC: Normalized float to uint8: min={image_to_write.min()}, max={image_to_write.max()}")
+                                    else:
+                                        image_to_write = np.zeros_like(image_to_write, dtype=np.uint8)
+                                        logger.info(f"QUICK_SYNC: Created zero uint8 array")
+                                else:
+                                    image_to_write = image_to_write.astype(np.uint8)
+                                    logger.info(f"QUICK_SYNC: Direct conversion to uint8: min={image_to_write.min()}, max={image_to_write.max()}")
+                                logger.info(f"QUICK_SYNC: Converted image from {scaled_image.dtype} to uint8")
+                            else:
+                                logger.info(f"QUICK_SYNC: Image already uint8: min={image_to_write.min()}, max={image_to_write.max()}")
+                            
+                            # Double-check the final data type
+                            if image_to_write.dtype != np.uint8:
+                                logger.error(f"QUICK_SYNC: CRITICAL ERROR - image_to_write is still {image_to_write.dtype}, not uint8!")
+                                # Force conversion as fallback
+                                image_to_write = image_to_write.astype(np.uint8)
+                                logger.info(f"QUICK_SYNC: Forced conversion to uint8: min={image_to_write.min()}, max={image_to_write.max()}")
+                            
+                            zarr_array[timepoint, channel_idx, z_idx, y_start:y_end, x_start:x_end] = image_to_write
                             logger.info(f"QUICK_SYNC: Successfully wrote image to zarr at scale {scale}, channel {channel_idx}, timepoint {timepoint} (quick scan)")
                         except IndexError as e:
                             logger.error(f"QUICK_SYNC: IndexError writing to zarr array at scale {scale}, channel {channel_idx}, timepoint {timepoint}: {e}")
