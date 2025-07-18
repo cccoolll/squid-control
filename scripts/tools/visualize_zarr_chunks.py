@@ -60,42 +60,95 @@ def read_chunk_file(file_path: Path) -> Optional[np.ndarray]:
         Numpy array containing the chunk data, or None if reading fails
     """
     try:
+        print(f"  📁 Reading chunk file: {file_path.name}")
+        
         # Read the raw bytes from the file
         with open(file_path, 'rb') as f:
             data = f.read()
         
+        print(f"  📊 Raw data size: {len(data)} bytes")
+        
         # Try to interpret as different data types
         # Start with uint8 (since zarr arrays are configured as uint8)
         try:
+            print(f"  🔍 Attempting uint8 interpretation...")
             chunk = np.frombuffer(data, dtype=np.uint8)
-            size = int(np.sqrt(len(chunk)))
-            if size * size == len(chunk):
-                return chunk.reshape(size, size)
+            print(f"  📈 uint8 array length: {len(chunk)} elements")
+            
+            # OME-Zarr chunks are 5D: (T, C, Z, Y, X)
+            # For our system: chunks=(1, 1, 1, 256, 256)
+            # So total elements should be 1*1*1*256*256 = 65536
+            total_elements = len(chunk)
+            
+            if total_elements == 65536:  # 256*256 = 65536 (uint8)
+                print(f"  ✅ Detected 5D OME-Zarr chunk (uint8): 1*1*1*256*256 = 65536 elements")
+                # This is a 5D chunk with shape (1, 1, 1, 256, 256)
+                # Extract the 2D slice: [0, 0, 0, :, :]
+                chunk_5d = chunk.reshape(1, 1, 1, 256, 256)
+                print(f"  🔄 Reshaped to 5D: {chunk_5d.shape}")
+                result = chunk_5d[0, 0, 0, :, :]  # Extract 2D slice
+                print(f"  📋 Extracted 2D slice: {result.shape}")
+                return result
+            elif total_elements == 32768:  # 256*256/2 = 32768 (uint16)
+                print(f"  ⚠️  Detected 5D OME-Zarr chunk (uint16): 1*1*1*256*256 = 32768 uint16 elements")
+                # This is a 5D chunk with shape (1, 1, 1, 256, 256) stored as uint16
+                chunk_5d = chunk.reshape(1, 1, 1, 256, 256)
+                print(f"  🔄 Reshaped to 5D: {chunk_5d.shape}")
+                result = chunk_5d[0, 0, 0, :, :]  # Extract 2D slice
+                print(f"  📋 Extracted 2D slice: {result.shape}")
+                return result
             else:
-                # If not a perfect square, return as 1D array
-                return chunk
-                
-        except Exception:
-            # Fallback to uint16 (for older data)
-            try:
-                # Calculate the number of uint16 values
-                num_values = len(data) // 2
-                chunk = np.frombuffer(data, dtype=np.uint16, count=num_values)
-                
-                # Try to reshape as a 2D image (square root for dimensions)
+                print(f"  ❓ Not a standard 5D chunk, trying 2D interpretation...")
+                # Try to reshape as 2D image (square root for dimensions)
                 size = int(np.sqrt(len(chunk)))
+                print(f"  📏 Calculated size: {size}, len(chunk): {len(chunk)}")
                 if size * size == len(chunk):
+                    print(f"  ✅ Perfect square: {size}x{size} = {len(chunk)}")
                     return chunk.reshape(size, size)
                 else:
+                    print(f"  ⚠️  Not a perfect square, returning as 1D array")
                     # If not a perfect square, return as 1D array
                     return chunk
+                
+        except Exception as e:
+            print(f"  ❌ uint8 interpretation failed: {e}")
+            # Fallback to uint16 (for older data)
+            try:
+                print(f"  🔍 Attempting uint16 interpretation...")
+                # Calculate the number of uint16 values
+                num_values = len(data) // 2
+                print(f"  📊 uint16 array length: {num_values} elements")
+                chunk = np.frombuffer(data, dtype=np.uint16, count=num_values)
+                
+                # Check if this is a 5D chunk
+                if num_values == 65536:  # 256*256 = 65536 (uint16)
+                    print(f"  ✅ Detected 5D OME-Zarr chunk (uint16): 1*1*1*256*256 = 65536 elements")
+                    # This is a 5D chunk with shape (1, 1, 1, 256, 256)
+                    chunk_5d = chunk.reshape(1, 1, 1, 256, 256)
+                    print(f"  🔄 Reshaped to 5D: {chunk_5d.shape}")
+                    result = chunk_5d[0, 0, 0, :, :]  # Extract 2D slice
+                    print(f"  📋 Extracted 2D slice: {result.shape}")
+                    return result
+                else:
+                    print(f"  ❓ Not a standard 5D chunk, trying 2D interpretation...")
+                    # Try to reshape as 2D image (square root for dimensions)
+                    size = int(np.sqrt(len(chunk)))
+                    print(f"  📏 Calculated size: {size}, len(chunk): {len(chunk)}")
+                    if size * size == len(chunk):
+                        print(f"  ✅ Perfect square: {size}x{size} = {len(chunk)}")
+                        return chunk.reshape(size, size)
+                    else:
+                        print(f"  ⚠️  Not a perfect square, returning as 1D array")
+                        # If not a perfect square, return as 1D array
+                        return chunk
                     
-            except Exception:
-                print(f"Could not interpret {file_path} as image data")
+            except Exception as e:
+                print(f"  ❌ uint16 interpretation failed: {e}")
+                print(f"  ❌ Could not interpret {file_path} as image data")
                 return None
                 
     except Exception as e:
-        print(f"Error reading {file_path}: {e}")
+        print(f"  ❌ Error reading {file_path}: {e}")
         return None
 
 
@@ -221,20 +274,23 @@ def visualize_zarr_chunks(zarr_dir: str, output_dir: Optional[str] = None):
     """
     zarr_path = Path(zarr_dir)
     
+    print(f"🔍 Starting OME-Zarr chunk visualization...")
+    print(f"📂 Zarr directory: {zarr_dir}")
+    
     # Check if the directory exists
     if not zarr_path.exists():
-        print(f"Error: Directory {zarr_dir} does not exist")
+        print(f"❌ Error: Directory {zarr_dir} does not exist")
         return
     
     # Create output directory if specified
     if output_dir:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
-        print(f"Output directory: {output_path}")
+        print(f"📁 Output directory: {output_path}")
     else:
         output_path = Path("chunk_images")
         output_path.mkdir(exist_ok=True)
-        print(f"Using default output directory: {output_path}")
+        print(f"📁 Using default output directory: {output_path}")
     
     # Find all chunk files
     chunk_files = []
@@ -243,30 +299,36 @@ def visualize_zarr_chunks(zarr_dir: str, output_dir: Optional[str] = None):
             chunk_files.append(file_path)
     
     if not chunk_files:
-        print(f"No chunk files found in {zarr_dir}")
+        print(f"❌ No chunk files found in {zarr_dir}")
         return
     
-    print(f"Found {len(chunk_files)} chunk files")
+    print(f"📊 Found {len(chunk_files)} chunk files")
+    print(f"📋 Chunk files: {[f.name for f in chunk_files]}")
     
     # Process each chunk file
     for i, chunk_file in enumerate(chunk_files):
-        print(f"\nProcessing chunk {i+1}/{len(chunk_files)}: {chunk_file.name}")
+        print(f"\n🔄 Processing chunk {i+1}/{len(chunk_files)}: {chunk_file.name}")
         
         # Read the chunk
         chunk_data = read_chunk_file(chunk_file)
         
         if chunk_data is not None:
-            print(f"  Shape: {chunk_data.shape}")
-            print(f"  Data type: {chunk_data.dtype}")
-            print(f"  Min value: {chunk_data.min()}")
-            print(f"  Max value: {chunk_data.max()}")
+            print(f"  ✅ Successfully read chunk data")
+            print(f"  📐 Shape: {chunk_data.shape}")
+            print(f"  🏷️  Data type: {chunk_data.dtype}")
+            print(f"  📊 Min value: {chunk_data.min()}")
+            print(f"  📊 Max value: {chunk_data.max()}")
+            print(f"  📊 Mean value: {chunk_data.mean():.2f}")
+            print(f"  📊 Std deviation: {chunk_data.std():.2f}")
             
             # Save as PNG using the full chunk name to avoid overwrites
+            print(f"  💾 Saving chunk as PNG...")
             save_chunk_as_png(chunk_data, output_path, chunk_file.name)
         else:
-            print(f"  Failed to read chunk: {chunk_file.name}")
+            print(f"  ❌ Failed to read chunk: {chunk_file.name}")
     
-    print(f"\nVisualization complete! Check {output_path} for PNG images.")
+    print(f"\n🎉 Visualization complete! Check {output_path} for PNG images.")
+    print(f"📊 Summary: Processed {len(chunk_files)} chunks")
 
 
 def main():
