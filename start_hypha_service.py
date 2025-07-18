@@ -15,6 +15,7 @@ import dotenv
 import sys
 import io
 from PIL import Image  
+from pathlib import Path
 # Now you can import squid_control
 from squid_control.squid_controller import SquidController
 from squid_control.control.camera import TriggerModeSetting
@@ -1922,7 +1923,11 @@ class Microscope:
             "set_active_experiment": self.set_active_experiment,
             "remove_experiment": self.remove_experiment,
             "reset_experiment": self.reset_experiment,
-            "get_experiment_info": self.get_experiment_info
+            "get_experiment_info": self.get_experiment_info,
+            #Artifact manager functions
+            "upload_zarr_dataset": self.upload_zarr_dataset,
+            "list_microscope_galleries": self.list_microscope_galleries,
+            "list_gallery_datasets": self.list_gallery_datasets,
         }
         
         # Only register get_canvas_chunk when not in local mode
@@ -2923,180 +2928,291 @@ class Microscope:
             logger.error(f"Error setting stage velocity: {e}")
             raise e
 
-    @schema_function(skip_self=True)
-    async def get_zarr_upload_info(self, context=None):
-        """
-        Get information about the current zarr canvas for upload planning.
-        
-        Returns:
-            dict: Information about canvas size, export feasibility, and gallery status
-        """
-        
-        try:
-            # Check if zarr canvas exists
-            if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
-                raise Exception("No zarr canvas available. Start a scanning operation first to create data.")
-            
-            # Get export info from zarr canvas
-            export_info = self.squidController.zarr_canvas.get_export_info()
-            
-            # Check if zarr artifact manager is available
-            if self.zarr_artifact_manager is None:
-                raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
-            
-            # Check gallery status
-            try:
-                gallery = await self.zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
-                gallery_info = {
-                    "gallery_exists": True,
-                    "gallery_id": gallery.get("id"),
-                    "gallery_name": gallery.get("manifest", {}).get("name")
-                }
-            except Exception as e:
-                logger.error(f"Error getting gallery info: {e}")
-                gallery_info = {
-                    "gallery_exists": False,
-                    "gallery_error": str(e)
-                }
-            
-            return {
-                "success": True,
-                "export_info": export_info,
-                "gallery_info": gallery_info,
-                "microscope_service_id": self.service_id
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting zarr upload info: {e}")
-            raise e
-    
-    @schema_function(skip_self=True)
-    async def check_zarr_dataset_name(self, dataset_name: str = Field(..., description="Proposed dataset name"), context=None):
-        """
-        Check if a dataset name is available for upload.
-        
-        Args:
-            dataset_name: The proposed dataset name
-            
-        Returns:
-            dict: Information about name availability and suggestions
-        """
-        
-        try:
-            # Check if zarr artifact manager is available
-            if self.zarr_artifact_manager is None:
-               raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
-            
-            # Check name availability
-            name_check = await self.zarr_artifact_manager.check_dataset_name_availability(
-                self.service_id, dataset_name
-            )
-            
-            return {
-                "success": True,
-                "name_check": name_check
-            }
-            
-        except Exception as e:
-            logger.error(f"Error checking dataset name: {e}")
-            raise e
     
     @schema_function(skip_self=True)
     async def upload_zarr_dataset(self, 
-                                dataset_name: str = Field(..., description="Name for the dataset"),
+                                experiment_name: str = Field(..., description="Name of the experiment to upload (this becomes the dataset name)"),
                                 description: str = Field("", description="Description of the dataset"),
                                 include_acquisition_settings: bool = Field(True, description="Whether to include current acquisition settings as metadata"),
                                 context=None):
         """
-        Upload the current zarr canvas as a dataset to the artifact manager.
+        Upload an experiment's well canvases as individual zip files to a single dataset in the artifact manager.
+        
+        This function uploads each well canvas from the experiment as a separate zip file
+        within a single dataset. The dataset name will be '{experiment_name}-{date and time}'.
         
         Args:
-            dataset_name: Name for the dataset
+            experiment_name: Name of the experiment to upload (becomes the dataset name)
             description: Description of the dataset
             include_acquisition_settings: Whether to include current acquisition settings as metadata
             
         Returns:
-            dict: Upload result information
+            dict: Upload result information with details about uploaded well canvases
         """
         
         try:
-            # Check if zarr canvas exists
-            if not hasattr(self.squidController, 'zarr_canvas') or self.squidController.zarr_canvas is None:
-                raise Exception("No zarr canvas available. Start a scanning operation first to create data.")
-            
-            # Get export info to check feasibility
-            export_info = self.squidController.zarr_canvas.get_export_info()
-            if not export_info.get("export_feasible", False):
-                raise Exception(f"Dataset too large for upload. Estimated size: {export_info.get('estimated_zip_size_mb', 0):.1f} MB")
+            # Check if experiment manager is initialized
+            if not hasattr(self.squidController, 'experiment_manager') or self.squidController.experiment_manager is None:
+                raise Exception("Experiment manager not initialized. Start a scanning operation first to create data.")
             
             # Check if zarr artifact manager is available
             if self.zarr_artifact_manager is None:
                 raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
             
-            zarr_zip_content = self.squidController.zarr_canvas.export_as_zip()
+            # Get experiment information
+            experiment_info = self.squidController.experiment_manager.get_experiment_info(experiment_name)
+            
+            if not experiment_info.get("well_canvases"):
+                raise Exception(f"No well canvases found in experiment '{experiment_name}'. Start a scanning operation first to create data.")
+            
+
+            logger.info(f"Uploading experiment '{experiment_name}' with {len(experiment_info['well_canvases'])} well canvases to single dataset")
             
             # Prepare acquisition settings if requested
             acquisition_settings = None
             if include_acquisition_settings:
-                acquisition_settings = {
-                    "pixel_size_xy_um": export_info.get("canvas_dimensions", {}).get("pixel_size_um"),
-                    "channels": export_info.get("channels", []),
-                    "canvas_dimensions": export_info.get("canvas_dimensions", {}),
-                    "num_scales": export_info.get("num_scales"),
-                    "microscope_service_id": self.service_id
-                }
+                # Get settings from the first available well canvas
+                first_well = experiment_info['well_canvases'][0]
+                well_path = Path(first_well['path'])
+                
+                # Try to get canvas info from the first well
+                try:
+                    # Create a temporary canvas instance to get export info
+                    from squid_control.stitching.zarr_canvas import WellZarrCanvas
+                    from squid_control.control.config import ChannelMapper, CONFIG
+                    
+                    # Parse well info from path (e.g., "well_A1_96.zarr" -> A, 1, 96)
+                    well_name = well_path.stem  # "well_A1_96"
+                    if well_name.startswith("well_"):
+                        well_info = well_name[5:]  # "A1_96"
+                        if "_" in well_info:
+                            well_part, wellplate_type = well_info.rsplit("_", 1)
+                            if len(well_part) >= 2:
+                                well_row = well_part[0]
+                                well_column = int(well_part[1:])
+                                
+                                # Create temporary canvas to get export info
+                                temp_canvas = WellZarrCanvas(
+                                    well_row=well_row,
+                                    well_column=well_column,
+                                    wellplate_type=wellplate_type,
+                                    padding_mm=1.0,
+                                    base_path=str(well_path.parent),
+                                    pixel_size_xy_um=self.squidController.pixel_size_xy,
+                                    channels=ChannelMapper.get_all_human_names(),
+                                    rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
+                                )
+                                
+                                # Get export info from the temporary canvas
+                                export_info = temp_canvas.get_export_info()
+                                temp_canvas.close()
+                                
+                                acquisition_settings = {
+                                    "pixel_size_xy_um": export_info.get("canvas_dimensions", {}).get("pixel_size_um"),
+                                    "channels": export_info.get("channels", []),
+                                    "canvas_dimensions": export_info.get("canvas_dimensions", {}),
+                                    "num_scales": export_info.get("num_scales"),
+                                    "microscope_service_id": self.service_id,
+                                    "experiment_name": experiment_name,
+                                    "wellplate_type": wellplate_type
+                                }
+                except Exception as e:
+                    logger.warning(f"Could not get detailed acquisition settings: {e}")
+                    # Fallback to basic settings
+                    acquisition_settings = {
+                        "microscope_service_id": self.service_id,
+                        "experiment_name": experiment_name,
+                        "total_wells": len(experiment_info['well_canvases']),
+                        "total_size_mb": total_size_mb
+                    }
             
-            # Upload to artifact manager
-            upload_result = await self.zarr_artifact_manager.upload_zarr_dataset(
+            # Prepare all well canvases for upload to single dataset
+            zarr_files_info = []
+            well_info_list = []
+            
+            for well_info in experiment_info['well_canvases']:
+                well_name = well_info['name']
+                well_path = Path(well_info['path'])
+                well_size_mb = well_info['size_mb']
+                
+                logger.info(f"Preparing well canvas: {well_name} ({well_size_mb:.2f} MB)")
+                
+                try:
+                    # Create a temporary canvas instance to export the well
+                    from squid_control.stitching.zarr_canvas import WellZarrCanvas
+                    from squid_control.control.config import ChannelMapper, CONFIG
+                    
+                    # Parse well info from name (e.g., "well_A1_96" -> A, 1, 96)
+                    if well_name.startswith("well_"):
+                        well_info_part = well_name[5:]  # "A1_96"
+                        if "_" in well_info_part:
+                            well_part, wellplate_type = well_info_part.rsplit("_", 1)
+                            if len(well_part) >= 2:
+                                well_row = well_part[0]
+                                well_column = int(well_part[1:])
+                                
+                                # Create temporary canvas for export
+                                temp_canvas = WellZarrCanvas(
+                                    well_row=well_row,
+                                    well_column=well_column,
+                                    wellplate_type=wellplate_type,
+                                    padding_mm=1.0,
+                                    base_path=str(well_path.parent),
+                                    pixel_size_xy_um=self.squidController.pixel_size_xy,
+                                    channels=ChannelMapper.get_all_human_names(),
+                                    rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
+                                )
+                                
+                                # Export the well canvas as zip using asyncio.to_thread to avoid blocking
+                                well_zip_content = await asyncio.to_thread(temp_canvas.export_as_zip)
+                                temp_canvas.close()
+                                
+                                # Add to files info for batch upload
+                                zarr_files_info.append({
+                                    'name': well_name,
+                                    'content': well_zip_content,
+                                    'size_mb': well_size_mb
+                                })
+                                
+                                well_info_list.append({
+                                    "well_name": well_name,
+                                    "well_row": well_row,
+                                    "well_column": well_column,
+                                    "wellplate_type": wellplate_type,
+                                    "size_mb": well_size_mb
+                                })
+                                
+                                logger.info(f"Successfully prepared well {well_name}")
+                                
+                            else:
+                                logger.warning(f"Could not parse well name: {well_name}")
+                        else:
+                            logger.warning(f"Could not parse well name: {well_name}")
+                    else:
+                        logger.warning(f"Unexpected well name format: {well_name}")
+                        
+                except Exception as e:
+                    logger.error(f"Failed to prepare well {well_name}: {e}")
+                    # Continue with other wells
+                    continue
+            
+            if not zarr_files_info:
+                raise Exception("No well canvases were successfully prepared for upload")
+            
+            # Upload all well canvases to a single dataset
+            logger.info(f"Uploading {len(zarr_files_info)} well canvases to single dataset...")
+            
+            # Add well information to acquisition settings
+            if acquisition_settings:
+                acquisition_settings["wells"] = well_info_list
+            
+            upload_result = await self.zarr_artifact_manager.upload_multiple_zarr_files_to_dataset(
                 microscope_service_id=self.service_id,
-                dataset_name=dataset_name,
-                zarr_zip_content=zarr_zip_content,
+                experiment_id=experiment_name,
+                zarr_files_info=zarr_files_info,
                 acquisition_settings=acquisition_settings,
-                description=description
+                description=description or f"Experiment {experiment_name} with {len(zarr_files_info)} well canvases"
             )
+            
+            logger.info(f"Successfully uploaded experiment '{experiment_name}' to single dataset")
             
             return {
                 "success": True,
-                "upload_result": upload_result,
-                "export_info": export_info
+                "experiment_name": experiment_name,
+                "dataset_name": upload_result["dataset_name"],
+                "uploaded_wells": well_info_list,
+                "total_wells": len(well_info_list),
+                "total_size_mb": upload_result["total_size_mb"],
+                "acquisition_settings": acquisition_settings,
+                "description": description or f"Experiment {experiment_name} with {len(well_info_list)} well canvases",
+                "upload_result": upload_result
             }
             
         except Exception as e:
-            logger.error(f"Error uploading zarr dataset: {e}")
+            logger.error(f"Error uploading experiment dataset: {e}")
             raise e
     
     @schema_function(skip_self=True)
-    async def list_microscope_datasets(self, context=None):
+    async def list_microscope_galleries(self, microscope_service_id: str = Field(..., description="Microscope service ID to list galleries for"), context=None):
         """
-        List all datasets uploaded by this microscope.
-        
-        Returns:
-            list: List of datasets in the microscope's gallery
+        List all galleries (collections) available for a given microscope's service ID.
+        This includes both standard microscope galleries and experiment-based galleries.
+        Returns a list of gallery info dicts.
         """
-        
         try:
-            # Check if zarr artifact manager is available
             if self.zarr_artifact_manager is None:
                 raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
+
+            # List all collections in the agent-lens workspace (top-level)
+            all_collections = await self.zarr_artifact_manager.navigate_collections(parent_id=None)
+            galleries = []
             
-            # Get gallery
-            gallery = await self.zarr_artifact_manager.create_or_get_microscope_gallery(self.service_id)
+            # Check if microscope service ID ends with a number
+            import re
+            number_match = re.search(r'-(\d+)$', microscope_service_id)
             
-            # List datasets in gallery
-            datasets = await self.zarr_artifact_manager._svc.list(gallery["id"])
-            
+            for coll in all_collections:
+                manifest = coll.get('manifest', {})
+                alias = coll.get('alias', '')
+                
+                # Standard gallery
+                if alias == f"agent-lens/microscope-gallery-{microscope_service_id}":
+                    galleries.append(coll)
+                # Experiment-based gallery (for microscope IDs ending with numbers)
+                elif number_match:
+                    gallery_number = number_match.group(1)
+                    if alias.startswith(f"agent-lens/{gallery_number}-"):
+                        # Check manifest for matching microscope_service_id
+                        if manifest.get('microscope_service_id') == microscope_service_id:
+                            galleries.append(coll)
+                # Fallback: check manifest field
+                elif manifest.get('microscope_service_id') == microscope_service_id:
+                    galleries.append(coll)
+                    
             return {
                 "success": True,
-                "datasets": datasets,
-                "gallery_info": {
-                    "id": gallery["id"], 
-                    "name": gallery.get("manifest", {}).get("name"),
-                    "microscope_service_id": self.service_id
-                }
+                "microscope_service_id": microscope_service_id,
+                "galleries": galleries,
+                "total": len(galleries)
             }
-            
         except Exception as e:
-            logger.error(f"Error listing microscope datasets: {e}")
+            logger.error(f"Error listing galleries: {e}")
+            raise e
+
+    @schema_function(skip_self=True)
+    async def list_gallery_datasets(self, gallery_id: str = Field(None, description="Gallery (collection) artifact ID, e.g. agent-lens/1-..."), microscope_service_id: str = Field(None, description="Microscope service ID (optional, used to find gallery if gallery_id not given)"), experiment_id: str = Field(None, description="Experiment ID (optional, used to find gallery if gallery_id not given)"), context=None):
+        """
+        List all datasets in a gallery (collection).
+        You can specify the gallery by its artifact ID, or provide microscope_service_id and/or experiment_id to find the gallery.
+        Returns a list of datasets in the gallery.
+        """
+        try:
+            if self.zarr_artifact_manager is None:
+                raise Exception("Zarr artifact manager not initialized. Check that AGENT_LENS_WORKSPACE_TOKEN is set.")
+
+            # Find the gallery if not given
+            gallery = None
+            if gallery_id:
+                # Try to read the gallery directly
+                gallery = await self.zarr_artifact_manager._svc.read(artifact_id=gallery_id)
+            else:
+                # Use microscope_service_id and/or experiment_id to find the gallery
+                if microscope_service_id is None and experiment_id is None:
+                    raise Exception("You must provide either gallery_id, microscope_service_id, or experiment_id.")
+                gallery = await self.zarr_artifact_manager.create_or_get_microscope_gallery(
+                    microscope_service_id or '', experiment_id=experiment_id)
+            # List datasets in the gallery
+            datasets = await self.zarr_artifact_manager._svc.list(gallery["id"])
+            return {
+                "success": True,
+                "gallery_id": gallery["id"],
+                "gallery_alias": gallery.get("alias"),
+                "gallery_name": gallery.get("manifest", {}).get("name"),
+                "datasets": datasets,
+                "total": len(datasets)
+            }
+        except Exception as e:
+            logger.error(f"Error listing gallery datasets: {e}")
             raise e
 
     def get_microscope_configuration_schema(self, config: GetMicroscopeConfigurationInput, context=None):
@@ -3121,7 +3237,7 @@ class Microscope:
                                        experiment_name: Optional[str] = Field(None, description="Name of the experiment to use. If None, uses active experiment or 'default' as fallback"),
                                        wells_to_scan: List[str] = Field(default_factory=lambda: ['A1'], description="List of wells to scan (e.g., ['A1', 'B2', 'C3'])"),
                                        wellplate_type: str = Field('96', description="Well plate type ('6', '12', '24', '96', '384')"),
-                                       well_padding_mm: float = Field(2.0, description="Padding around well in mm"),
+                                       well_padding_mm: float = Field(1.0, description="Padding around well in mm"),
                                        context=None):
         """
         Perform a normal scan with live stitching to OME-Zarr canvas using well-based approach.
@@ -3205,144 +3321,6 @@ class Microscope:
             self.scanning_in_progress = False
             logger.info("Scanning completed, video buffering auto-start is now re-enabled")
     
-    @schema_function(skip_self=True)
-    def get_stitched_region(self, start_x_mm: float = Field(..., description="Starting X position in millimeters (top-left corner)"),
-                           start_y_mm: float = Field(..., description="Starting Y position in millimeters (top-left corner)"),
-                           width_mm: float = Field(5.0, description="Width of region in millimeters"),
-                           height_mm: float = Field(5.0, description="Height of region in millimeters"),
-                           scale_level: int = Field(0, description="Scale level (0=full resolution, 1=1/4, 2=1/16, etc)"),
-                           channel_name: str = Field('BF LED matrix full', description="Name of channel to retrieve"),
-                           timepoint: int = Field(0, description="Timepoint index to retrieve (default 0)"),
-                           output_format: str = Field('base64', description="Output format: 'base64' or 'array'"),
-                           context=None):
-        """
-        Get a region from the stitched canvas.
-        
-        This function retrieves a rectangular region from the stitched microscope image canvas.
-        The region is specified by its starting position (top-left corner) and dimensions in millimeters.
-        
-        Args:
-            start_x_mm: X coordinate of region starting position (top-left) in millimeters
-            start_y_mm: Y coordinate of region starting position (top-left) in millimeters
-            width_mm: Width of the region in millimeters
-            height_mm: Height of the region in millimeters
-            scale_level: Pyramid level to retrieve (0=highest resolution)
-            channel_name: Name of the channel to retrieve
-            output_format: Format for the output ('base64' for compressed image, 'array' for numpy array)
-            
-        Returns:
-            dict: Retrieved image data with metadata, or None if zarr canvas is not initialized
-        """
-        try:
-            # Check if experiment manager is initialized
-            if not hasattr(self.squidController, 'experiment_manager') or self.squidController.experiment_manager is None:
-                logger.warning("Experiment manager not initialized, returning None")
-                return None
-            
-            # Check if there's an active experiment
-            if self.squidController.experiment_manager.current_experiment is None:
-                logger.warning("No active experiment, returning None")
-                return None
-            
-            # Calculate center coordinates for the underlying function
-            center_x_mm = start_x_mm + width_mm / 2
-            center_y_mm = start_y_mm + height_mm / 2
-            
-            # Determine which well this position belongs to
-            well_info = self.squidController.get_well_from_position(
-                wellplate_type='96',  # Default to 96-well plate
-                x_pos_mm=center_x_mm,
-                y_pos_mm=center_y_mm
-            )
-            
-            if well_info['position_status'] != 'in_well':
-                logger.warning(f"Position ({center_x_mm:.2f}, {center_y_mm:.2f}) is not inside a well: {well_info['position_status']}")
-                return None
-            
-            # Check if the well canvas exists before trying to get the region
-            if not self.squidController._check_well_canvas_exists(
-                well_info['row'], well_info['column'], '96'
-            ):
-                logger.warning(f"Well canvas for {well_info['row']}{well_info['column']} does not exist on disk")
-                return None
-            
-            # Get the region from the specific well canvas
-            try:
-                region = self.squidController.get_well_stitched_region(
-                    well_row=well_info['row'],
-                    well_column=well_info['column'],
-                    wellplate_type='96',  # Default to 96-well plate
-                    center_x_mm=0.0,  # Use well-relative coordinates (0,0 = well center)
-                    center_y_mm=0.0,
-                    width_mm=width_mm,
-                    height_mm=height_mm,
-                    scale_level=scale_level,
-                    channel_name=channel_name,
-                    timepoint=timepoint
-                )
-            except RuntimeError as e:
-                if "Zarr canvas not initialized" in str(e):
-                    logger.warning("Zarr canvas not initialized, returning None")
-                    return None
-                else:
-                    raise e
-            
-            if region is None:
-                logger.warning(f"No data available for region at well {well_info['row']}{well_info['column']}")
-                return None
-            
-            if output_format == 'base64':
-                # Convert to base64 encoded PNG
-                import base64
-                from PIL import Image
-                import io
-                
-                # Ensure data is uint8
-                if region.dtype != np.uint8:
-                    region = (region / region.max() * 255).astype(np.uint8) if region.max() > 0 else region.astype(np.uint8)
-                
-                # Convert to PIL Image and encode
-                img = Image.fromarray(region)
-                buffer = io.BytesIO()
-                img.save(buffer, format='PNG')
-                img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-                
-                return {
-                    "success": True,
-                    "data": img_base64,
-                    "format": "png_base64",
-                    "shape": region.shape,
-                    "dtype": str(region.dtype),
-                    "region": {
-                        "start_x_mm": start_x_mm,
-                        "start_y_mm": start_y_mm,
-                        "width_mm": width_mm,
-                        "height_mm": height_mm,
-                        "scale_level": scale_level,
-                        "channel": channel_name
-                    }
-                }
-            else:
-                # Return as array (will be serialized by Hypha)
-                return {
-                    "success": True,
-                    "data": region.tolist(),  # Convert to list for JSON serialization
-                    "format": "array",
-                    "shape": region.shape,
-                    "dtype": str(region.dtype),
-                    "region": {
-                        "start_x_mm": start_x_mm,
-                        "start_y_mm": start_y_mm,
-                        "width_mm": width_mm,
-                        "height_mm": height_mm,
-                        "scale_level": scale_level,
-                        "channel": channel_name
-                    }
-                }
-                
-        except Exception as e:
-            logger.error(f"Failed to get stitched region: {e}")
-            raise e
     
     @schema_function(skip_self=True)
     def reset_stitching_canvas(self, context=None):
@@ -3394,7 +3372,7 @@ class Microscope:
                                       do_contrast_autofocus: bool = Field(False, description="Whether to perform contrast-based autofocus"),
                                       do_reflection_af: bool = Field(False, description="Whether to perform reflection-based autofocus"),
                                       experiment_name: Optional[str] = Field(None, description="Name of the experiment to use. If None, uses active experiment or 'default' as fallback"),
-                                      well_padding_mm: float = Field(2.0, description="Padding around each well in mm"),
+                                      well_padding_mm: float = Field(1.0, description="Padding around each well in mm"),
                                       context=None):
         """
         Perform a quick scan with live stitching to OME-Zarr canvas - brightfield only.
@@ -3559,7 +3537,7 @@ class Microscope:
                            scale_level: int = Field(0, description="Scale level (0=full resolution, 1=1/4, 2=1/16, etc)"),
                            channel_name: str = Field('BF LED matrix full', description="Name of channel to retrieve"),
                            timepoint: int = Field(0, description="Timepoint index to retrieve (default 0)"),
-                           well_padding_mm: float = Field(2.0, description="Padding around wells in mm"),
+                           well_padding_mm: float = Field(1.0, description="Padding around wells in mm"),
                            output_format: str = Field('base64', description="Output format: 'base64' or 'array'"),
                            context=None):
         """

@@ -625,7 +625,7 @@ class SquidController:
         
         logger.info(f'Moved to well {row}{column} center for autofocus')
 
-    def get_well_from_position(self, wellplate_type='96', x_pos_mm=None, y_pos_mm=None, well_padding_mm=2.0):
+    def get_well_from_position(self, wellplate_type='96', x_pos_mm=None, y_pos_mm=None, well_padding_mm=1.0):
         """
         Calculate which well position corresponds to the given X,Y coordinates, considering canvas padding.
         This is used for stitching where we want to accept positions within the padded canvas area.
@@ -1091,7 +1091,7 @@ class SquidController:
                                         illumination_settings=None, do_contrast_autofocus=False, 
                                         do_reflection_af=False, action_ID='normal_scan_stitching',
                                         timepoint=0, experiment_name=None, wells_to_scan=None,
-                                        wellplate_type='96', well_padding_mm=2.0):
+                                        wellplate_type='96', well_padding_mm=1.0):
         """
         Normal scan with live stitching to well-specific OME-Zarr canvases.
         Scans specified wells one by one, creating individual zarr canvases for each well.
@@ -1576,7 +1576,7 @@ class SquidController:
 
     # Experiment management methods
     def create_experiment(self, experiment_name: str, wellplate_type: str = '96', 
-                         well_padding_mm: float = 2.0, initialize_all_wells: bool = False):
+                         well_padding_mm: float = 1.0, initialize_all_wells: bool = False):
         """
         Create a new experiment.
         
@@ -1625,7 +1625,7 @@ class SquidController:
                                       fps_target=10, action_ID='quick_scan_stitching',
                                       n_stripes=4, stripe_width_mm=4.0, dy_mm=0.9, velocity_scan_mm_per_s=7.0,
                                       do_contrast_autofocus=False, do_reflection_af=False, timepoint=0, 
-                                      experiment_name=None, well_padding_mm=2.0):
+                                      experiment_name=None, well_padding_mm=1.0):
         """
         Quick scan with live stitching to well-specific OME-Zarr canvases - brightfield only.
         Scans entire well plate, creating individual zarr canvases for each well.
@@ -1925,7 +1925,7 @@ class SquidController:
     async def _scan_well_with_continuous_acquisition(self, well_name, n_stripes, stripe_start_x, stripe_end_x, 
                                                    stripe_start_y, dy_mm, intensity, frame_interval, 
                                                    zarr_channel_idx, limit_y_neg, limit_y_pos, timepoint=0,
-                                                   wellplate_type='96', well_padding_mm=2.0, channel_name='BF LED matrix full'):
+                                                   wellplate_type='96', well_padding_mm=1.0, channel_name='BF LED matrix full'):
         """Scan all stripes within a well with continuous frame acquisition."""
         total_frames = 0
         
@@ -2057,7 +2057,7 @@ class SquidController:
         return frames_acquired
     
     async def _acquire_and_process_frame(self, zarr_channel_idx, timepoint=0, 
-                                       wellplate_type='96', well_padding_mm=2.0, channel_name='BF LED matrix full'):
+                                       wellplate_type='96', well_padding_mm=1.0, channel_name='BF LED matrix full'):
         """Acquire a single frame and add it to the stitching queue for quick scan."""
         # Get position before frame acquisition
         pos_before_x_mm, pos_before_y_mm, pos_before_z_mm, _ = self.navigationController.update_pos(self.microcontroller)
@@ -2189,7 +2189,7 @@ class SquidController:
     
     async def _add_image_to_zarr_quick_well_based(self, image: np.ndarray, x_mm: float, y_mm: float,
                                                  zarr_channel_idx: int, timepoint: int = 0, 
-                                                 wellplate_type='96', well_padding_mm=2.0, channel_name='BF LED matrix full'):
+                                                 wellplate_type='96', well_padding_mm=1.0, channel_name='BF LED matrix full'):
         """
         Add image to well canvas stitching queue for quick scan - only updates scales 1-5 (skips scale 0).
         The input image should already be at scale1 resolution (1/4 of original).
@@ -2521,7 +2521,7 @@ class SquidController:
         return self.zarr_canvas
 
     def get_well_canvas(self, well_row: str, well_column: int, wellplate_type: str = '96', 
-                       padding_mm: float = 2.0):
+                       padding_mm: float = 1.0):
         """
         Get or create a well-specific canvas.
         
@@ -2560,7 +2560,7 @@ class SquidController:
         return self.well_canvases[well_id]
     
     def create_well_canvas(self, well_row: str, well_column: int, wellplate_type: str = '96',
-                          padding_mm: float = 2.0):
+                          padding_mm: float = 1.0):
         """
         Create a new well-specific canvas (replaces existing if present).
         
@@ -2710,7 +2710,7 @@ class SquidController:
 
     async def _add_image_to_zarr_normal_well_based(self, image: np.ndarray, x_mm: float, y_mm: float,
                                                  zarr_channel_idx: int, timepoint: int = 0, 
-                                                 wellplate_type='96', well_padding_mm=2.0, channel_name='BF LED matrix full'):
+                                                 wellplate_type='96', well_padding_mm=1.0, channel_name='BF LED matrix full'):
         """
         Add image to well canvas stitching queue for normal scan - updates all scales (0-5).
         Uses the same routing logic as quick scan but with full scale processing.

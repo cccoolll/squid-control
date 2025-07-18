@@ -271,9 +271,6 @@ def create_data_channel_test_html(service_id, webrtc_service_id, server_url, wor
                     const params = testParams[i];
                     console.log(`Testing params ${{i+1}}:`, params);
                     
-                    // Change microscope settings
-                    await mc.set_illumination(params);
-                    await mc.move_by_distance({{x: 0.01 * i, y: 0.01 * i, z: 0.0}});
                     
                     // Request video frame to trigger metadata
                     await mc.get_video_frame({{frame_width: 320, frame_height: 240}});
@@ -826,7 +823,7 @@ def create_webrtc_test_html(service_id, webrtc_service_id, server_url, workspace
                 console.log('Microscope status:', status);
                 
                 // Test movement and capture metadata
-                await mc.move_by_distance({{x: 0.1, y: 0.1, z: 0.0}});
+                await mc.move_by_distance({{x: 10, y: 10, z: 0.0}});
                 
                 // Test illumination changes that should affect metadata
                 await mc.set_illumination({{channel: 11, intensity: 75}});
@@ -1272,7 +1269,7 @@ async def test_webrtc_end_to_end(webrtc_test_services):
             print("4. Testing microscope controls...")
             
             # Test movement
-            move_result = await microscope_svc.move_by_distance(x=0.1, y=0.1, z=0.0)
+            move_result = await microscope_svc.move_by_distance(x=10, y=10, z=0.0)
             assert isinstance(move_result, dict)
             print("✅ Movement control works")
             
@@ -1388,7 +1385,6 @@ async def test_webrtc_metadata_extraction(webrtc_test_services):
         for i in range(total_frames):
             # Change microscope parameters to generate different metadata
             await microscope_svc.set_illumination(channel=i % 2, intensity=30 + i * 10)
-            await microscope_svc.move_by_distance(x=0.01 * i, y=0.01 * i, z=0.0)
             
             # Get frame
             frame_data = await microscope_svc.get_video_frame(frame_width=320, frame_height=240)

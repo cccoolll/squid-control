@@ -271,18 +271,33 @@ class SquidArtifactManager:
             print(traceback.format_exc())
             return []
 
-    async def create_or_get_microscope_gallery(self, microscope_service_id):
+    async def create_or_get_microscope_gallery(self, microscope_service_id, experiment_id=None):
         """
         Create or get a gallery for a specific microscope in the agent-lens workspace.
         
         Args:
             microscope_service_id (str): The hypha service ID of the microscope
+            experiment_id (str, optional): The experiment ID for gallery naming. Required if microscope_service_id ends with a number
             
         Returns:
             dict: The gallery artifact information
         """
         workspace = "agent-lens"
-        gallery_alias = f"microscope-gallery-{microscope_service_id}"
+        
+        # Determine gallery naming based on microscope service ID
+        # Check if microscope service ID ends with a number (e.g., '-1', '-2', etc.)
+        import re
+        number_match = re.search(r'-(\d+)$', microscope_service_id)
+        
+        if number_match:
+            # Special case: microscope ID ends with a number, use experiment-based gallery
+            if experiment_id is None:
+                raise ValueError("experiment_id is required when microscope_service_id ends with a number")
+            gallery_number = number_match.group(1)
+            gallery_alias = f"{gallery_number}-{experiment_id}"
+        else:
+            # Standard case: use microscope-based gallery
+            gallery_alias = f"microscope-gallery-{microscope_service_id}"
         
         try:
             # Try to get existing gallery
@@ -298,12 +313,24 @@ class SquidArtifactManager:
                 "artifact with id" in error_str):
                 # Gallery doesn't exist, create it
                 print(f"Creating new gallery: {gallery_alias}")
+                
+                # Determine gallery name and description based on type
+                if number_match:
+                    gallery_name = f"Experiment Gallery - {experiment_id}"
+                    gallery_description = f"Dataset collection for experiment {experiment_id}"
+                    gallery_type = "experiment-gallery"
+                else:
+                    gallery_name = f"Microscope Gallery - {microscope_service_id}"
+                    gallery_description = f"Dataset collection for microscope service {microscope_service_id}"
+                    gallery_type = "microscope-gallery"
+                
                 gallery_manifest = {
-                    "name": f"Microscope Gallery - {microscope_service_id}",
-                    "description": f"Dataset collection for microscope service {microscope_service_id}",
+                    "name": gallery_name,
+                    "description": gallery_description,
                     "microscope_service_id": microscope_service_id,
+                    "experiment_id": experiment_id,
                     "created_by": "squid-control-system",
-                    "type": "microscope-gallery"
+                    "type": gallery_type
                 }
                 
                 gallery_config = {
@@ -315,6 +342,7 @@ class SquidArtifactManager:
                             "description": {"type": "string"},
                             "record_type": {"type": "string", "enum": ["zarr-dataset"]},
                             "microscope_service_id": {"type": "string"},
+                            "experiment_id": {"type": "string"},
                             "acquisition_settings": {"type": "object"},
                             "timestamp": {"type": "string"}
                         },
@@ -332,6 +360,135 @@ class SquidArtifactManager:
                 return gallery
             else:
                 raise e
+
+    async def upload_multiple_zarr_files_to_dataset(self, microscope_service_id, experiment_id, 
+                                                   zarr_files_info, acquisition_settings=None, 
+                                                   description=None):
+        """
+        Upload multiple zarr files to a single dataset within a gallery.
+        
+        Args:
+            microscope_service_id (str): The hypha service ID of the microscope
+            experiment_id (str): The experiment ID for dataset naming
+            zarr_files_info (list): List of dicts with 'name', 'content', 'size_mb' for each file
+            acquisition_settings (dict, optional): Acquisition settings metadata
+            description (str, optional): Description of the dataset
+            
+        Returns:
+            dict: Information about the uploaded dataset
+        """
+        workspace = "agent-lens"
+        
+        # Generate dataset name with timestamp
+        import time
+        timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        dataset_name = f"{experiment_id}-{timestamp}"
+        
+        # Validate all ZIP files in parallel to avoid blocking asyncio loop
+        total_size_mb = 0
+        validation_tasks = []
+        for file_info in zarr_files_info:
+            validation_tasks.append(self._validate_zarr_zip_content(file_info['content']))
+            total_size_mb += file_info['size_mb']
+        
+        # Run all validations in parallel
+        if validation_tasks:
+            await asyncio.gather(*validation_tasks)
+        
+        # Run detailed ZIP integrity test on first file as representative
+        if zarr_files_info:
+            first_file = zarr_files_info[0]
+            zip_test_results = await self.test_zip_file_integrity(
+                first_file['content'], f"Upload: {dataset_name} (first file)"
+            )
+            if not zip_test_results["valid"]:
+                raise ValueError(f"ZIP file integrity test failed: {', '.join(zip_test_results['issues'])}")
+        
+        # Ensure gallery exists
+        gallery = await self.create_or_get_microscope_gallery(microscope_service_id, experiment_id)
+        
+        # Check name availability
+        name_check = await self.check_dataset_name_availability(microscope_service_id, dataset_name)
+        if not name_check["available"]:
+            raise ValueError(f"Dataset name '{dataset_name}' is not available: {name_check['reason']}")
+        
+        # Create dataset manifest
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        
+        dataset_manifest = {
+            "name": dataset_name,
+            "description": description or f"Zarr dataset from microscope {microscope_service_id}",
+            "record_type": "zarr-dataset",
+            "microscope_service_id": microscope_service_id,
+            "experiment_id": experiment_id,
+            "timestamp": timestamp,
+            "acquisition_settings": acquisition_settings or {},
+            "file_format": "ome-zarr",
+            "upload_method": "squid-control-api",
+            "total_size_mb": total_size_mb,
+            "file_count": len(zarr_files_info),
+            "zip_format": "ZIP64-compatible"
+        }
+        
+        # Create dataset in staging mode
+        dataset_alias = f"{workspace}/{dataset_name}"
+        dataset = await self._svc.create(
+            parent_id=gallery["id"],
+            alias=dataset_alias,
+            manifest=dataset_manifest,
+            stage=True
+        )
+        
+        uploaded_files = []
+        
+        try:
+            # Upload each zarr zip file with retry logic
+            for i, file_info in enumerate(zarr_files_info):
+                file_name = file_info['name']
+                file_content = file_info['content']
+                file_size_mb = file_info['size_mb']
+                
+                print(f"Uploading file {i+1}/{len(zarr_files_info)}: {file_name} ({file_size_mb:.2f} MB)")
+                
+                # Upload zarr zip file with retry logic
+                await self._upload_large_zip_with_retry(
+                    dataset["id"], 
+                    file_content, 
+                    max_retries=3,
+                    file_path=f"{file_name}.zip"
+                )
+                
+                uploaded_files.append({
+                    "name": file_name,
+                    "size_mb": file_size_mb,
+                    "file_index": i+1
+                })
+                
+                print(f"Successfully uploaded file: {file_name}")
+            
+            # Commit the dataset only after all files are uploaded
+            await self._svc.commit(dataset["id"])
+            
+            print(f"Successfully uploaded zarr dataset: {dataset_name} ({total_size_mb:.2f} MB, {len(uploaded_files)} files)")
+            return {
+                "success": True,
+                "dataset_id": dataset["id"],
+                "dataset_name": dataset_name,
+                "gallery_id": gallery["id"],
+                "experiment_id": experiment_id,
+                "upload_timestamp": timestamp,
+                "total_size_mb": total_size_mb,
+                "uploaded_files": uploaded_files,
+                "file_count": len(uploaded_files)
+            }
+            
+        except Exception as e:
+            # If upload fails, try to clean up the staged dataset
+            try:
+                await self._svc.discard(dataset["id"])
+            except:
+                pass
+            raise e
     
     async def check_dataset_name_availability(self, microscope_service_id, dataset_name):
         """
@@ -403,21 +560,28 @@ class SquidArtifactManager:
                 raise e
     
     async def upload_zarr_dataset(self, microscope_service_id, dataset_name, zarr_zip_content, 
-                                 acquisition_settings=None, description=None):
+                                 acquisition_settings=None, description=None, experiment_id=None):
         """
         Upload a zarr fileset as a zip file to the microscope's gallery.
         
         Args:
             microscope_service_id (str): The hypha service ID of the microscope
-            dataset_name (str): The name for the dataset
+            dataset_name (str): The name for the dataset (will be overridden if experiment_id is provided)
             zarr_zip_content (bytes): The zip file content containing the zarr fileset
             acquisition_settings (dict, optional): Acquisition settings metadata
             description (str, optional): Description of the dataset
+            experiment_id (str, optional): The experiment ID for dataset naming. If provided, dataset_name will be overridden with '{experiment_id}-{date and time}'
             
         Returns:
             dict: Information about the uploaded dataset
         """
         workspace = "agent-lens"
+        
+        # Generate dataset name if experiment_id is provided
+        if experiment_id is not None:
+            import time
+            timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+            dataset_name = f"{experiment_id}-{timestamp}"
         
         # Validate ZIP file before upload
         await self._validate_zarr_zip_content(zarr_zip_content)
@@ -428,7 +592,7 @@ class SquidArtifactManager:
             raise ValueError(f"ZIP file integrity test failed: {', '.join(zip_test_results['issues'])}")
         
         # Ensure gallery exists
-        gallery = await self.create_or_get_microscope_gallery(microscope_service_id)
+        gallery = await self.create_or_get_microscope_gallery(microscope_service_id, experiment_id)
         
         # Check name availability
         name_check = await self.check_dataset_name_availability(microscope_service_id, dataset_name)
@@ -445,6 +609,7 @@ class SquidArtifactManager:
             "description": description or f"Zarr dataset from microscope {microscope_service_id}",
             "record_type": "zarr-dataset",
             "microscope_service_id": microscope_service_id,
+            "experiment_id": experiment_id,
             "timestamp": timestamp,
             "acquisition_settings": acquisition_settings or {},
             "file_format": "ome-zarr",
@@ -475,6 +640,7 @@ class SquidArtifactManager:
                 "dataset_id": dataset["id"],
                 "dataset_name": dataset_name,
                 "gallery_id": gallery["id"],
+                "experiment_id": experiment_id,
                 "upload_timestamp": timestamp,
                 "zip_size_mb": zip_size_mb
             }
@@ -497,11 +663,12 @@ class SquidArtifactManager:
         Raises:
             ValueError: If ZIP file is invalid or corrupted
         """
-        try:
+        # Move CPU-intensive ZIP validation to thread pool to avoid blocking asyncio loop
+        def _validate_zip_sync(zip_content: bytes) -> None:
             import zipfile
             import io
             
-            zip_buffer = io.BytesIO(zarr_zip_content)
+            zip_buffer = io.BytesIO(zip_content)
             with zipfile.ZipFile(zip_buffer, 'r') as zip_file:
                 # Test the ZIP file structure
                 file_list = zip_file.namelist()
@@ -522,14 +689,16 @@ class SquidArtifactManager:
                     except Exception as e:
                         raise ValueError(f"Cannot read file {file_list[i]} from ZIP: {e}")
                 
-                print(f"ZIP validation passed: {len(file_list)} files, {len(zarr_zip_content) / (1024*1024):.2f} MB")
-                
+                print(f"ZIP validation passed: {len(file_list)} files, {len(zip_content) / (1024*1024):.2f} MB")
+        
+        try:
+            await asyncio.to_thread(_validate_zip_sync, zarr_zip_content)
         except zipfile.BadZipFile as e:
             raise ValueError(f"Invalid ZIP file format: {e}")
         except Exception as e:
             raise ValueError(f"ZIP file validation failed: {e}")
 
-    async def _upload_large_zip_with_retry(self, dataset_id: str, zarr_zip_content: bytes, max_retries: int = 3) -> None:
+    async def _upload_large_zip_with_retry(self, dataset_id: str, zarr_zip_content: bytes, max_retries: int = 3, file_path: str = "zarr_dataset.zip") -> None:
         """
         Upload large ZIP file with retry logic and appropriate timeouts.
         
@@ -537,6 +706,7 @@ class SquidArtifactManager:
             dataset_id (str): The dataset ID
             zarr_zip_content (bytes): The ZIP file content
             max_retries (int): Maximum number of retry attempts
+            file_path (str): The file path within the dataset
             
         Raises:
             Exception: If upload fails after all retries
@@ -548,12 +718,12 @@ class SquidArtifactManager:
         
         for attempt in range(max_retries):
             try:
-                print(f"Upload attempt {attempt + 1}/{max_retries} for {zip_size_mb:.2f} MB ZIP file (timeout: {timeout_seconds}s)")
+                print(f"Upload attempt {attempt + 1}/{max_retries} for {zip_size_mb:.2f} MB ZIP file to {file_path} (timeout: {timeout_seconds}s)")
                 
                 # Get upload URL
                 put_url = await self._svc.put_file(
                     dataset_id, 
-                    file_path="zarr_dataset.zip", 
+                    file_path=file_path, 
                     download_weight=1.0
                 )
                 
@@ -609,137 +779,141 @@ class SquidArtifactManager:
         Returns:
             dict: Detailed test results including file count, size, and any issues
         """
-        import zipfile
-        import io
-        
-        results = {
-            "valid": False,
-            "size_mb": len(zip_content) / (1024 * 1024),
-            "file_count": 0,
-            "zip64_required": False,
-            "zip64_enabled": False,
-            "compression_method": None,
-            "issues": [],
-            "sample_files": []
-        }
-        
-        try:
-            zip_buffer = io.BytesIO(zip_content)
+        # Move CPU-intensive ZIP integrity testing to thread pool to avoid blocking asyncio loop
+        def _test_zip_integrity_sync(zip_content: bytes, description: str) -> dict:
+            import zipfile
+            import io
             
-            # Test basic ZIP file opening
-            with zipfile.ZipFile(zip_buffer, 'r') as zip_file:
-                file_list = zip_file.namelist()
-                results["file_count"] = len(file_list)
+            results = {
+                "valid": False,
+                "size_mb": len(zip_content) / (1024 * 1024),
+                "file_count": 0,
+                "zip64_required": False,
+                "zip64_enabled": False,
+                "compression_method": None,
+                "issues": [],
+                "sample_files": []
+            }
+            
+            try:
+                zip_buffer = io.BytesIO(zip_content)
                 
-                if not file_list:
-                    results["issues"].append("ZIP file is empty")
-                    return results
-                
-                # Check if ZIP64 is required based on size and file count
-                results["zip64_required"] = results["size_mb"] > 200 or results["file_count"] > 65535
-                
-                # Test central directory access
-                try:
-                    info_list = zip_file.infolist()
+                # Test basic ZIP file opening
+                with zipfile.ZipFile(zip_buffer, 'r') as zip_file:
+                    file_list = zip_file.namelist()
+                    results["file_count"] = len(file_list)
                     
-                    # Check for ZIP64 format indicators
-                    zip64_indicators = []
+                    if not file_list:
+                        results["issues"].append("ZIP file is empty")
+                        return results
                     
-                    # Check for large individual files (>= 4GB)
-                    large_files = any(info.file_size >= 0xFFFFFFFF or info.compress_size >= 0xFFFFFFFF for info in info_list)
-                    if large_files:
-                        zip64_indicators.append("large_files")
+                    # Check if ZIP64 is required based on size and file count
+                    results["zip64_required"] = results["size_mb"] > 200 or results["file_count"] > 65535
                     
-                    # Check total archive size vs ZIP32 limits (>= 4GB)
-                    if results["size_mb"] * 1024 * 1024 >= 0xFFFFFFFF:
-                        zip64_indicators.append("archive_size")
-                    
-                    # Check file count vs ZIP32 limits (>= 65535 files)
-                    if results["file_count"] >= 0xFFFF:
-                        zip64_indicators.append("file_count")
-                    
-                    # For large files, check if ZIP64 format is actually being used
-                    # The key insight: if ZIP64 is required but the file can be read successfully,
-                    # then ZIP64 format is likely being used correctly
-                    if results["zip64_required"]:
-                        # Try to access the central directory - if this succeeds for large files,
-                        # it means ZIP64 format is working
-                        try:
-                            # Test reading a few files to verify ZIP64 access works
-                            test_files = min(3, len(info_list))
-                            for i in range(test_files):
-                                if info_list[i].file_size > 0:
-                                    with zip_file.open(info_list[i]) as f:
-                                        f.read(1)  # Read just one byte to test access
-                            
-                            # If we can successfully read files from a large ZIP, ZIP64 is working
-                            results["zip64_enabled"] = True
-                            zip64_indicators.append("successful_access")
-                            
-                        except Exception as e:
-                            # If we can't read files from a large ZIP, ZIP64 might not be working
-                            results["zip64_enabled"] = False
-                            results["issues"].append(f"ZIP64 access test failed: {e}")
-                    else:
-                        # For smaller files, ZIP64 is not required
-                        results["zip64_enabled"] = False
-                    
-                    results["zip64_indicators"] = zip64_indicators
-                    
-                    # Get compression method from first file
-                    if info_list:
-                        results["compression_method"] = info_list[0].compress_type
-                        
-                except Exception as e:
-                    results["issues"].append(f"Cannot access central directory: {e}")
-                    return results
-                
-                # Test reading sample files
-                sample_count = min(5, len(file_list))
-                for i in range(sample_count):
+                    # Test central directory access
                     try:
-                        file_info = zip_file.getinfo(file_list[i])
-                        with zip_file.open(file_list[i]) as f:
-                            data = f.read(1024)  # Read first 1KB
+                        info_list = zip_file.infolist()
+                        
+                        # Check for ZIP64 format indicators
+                        zip64_indicators = []
+                        
+                        # Check for large individual files (>= 4GB)
+                        large_files = any(info.file_size >= 0xFFFFFFFF or info.compress_size >= 0xFFFFFFFF for info in info_list)
+                        if large_files:
+                            zip64_indicators.append("large_files")
+                        
+                        # Check total archive size vs ZIP32 limits (>= 4GB)
+                        if results["size_mb"] * 1024 * 1024 >= 0xFFFFFFFF:
+                            zip64_indicators.append("archive_size")
+                        
+                        # Check file count vs ZIP32 limits (>= 65535 files)
+                        if results["file_count"] >= 0xFFFF:
+                            zip64_indicators.append("file_count")
+                        
+                        # For large files, check if ZIP64 format is actually being used
+                        # The key insight: if ZIP64 is required but the file can be read successfully,
+                        # then ZIP64 format is likely being used correctly
+                        if results["zip64_required"]:
+                            # Try to access the central directory - if this succeeds for large files,
+                            # it means ZIP64 format is working
+                            try:
+                                # Test reading a few files to verify ZIP64 access works
+                                test_files = min(3, len(info_list))
+                                for i in range(test_files):
+                                    if info_list[i].file_size > 0:
+                                        with zip_file.open(info_list[i]) as f:
+                                            f.read(1)  # Read just one byte to test access
+                                
+                                # If we can successfully read files from a large ZIP, ZIP64 is working
+                                results["zip64_enabled"] = True
+                                zip64_indicators.append("successful_access")
+                                
+                            except Exception as e:
+                                # If we can't read files from a large ZIP, ZIP64 might not be working
+                                results["zip64_enabled"] = False
+                                results["issues"].append(f"ZIP64 access test failed: {e}")
+                        else:
+                            # For smaller files, ZIP64 is not required
+                            results["zip64_enabled"] = False
+                        
+                        results["zip64_indicators"] = zip64_indicators
+                        
+                        # Get compression method from first file
+                        if info_list:
+                            results["compression_method"] = info_list[0].compress_type
+                            
+                    except Exception as e:
+                        results["issues"].append(f"Cannot access central directory: {e}")
+                        return results
+                    
+                    # Test reading sample files
+                    sample_count = min(5, len(file_list))
+                    for i in range(sample_count):
+                        try:
+                            file_info = zip_file.getinfo(file_list[i])
+                            with zip_file.open(file_list[i]) as f:
+                                data = f.read(1024)  # Read first 1KB
+                                results["sample_files"].append({
+                                    "name": file_list[i],
+                                    "size": file_info.file_size,
+                                    "compressed_size": file_info.compress_size,
+                                    "readable": True
+                                })
+                        except Exception as e:
+                            results["issues"].append(f"Cannot read file {file_list[i]}: {e}")
                             results["sample_files"].append({
                                 "name": file_list[i],
-                                "size": file_info.file_size,
-                                "compressed_size": file_info.compress_size,
-                                "readable": True
+                                "readable": False,
+                                "error": str(e)
                             })
-                    except Exception as e:
-                        results["issues"].append(f"Cannot read file {file_list[i]}: {e}")
-                        results["sample_files"].append({
-                            "name": file_list[i],
-                            "readable": False,
-                            "error": str(e)
-                        })
-                
-                # Final validation: if ZIP64 is required but not enabled, that's an issue
-                if results["zip64_required"] and not results["zip64_enabled"]:
-                    results["issues"].append("Large file requires ZIP64 format but ZIP64 is not enabled")
-                
-                # Mark as valid if no issues found
-                results["valid"] = len(results["issues"]) == 0
-                
-        except zipfile.BadZipFile as e:
-            results["issues"].append(f"Invalid ZIP file format: {e}")
-        except Exception as e:
-            results["issues"].append(f"ZIP file test failed: {e}")
+                    
+                    # Final validation: if ZIP64 is required but not enabled, that's an issue
+                    if results["zip64_required"] and not results["zip64_enabled"]:
+                        results["issues"].append("Large file requires ZIP64 format but ZIP64 is not enabled")
+                    
+                    # Mark as valid if no issues found
+                    results["valid"] = len(results["issues"]) == 0
+                    
+            except zipfile.BadZipFile as e:
+                results["issues"].append(f"Invalid ZIP file format: {e}")
+            except Exception as e:
+                results["issues"].append(f"ZIP file test failed: {e}")
+            
+            # Log results
+            status = "VALID" if results["valid"] else "INVALID"
+            print(f"ZIP Test [{description}]: {status}")
+            print(f"  Size: {results['size_mb']:.2f} MB, Files: {results['file_count']}")
+            print(f"  ZIP64 Required: {results['zip64_required']}, Enabled: {results['zip64_enabled']}")
+            if "zip64_indicators" in results and results["zip64_indicators"]:
+                print(f"  ZIP64 Indicators: {', '.join(results['zip64_indicators'])}")
+            print(f"  Compression: {results['compression_method']}")
+            
+            if results["issues"]:
+                print(f"  Issues: {', '.join(results['issues'])}")
+            
+            return results
         
-        # Log results
-        status = "VALID" if results["valid"] else "INVALID"
-        print(f"ZIP Test [{description}]: {status}")
-        print(f"  Size: {results['size_mb']:.2f} MB, Files: {results['file_count']}")
-        print(f"  ZIP64 Required: {results['zip64_required']}, Enabled: {results['zip64_enabled']}")
-        if "zip64_indicators" in results and results["zip64_indicators"]:
-            print(f"  ZIP64 Indicators: {', '.join(results['zip64_indicators'])}")
-        print(f"  Compression: {results['compression_method']}")
-        
-        if results["issues"]:
-            print(f"  Issues: {', '.join(results['issues'])}")
-        
-        return results
+        return await asyncio.to_thread(_test_zip_integrity_sync, zip_content, description)
 
 # Constants
 SERVER_URL = "https://hypha.aicell.io"
