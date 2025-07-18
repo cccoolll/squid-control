@@ -2965,11 +2965,7 @@ class Microscope:
             if not experiment_info.get("well_canvases"):
                 raise Exception(f"No well canvases found in experiment '{experiment_name}'. Start a scanning operation first to create data.")
             
-            # Check total size feasibility
-            total_size_mb = experiment_info.get("total_size_mb", 0)
-            if total_size_mb > 1000:  # 1GB limit for total experiment size
-                raise Exception(f"Experiment too large for upload. Total size: {total_size_mb:.1f} MB")
-            
+
             logger.info(f"Uploading experiment '{experiment_name}' with {len(experiment_info['well_canvases'])} well canvases to single dataset")
             
             # Prepare acquisition settings if requested
