@@ -384,11 +384,16 @@ class SquidArtifactManager:
         timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
         dataset_name = f"{experiment_id}-{timestamp}"
         
-        # Validate all ZIP files before upload
+        # Validate all ZIP files in parallel to avoid blocking asyncio loop
         total_size_mb = 0
+        validation_tasks = []
         for file_info in zarr_files_info:
-            await self._validate_zarr_zip_content(file_info['content'])
+            validation_tasks.append(self._validate_zarr_zip_content(file_info['content']))
             total_size_mb += file_info['size_mb']
+        
+        # Run all validations in parallel
+        if validation_tasks:
+            await asyncio.gather(*validation_tasks)
         
         # Run detailed ZIP integrity test on first file as representative
         if zarr_files_info:
@@ -658,11 +663,12 @@ class SquidArtifactManager:
         Raises:
             ValueError: If ZIP file is invalid or corrupted
         """
-        try:
+        # Move CPU-intensive ZIP validation to thread pool to avoid blocking asyncio loop
+        def _validate_zip_sync(zip_content: bytes) -> None:
             import zipfile
             import io
             
-            zip_buffer = io.BytesIO(zarr_zip_content)
+            zip_buffer = io.BytesIO(zip_content)
             with zipfile.ZipFile(zip_buffer, 'r') as zip_file:
                 # Test the ZIP file structure
                 file_list = zip_file.namelist()
@@ -683,8 +689,10 @@ class SquidArtifactManager:
                     except Exception as e:
                         raise ValueError(f"Cannot read file {file_list[i]} from ZIP: {e}")
                 
-                print(f"ZIP validation passed: {len(file_list)} files, {len(zarr_zip_content) / (1024*1024):.2f} MB")
-                
+                print(f"ZIP validation passed: {len(file_list)} files, {len(zip_content) / (1024*1024):.2f} MB")
+        
+        try:
+            await asyncio.to_thread(_validate_zip_sync, zarr_zip_content)
         except zipfile.BadZipFile as e:
             raise ValueError(f"Invalid ZIP file format: {e}")
         except Exception as e:
@@ -771,137 +779,141 @@ class SquidArtifactManager:
         Returns:
             dict: Detailed test results including file count, size, and any issues
         """
-        import zipfile
-        import io
-        
-        results = {
-            "valid": False,
-            "size_mb": len(zip_content) / (1024 * 1024),
-            "file_count": 0,
-            "zip64_required": False,
-            "zip64_enabled": False,
-            "compression_method": None,
-            "issues": [],
-            "sample_files": []
-        }
-        
-        try:
-            zip_buffer = io.BytesIO(zip_content)
+        # Move CPU-intensive ZIP integrity testing to thread pool to avoid blocking asyncio loop
+        def _test_zip_integrity_sync(zip_content: bytes, description: str) -> dict:
+            import zipfile
+            import io
             
-            # Test basic ZIP file opening
-            with zipfile.ZipFile(zip_buffer, 'r') as zip_file:
-                file_list = zip_file.namelist()
-                results["file_count"] = len(file_list)
+            results = {
+                "valid": False,
+                "size_mb": len(zip_content) / (1024 * 1024),
+                "file_count": 0,
+                "zip64_required": False,
+                "zip64_enabled": False,
+                "compression_method": None,
+                "issues": [],
+                "sample_files": []
+            }
+            
+            try:
+                zip_buffer = io.BytesIO(zip_content)
                 
-                if not file_list:
-                    results["issues"].append("ZIP file is empty")
-                    return results
-                
-                # Check if ZIP64 is required based on size and file count
-                results["zip64_required"] = results["size_mb"] > 200 or results["file_count"] > 65535
-                
-                # Test central directory access
-                try:
-                    info_list = zip_file.infolist()
+                # Test basic ZIP file opening
+                with zipfile.ZipFile(zip_buffer, 'r') as zip_file:
+                    file_list = zip_file.namelist()
+                    results["file_count"] = len(file_list)
                     
-                    # Check for ZIP64 format indicators
-                    zip64_indicators = []
+                    if not file_list:
+                        results["issues"].append("ZIP file is empty")
+                        return results
                     
-                    # Check for large individual files (>= 4GB)
-                    large_files = any(info.file_size >= 0xFFFFFFFF or info.compress_size >= 0xFFFFFFFF for info in info_list)
-                    if large_files:
-                        zip64_indicators.append("large_files")
+                    # Check if ZIP64 is required based on size and file count
+                    results["zip64_required"] = results["size_mb"] > 200 or results["file_count"] > 65535
                     
-                    # Check total archive size vs ZIP32 limits (>= 4GB)
-                    if results["size_mb"] * 1024 * 1024 >= 0xFFFFFFFF:
-                        zip64_indicators.append("archive_size")
-                    
-                    # Check file count vs ZIP32 limits (>= 65535 files)
-                    if results["file_count"] >= 0xFFFF:
-                        zip64_indicators.append("file_count")
-                    
-                    # For large files, check if ZIP64 format is actually being used
-                    # The key insight: if ZIP64 is required but the file can be read successfully,
-                    # then ZIP64 format is likely being used correctly
-                    if results["zip64_required"]:
-                        # Try to access the central directory - if this succeeds for large files,
-                        # it means ZIP64 format is working
-                        try:
-                            # Test reading a few files to verify ZIP64 access works
-                            test_files = min(3, len(info_list))
-                            for i in range(test_files):
-                                if info_list[i].file_size > 0:
-                                    with zip_file.open(info_list[i]) as f:
-                                        f.read(1)  # Read just one byte to test access
-                            
-                            # If we can successfully read files from a large ZIP, ZIP64 is working
-                            results["zip64_enabled"] = True
-                            zip64_indicators.append("successful_access")
-                            
-                        except Exception as e:
-                            # If we can't read files from a large ZIP, ZIP64 might not be working
-                            results["zip64_enabled"] = False
-                            results["issues"].append(f"ZIP64 access test failed: {e}")
-                    else:
-                        # For smaller files, ZIP64 is not required
-                        results["zip64_enabled"] = False
-                    
-                    results["zip64_indicators"] = zip64_indicators
-                    
-                    # Get compression method from first file
-                    if info_list:
-                        results["compression_method"] = info_list[0].compress_type
-                        
-                except Exception as e:
-                    results["issues"].append(f"Cannot access central directory: {e}")
-                    return results
-                
-                # Test reading sample files
-                sample_count = min(5, len(file_list))
-                for i in range(sample_count):
+                    # Test central directory access
                     try:
-                        file_info = zip_file.getinfo(file_list[i])
-                        with zip_file.open(file_list[i]) as f:
-                            data = f.read(1024)  # Read first 1KB
+                        info_list = zip_file.infolist()
+                        
+                        # Check for ZIP64 format indicators
+                        zip64_indicators = []
+                        
+                        # Check for large individual files (>= 4GB)
+                        large_files = any(info.file_size >= 0xFFFFFFFF or info.compress_size >= 0xFFFFFFFF for info in info_list)
+                        if large_files:
+                            zip64_indicators.append("large_files")
+                        
+                        # Check total archive size vs ZIP32 limits (>= 4GB)
+                        if results["size_mb"] * 1024 * 1024 >= 0xFFFFFFFF:
+                            zip64_indicators.append("archive_size")
+                        
+                        # Check file count vs ZIP32 limits (>= 65535 files)
+                        if results["file_count"] >= 0xFFFF:
+                            zip64_indicators.append("file_count")
+                        
+                        # For large files, check if ZIP64 format is actually being used
+                        # The key insight: if ZIP64 is required but the file can be read successfully,
+                        # then ZIP64 format is likely being used correctly
+                        if results["zip64_required"]:
+                            # Try to access the central directory - if this succeeds for large files,
+                            # it means ZIP64 format is working
+                            try:
+                                # Test reading a few files to verify ZIP64 access works
+                                test_files = min(3, len(info_list))
+                                for i in range(test_files):
+                                    if info_list[i].file_size > 0:
+                                        with zip_file.open(info_list[i]) as f:
+                                            f.read(1)  # Read just one byte to test access
+                                
+                                # If we can successfully read files from a large ZIP, ZIP64 is working
+                                results["zip64_enabled"] = True
+                                zip64_indicators.append("successful_access")
+                                
+                            except Exception as e:
+                                # If we can't read files from a large ZIP, ZIP64 might not be working
+                                results["zip64_enabled"] = False
+                                results["issues"].append(f"ZIP64 access test failed: {e}")
+                        else:
+                            # For smaller files, ZIP64 is not required
+                            results["zip64_enabled"] = False
+                        
+                        results["zip64_indicators"] = zip64_indicators
+                        
+                        # Get compression method from first file
+                        if info_list:
+                            results["compression_method"] = info_list[0].compress_type
+                            
+                    except Exception as e:
+                        results["issues"].append(f"Cannot access central directory: {e}")
+                        return results
+                    
+                    # Test reading sample files
+                    sample_count = min(5, len(file_list))
+                    for i in range(sample_count):
+                        try:
+                            file_info = zip_file.getinfo(file_list[i])
+                            with zip_file.open(file_list[i]) as f:
+                                data = f.read(1024)  # Read first 1KB
+                                results["sample_files"].append({
+                                    "name": file_list[i],
+                                    "size": file_info.file_size,
+                                    "compressed_size": file_info.compress_size,
+                                    "readable": True
+                                })
+                        except Exception as e:
+                            results["issues"].append(f"Cannot read file {file_list[i]}: {e}")
                             results["sample_files"].append({
                                 "name": file_list[i],
-                                "size": file_info.file_size,
-                                "compressed_size": file_info.compress_size,
-                                "readable": True
+                                "readable": False,
+                                "error": str(e)
                             })
-                    except Exception as e:
-                        results["issues"].append(f"Cannot read file {file_list[i]}: {e}")
-                        results["sample_files"].append({
-                            "name": file_list[i],
-                            "readable": False,
-                            "error": str(e)
-                        })
-                
-                # Final validation: if ZIP64 is required but not enabled, that's an issue
-                if results["zip64_required"] and not results["zip64_enabled"]:
-                    results["issues"].append("Large file requires ZIP64 format but ZIP64 is not enabled")
-                
-                # Mark as valid if no issues found
-                results["valid"] = len(results["issues"]) == 0
-                
-        except zipfile.BadZipFile as e:
-            results["issues"].append(f"Invalid ZIP file format: {e}")
-        except Exception as e:
-            results["issues"].append(f"ZIP file test failed: {e}")
+                    
+                    # Final validation: if ZIP64 is required but not enabled, that's an issue
+                    if results["zip64_required"] and not results["zip64_enabled"]:
+                        results["issues"].append("Large file requires ZIP64 format but ZIP64 is not enabled")
+                    
+                    # Mark as valid if no issues found
+                    results["valid"] = len(results["issues"]) == 0
+                    
+            except zipfile.BadZipFile as e:
+                results["issues"].append(f"Invalid ZIP file format: {e}")
+            except Exception as e:
+                results["issues"].append(f"ZIP file test failed: {e}")
+            
+            # Log results
+            status = "VALID" if results["valid"] else "INVALID"
+            print(f"ZIP Test [{description}]: {status}")
+            print(f"  Size: {results['size_mb']:.2f} MB, Files: {results['file_count']}")
+            print(f"  ZIP64 Required: {results['zip64_required']}, Enabled: {results['zip64_enabled']}")
+            if "zip64_indicators" in results and results["zip64_indicators"]:
+                print(f"  ZIP64 Indicators: {', '.join(results['zip64_indicators'])}")
+            print(f"  Compression: {results['compression_method']}")
+            
+            if results["issues"]:
+                print(f"  Issues: {', '.join(results['issues'])}")
+            
+            return results
         
-        # Log results
-        status = "VALID" if results["valid"] else "INVALID"
-        print(f"ZIP Test [{description}]: {status}")
-        print(f"  Size: {results['size_mb']:.2f} MB, Files: {results['file_count']}")
-        print(f"  ZIP64 Required: {results['zip64_required']}, Enabled: {results['zip64_enabled']}")
-        if "zip64_indicators" in results and results["zip64_indicators"]:
-            print(f"  ZIP64 Indicators: {', '.join(results['zip64_indicators'])}")
-        print(f"  Compression: {results['compression_method']}")
-        
-        if results["issues"]:
-            print(f"  Issues: {', '.join(results['issues'])}")
-        
-        return results
+        return await asyncio.to_thread(_test_zip_integrity_sync, zip_content, description)
 
 # Constants
 SERVER_URL = "https://hypha.aicell.io"

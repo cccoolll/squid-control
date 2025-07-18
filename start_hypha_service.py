@@ -3063,8 +3063,8 @@ class Microscope:
                                     rotation_angle_deg=CONFIG.STITCHING_ROTATION_ANGLE_DEG
                                 )
                                 
-                                # Export the well canvas as zip
-                                well_zip_content = temp_canvas.export_as_zip()
+                                # Export the well canvas as zip using asyncio.to_thread to avoid blocking
+                                well_zip_content = await asyncio.to_thread(temp_canvas.export_as_zip)
                                 temp_canvas.close()
                                 
                                 # Add to files info for batch upload
