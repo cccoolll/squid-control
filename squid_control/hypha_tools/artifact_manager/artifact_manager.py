@@ -36,6 +36,17 @@ class SquidArtifactManager:
     def __init__(self):
         self._svc = None
         self.server = None
+        # Upload queue infrastructure for background uploads during scanning
+        self.upload_queue = None  # Will be initialized when needed
+        self.upload_worker_task = None
+        self.upload_worker_running = False
+        self.current_dataset_id = None
+        self.current_gallery_id = None
+        self.upload_frozen = False  # For handling upload failures
+        self.microscope_service_id = None
+        self.experiment_id = None
+        self.acquisition_settings = None
+        self.description = None
 
     async def connect_server(self, server):
         """
@@ -489,6 +500,199 @@ class SquidArtifactManager:
             except:
                 pass
             raise e
+    
+    async def start_upload_worker(self, microscope_service_id, experiment_id, acquisition_settings=None, description=None):
+        """
+        Start the background upload worker for uploading wells during scanning.
+        
+        Args:
+            microscope_service_id (str): The hypha service ID of the microscope
+            experiment_id (str): The experiment ID for dataset naming
+            acquisition_settings (dict, optional): Acquisition settings metadata
+            description (str, optional): Description of the dataset
+        """
+        if self.upload_worker_running:
+            print("Upload worker already running")
+            return
+            
+        # Initialize upload queue
+        self.upload_queue = asyncio.Queue()
+        self.upload_worker_running = True
+        self.upload_frozen = False
+        self.microscope_service_id = microscope_service_id
+        self.experiment_id = experiment_id
+        self.acquisition_settings = acquisition_settings
+        self.description = description
+        
+        # Create dataset for this upload session
+        await self._create_upload_dataset()
+        
+        # Start background worker
+        self.upload_worker_task = asyncio.create_task(self._upload_worker_loop())
+        print(f"Started upload worker for experiment: {experiment_id}")
+    
+    async def stop_upload_worker(self):
+        """
+        Stop the background upload worker and commit the dataset.
+        """
+        if not self.upload_worker_running:
+            print("Upload worker not running")
+            return
+            
+        self.upload_worker_running = False
+        
+        # Wait for upload worker to complete
+        if self.upload_worker_task:
+            try:
+                await asyncio.wait_for(self.upload_worker_task, timeout=30.0)
+            except asyncio.TimeoutError:
+                print("Upload worker did not stop gracefully, cancelling")
+                self.upload_worker_task.cancel()
+                try:
+                    await self.upload_worker_task
+                except asyncio.CancelledError:
+                    pass
+        
+        # Commit the dataset if it exists
+        if self.current_dataset_id:
+            try:
+                await self._svc.commit(self.current_dataset_id)
+                print(f"Committed dataset: {self.current_dataset_id}")
+            except Exception as e:
+                print(f"Failed to commit dataset: {e}")
+        
+        # Reset state
+        self.upload_queue = None
+        self.upload_worker_task = None
+        self.current_dataset_id = None
+        self.current_gallery_id = None
+        self.microscope_service_id = None
+        self.experiment_id = None
+        self.acquisition_settings = None
+        self.description = None
+        print("Upload worker stopped")
+    
+    async def add_well_to_upload_queue(self, well_name, well_zip_content, well_size_mb):
+        """
+        Add a well to the upload queue for background processing.
+        
+        Args:
+            well_name (str): Name of the well (e.g., "well_A1_96")
+            well_zip_content (bytes): ZIP content of the well canvas
+            well_size_mb (float): Size of the ZIP content in MB
+        """
+        if not self.upload_worker_running or self.upload_frozen:
+            print(f"Upload worker not running or frozen, skipping upload for {well_name}")
+            return
+            
+        try:
+            await self.upload_queue.put({
+                'name': well_name,
+                'content': well_zip_content,
+                'size_mb': well_size_mb
+            })
+            print(f"Added {well_name} to upload queue")
+        except Exception as e:
+            print(f"Failed to add {well_name} to upload queue: {e}")
+    
+    async def _create_upload_dataset(self):
+        """
+        Create a dataset for the current upload session.
+        """
+        workspace = "agent-lens"
+        
+        # Generate dataset name with timestamp
+        import time
+        timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        dataset_name = f"{self.experiment_id}-{timestamp}"
+        
+        # Ensure gallery exists
+        gallery = await self.create_or_get_microscope_gallery(self.microscope_service_id, self.experiment_id)
+        self.current_gallery_id = gallery["id"]
+        
+        # Create dataset manifest
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        
+        dataset_manifest = {
+            "name": dataset_name,
+            "description": self.description or f"Zarr dataset from microscope {self.microscope_service_id}",
+            "record_type": "zarr-dataset",
+            "microscope_service_id": self.microscope_service_id,
+            "experiment_id": self.experiment_id,
+            "timestamp": timestamp,
+            "acquisition_settings": self.acquisition_settings or {},
+            "file_format": "ome-zarr",
+            "upload_method": "squid-control-api-background",
+            "zip_format": "ZIP64-compatible"
+        }
+        
+        # Create dataset in staging mode
+        dataset_alias = f"{workspace}/{dataset_name}"
+        dataset = await self._svc.create(
+            parent_id=gallery["id"],
+            alias=dataset_alias,
+            manifest=dataset_manifest,
+            stage=True
+        )
+        
+        self.current_dataset_id = dataset["id"]
+        print(f"Created upload dataset: {dataset_name}")
+    
+    async def _upload_worker_loop(self):
+        """
+        Background loop that processes the upload queue.
+        """
+        while self.upload_worker_running:
+            try:
+                # Get well from queue with timeout
+                well_info = await asyncio.wait_for(self.upload_queue.get(), timeout=1.0)
+                
+                # Upload with retry logic
+                success = await self._upload_single_well_with_retry(well_info)
+                
+                if not success:
+                    # Freeze upload queue after 3 failed attempts
+                    self.upload_frozen = True
+                    print(f"Upload failed after 3 retries for {well_info['name']}, freezing upload queue")
+                    break
+                    
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                print(f"Upload worker error: {e}")
+                # Don't break on general errors, continue processing
+                continue
+        
+        print("Upload worker loop completed")
+    
+    async def _upload_single_well_with_retry(self, well_info):
+        """
+        Upload a single well with retry logic.
+        
+        Args:
+            well_info (dict): Well information with 'name', 'content', 'size_mb'
+            
+        Returns:
+            bool: True if upload succeeded, False otherwise
+        """
+        for attempt in range(3):
+            try:
+                await self._upload_large_zip_with_retry(
+                    self.current_dataset_id,
+                    well_info['content'],
+                    max_retries=1,  # Single attempt per retry cycle
+                    file_path=f"{well_info['name']}.zip"
+                )
+                print(f"Successfully uploaded well: {well_info['name']} (attempt {attempt + 1})")
+                return True
+            except Exception as e:
+                print(f"Upload attempt {attempt + 1} failed for {well_info['name']}: {e}")
+                if attempt < 2:
+                    wait_time = 2 ** attempt
+                    print(f"Waiting {wait_time}s before retry...")
+                    await asyncio.sleep(wait_time)
+        
+        return False
     
     async def check_dataset_name_availability(self, microscope_service_id, dataset_name):
         """
