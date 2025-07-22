@@ -1830,7 +1830,7 @@ class Microscope:
         response = self.get_current_well_location(config.wellplate_type, context)
         return {"result": response}
 
-    def get_microscope_configuration_schema(self, config: GetMicroscopeConfigurationInput, context=None):
+    def get_config_schema(self, config: GetMicroscopeConfigurationInput, context=None):
         response = self.get_microscope_configuration(config.config_section, config.include_defaults, context)
         return {"result": response}
 
@@ -1854,7 +1854,6 @@ class Microscope:
             "find_similar_image_image": self.FindSimilarImageImageInput.model_json_schema(),
             "get_current_well_location": self.GetCurrentWellLocationInput.model_json_schema(),
             "get_microscope_configuration": self.GetMicroscopeConfigurationInput.model_json_schema(),
-            "set_stage_velocity": self.SetStageVelocityInput.model_json_schema(),
         }
 
     async def start_hypha_service(self, server, service_id, run_in_executor=None):
@@ -1976,8 +1975,7 @@ class Microscope:
                 "find_similar_image_text": self.find_similar_image_text_schema,
                 "find_similar_image_image": self.find_similar_image_image_schema,
                 "get_current_well_location": self.get_current_well_location_schema,
-                "get_microscope_configuration": self.get_microscope_configuration_schema,
-                "set_stage_velocity": self.set_stage_velocity_schema,
+                "get_microscope_configuration": self.get_config_schema,
             }
         }
 
@@ -2087,10 +2085,13 @@ class Microscope:
             )
             similarity_search_svc = await similarity_search_server.get_service("image-text-similarity-search")
         else:
-            similarity_search_server = await connect_to_server(
-                {"client_id": f"similarity-search-{self.service_id}-{uuid.uuid4()}", "server_url": "https://hypha.aicell.io", "token": os.environ.get("AGENT_LENS_WORKSPACE_TOKEN"), "workspace": "agent-lens", "ping_interval": None}
-            )
-            similarity_search_svc = await similarity_search_server.get_service("image-text-similarity-search")
+            # COMMENTED OUT: Remote server connection is down
+            # similarity_search_server = await connect_to_server(
+            #     {"client_id": f"similarity-search-{self.service_id}-{uuid.uuid4()}", "server_url": "https://hypha.aicell.io", "token": os.environ.get("AGENT_LENS_WORKSPACE_TOKEN"), "workspace": "agent-lens", "ping_interval": None}
+            # )
+            # similarity_search_svc = await similarity_search_server.get_service("image-text-similarity-search")
+            logger.warning("Similarity search service disabled due to remote server being down")
+            similarity_search_svc = None
         return similarity_search_svc
 
     async def setup(self):
@@ -2105,9 +2106,11 @@ class Microscope:
             remote_token = os.environ.get("SQUID_WORKSPACE_TOKEN")
             remote_workspace = "squid-control"
             
-        remote_server = await connect_to_server(
-                {"client_id": f"squid-remote-server-{self.service_id}-{uuid.uuid4()}", "server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": remote_workspace, "ping_interval": None}
-            )
+        # COMMENTED OUT: Remote server connection is down
+        # remote_server = await connect_to_server(
+        #         {"client_id": f"squid-remote-server-{self.service_id}-{uuid.uuid4()}", "server_url": "https://hypha.aicell.io", "token": remote_token, "workspace": remote_workspace, "ping_interval": None}
+        #     )
+        remote_server = None  # Set to None since remote server is down
         if not self.service_id:
             raise ValueError("MICROSCOPE_SERVICE_ID is not set in the environment variables.")
         if self.is_local:
@@ -2142,20 +2145,23 @@ class Microscope:
             from squid_control.hypha_tools.artifact_manager.artifact_manager import SquidArtifactManager
             self.zarr_artifact_manager = SquidArtifactManager()
             
+            # COMMENTED OUT: Zarr server connection is down
             # Connect to agent-lens workspace for zarr uploads
-            zarr_token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
-            if zarr_token:
-                zarr_server = await connect_to_server({
-                    "server_url": "https://hypha.aicell.io",
-                    "token": zarr_token,
-                    "workspace": "agent-lens",
-                    "ping_interval": None
-                })
-                await self.zarr_artifact_manager.connect_server(zarr_server)
-                logger.info("Zarr artifact manager initialized successfully")
-            else:
-                logger.warning("AGENT_LENS_WORKSPACE_TOKEN not found, zarr upload functionality disabled")
-                self.zarr_artifact_manager = None
+            # zarr_token = os.environ.get("AGENT_LENS_WORKSPACE_TOKEN")
+            # if zarr_token:
+            #     zarr_server = await connect_to_server({
+            #         "server_url": "https://hypha.aicell.io",
+            #         "token": zarr_token,
+            #         "workspace": "agent-lens",
+            #         "ping_interval": None
+            #     })
+            #     await self.zarr_artifact_manager.connect_server(zarr_server)
+            #     logger.info("Zarr artifact manager initialized successfully")
+            # else:
+            #     logger.warning("AGENT_LENS_WORKSPACE_TOKEN not found, zarr upload functionality disabled")
+            #     self.zarr_artifact_manager = None
+            logger.warning("Zarr artifact manager disabled due to remote server being down")
+            self.zarr_artifact_manager = None
         except Exception as e:
             logger.warning(f"Failed to initialize zarr artifact manager: {e}")
             self.zarr_artifact_manager = None
@@ -2163,21 +2169,27 @@ class Microscope:
         if self.is_simulation:
             await self.start_hypha_service(self.server, service_id=self.service_id)
             datastore_id = f'data-store-simu-{self.service_id}'
-            chatbot_id = f"squid-chatbot-simu-{self.service_id}"
+            # Use a shorter service ID for chatbot to avoid OpenAI function name length limits
+            short_service_id = self.service_id.replace('microscope-control-', 'mc-').replace('squid-', 's-')
+            chatbot_id = f"squid-chatbot-simu-{short_service_id}"
         else:
             await self.start_hypha_service(self.server, service_id=self.service_id)
             datastore_id = f'data-store-real-{self.service_id}'
-            chatbot_id = f"squid-chatbot-real-{self.service_id}"
+            # Use a shorter service ID for chatbot to avoid OpenAI function name length limits
+            short_service_id = self.service_id.replace('microscope-control-', 'mc-').replace('squid-', 's-')
+            chatbot_id = f"squid-chatbot-real-{short_service_id}"
         
-        self.datastore = HyphaDataStore()
-        try:
-            await self.datastore.setup(remote_server, service_id=datastore_id)
-        except TypeError as e:
-            if "Future" in str(e):
-                config = await asyncio.wrap_future(server.config)
-                await self.datastore.setup(remote_server, service_id=datastore_id, config=config)
-            else:
-                raise e
+        # COMMENTED OUT: Datastore setup depends on remote server which is down
+        # self.datastore = HyphaDataStore()
+        # try:
+        #     await self.datastore.setup(remote_server, service_id=datastore_id)
+        # except TypeError as e:
+        #     if "Future" in str(e):
+        #         config = await asyncio.wrap_future(server.config)
+        #         await self.datastore.setup(remote_server, service_id=datastore_id, config=config)
+        #     else:
+        #         raise e
+        self.datastore = None  # Set to None since remote server is down
     
         chatbot_server_url = "https://chat.bioimage.io"
         try:
@@ -3214,9 +3226,6 @@ class Microscope:
         except Exception as e:
             logger.error(f"Error listing gallery datasets: {e}")
             raise e
-
-    def get_microscope_configuration_schema(self, config: GetMicroscopeConfigurationInput, context=None):
-        return self.get_microscope_configuration(config.config_section, config.include_defaults, context)
 
     def set_stage_velocity_schema(self, config: SetStageVelocityInput, context=None):
         """Set the maximum velocity for X and Y stage axes with schema validation."""
