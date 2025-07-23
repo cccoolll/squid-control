@@ -433,7 +433,9 @@ class Microscope:
             if datastore_svc is None:
                 raise RuntimeError("Datastore service not found")
             
-            chatbot_id = f"squid-chatbot-{'simu' if self.is_simulation else 'real'}-{self.service_id}"
+            # Shorten chatbot service ID to avoid OpenAI API limits
+            short_service_id = self.service_id[:20] if len(self.service_id) > 20 else self.service_id
+            chatbot_id = f"sq-cb-{'simu' if self.is_simulation else 'real'}-{short_service_id}"
             
             chatbot_server_url = "https://chat.bioimage.io"
             try:
@@ -2163,11 +2165,15 @@ class Microscope:
         if self.is_simulation:
             await self.start_hypha_service(self.server, service_id=self.service_id)
             datastore_id = f'data-store-simu-{self.service_id}'
-            chatbot_id = f"squid-chatbot-simu-{self.service_id}"
+            # Shorten chatbot service ID to avoid OpenAI API limits
+            short_service_id = self.service_id[:20] if len(self.service_id) > 20 else self.service_id
+            chatbot_id = f"sq-cb-simu-{short_service_id}"
         else:
             await self.start_hypha_service(self.server, service_id=self.service_id)
             datastore_id = f'data-store-real-{self.service_id}'
-            chatbot_id = f"squid-chatbot-real-{self.service_id}"
+            # Shorten chatbot service ID to avoid OpenAI API limits
+            short_service_id = self.service_id[:20] if len(self.service_id) > 20 else self.service_id
+            chatbot_id = f"sq-cb-real-{short_service_id}"
         
         self.datastore = HyphaDataStore()
         try:
