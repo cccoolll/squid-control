@@ -172,3 +172,5 @@ cython_debug/
 upload_record.json
 config_parameters.txt
 configuration_HCS_v2.ini
+
+chunk_images/

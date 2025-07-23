@@ -548,9 +548,19 @@ class WellZarrCanvasBase:
         x_offset_mm = -self.stage_limits['x_negative']
         y_offset_mm = -self.stage_limits['y_negative']
         
-        # Convert to pixels at scale 0
-        x_px = int((x_mm + x_offset_mm) * 1000 / self.pixel_size_xy_um)
-        y_px = int((y_mm + y_offset_mm) * 1000 / self.pixel_size_xy_um)
+        # Convert to pixels at scale 0 (without padding)
+        x_px_no_padding = (x_mm + x_offset_mm) * 1000 / self.pixel_size_xy_um
+        y_px_no_padding = (y_mm + y_offset_mm) * 1000 / self.pixel_size_xy_um
+        
+        # Account for 10% padding by centering in the padded canvas
+        # The canvas is 1.1x larger, so we need to add 5% margin on each side
+        padding_factor = 1.1
+        x_padding_px = (self.canvas_width_px - (self.stage_width_mm * 1000 / self.pixel_size_xy_um)) / 2
+        y_padding_px = (self.canvas_height_px - (self.stage_height_mm * 1000 / self.pixel_size_xy_um)) / 2
+        
+        # Add padding offset to center the image in the padded canvas
+        x_px = int(x_px_no_padding + x_padding_px)
+        y_px = int(y_px_no_padding + y_padding_px)
         
         # Apply scale factor
         scale_factor = 4 ** scale
