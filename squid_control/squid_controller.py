@@ -84,6 +84,7 @@ class SquidController:
         self.is_simulation = is_simulation
         self.is_busy = False
         self.scan_stop_requested = False  # Flag to stop ongoing scans
+        self.zarr_artifact_manager = None  # Initialize zarr artifact manager to None
         if is_simulation:
             config_path = os.path.join(os.path.dirname(path), 'configuration_HCS_v2_example.ini')
         else:
@@ -1091,7 +1092,7 @@ class SquidController:
                                         illumination_settings=None, do_contrast_autofocus=False, 
                                         do_reflection_af=False, action_ID='normal_scan_stitching',
                                         timepoint=0, experiment_name=None, wells_to_scan=None,
-                                        wellplate_type='96', well_padding_mm=1.0, uploading=False):
+                                        wellplate_type='96', well_padding_mm=1.0):
         """
         Normal scan with live stitching to well-specific OME-Zarr canvases.
         Scans specified wells one by one, creating individual zarr canvases for each well.
@@ -1270,10 +1271,6 @@ class SquidController:
                     # Stop stitching for this well
                     await canvas.stop_stitching()
                     logger.info(f'Completed scanning well {well_row}{well_column}')
-                    
-                    # Upload well canvas if uploading is enabled
-                    if uploading:
-                        await self._upload_well_canvas_after_completion(f"{well_row}{well_column}", wellplate_type)
             
             logger.info('Normal scan with stitching completed for all wells')
             
@@ -1284,62 +1281,7 @@ class SquidController:
             await asyncio.sleep(0.5)  # 500ms buffer to ensure filesystem operations complete
             logger.info('Normal scan with stitching fully completed - zarr data ready for export')
     
-    async def _upload_well_canvas_after_completion(self, well_name, wellplate_type):
-        """
-        Upload a well canvas to the background upload queue after completion.
-        
-        Args:
-            well_name (str): Name of the well (e.g., "A1", "B2")
-            wellplate_type (str): Type of well plate ('96', '384', etc.)
-        """
-        try:
-            # Get the well canvas
-            well_canvas = self.experiment_manager.get_well_canvas(well_name, wellplate_type)
-            if well_canvas is None:
-                logger.warning(f"No well canvas found for {well_name}, skipping upload")
-                return
-            
-            # Create ZIP content of the well canvas
-            import zipfile
-            import io
-            import tempfile
-            import os
-            
-            # Create a temporary ZIP file
-            with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as temp_zip:
-                temp_zip_path = temp_zip.name
-            
-            try:
-                # Export the well canvas to ZIP
-                well_canvas.export_to_zip(temp_zip_path)
-                
-                # Read the ZIP content
-                with open(temp_zip_path, 'rb') as f:
-                    zip_content = f.read()
-                
-                # Calculate size in MB
-                size_mb = len(zip_content) / (1024 * 1024)
-                
-                # Add to upload queue if artifact manager is available
-                if hasattr(self, 'zarr_artifact_manager') and self.zarr_artifact_manager is not None:
-                    well_zip_name = f"well_{well_name}_{wellplate_type}"
-                    await self.zarr_artifact_manager.add_well_to_upload_queue(
-                        well_zip_name, zip_content, size_mb
-                    )
-                    logger.info(f"Added {well_zip_name} to upload queue ({size_mb:.2f} MB)")
-                else:
-                    logger.warning("No artifact manager available for upload")
-                
-            finally:
-                # Clean up temporary file
-                try:
-                    os.unlink(temp_zip_path)
-                except OSError:
-                    pass
-                    
-        except Exception as e:
-            logger.error(f"Failed to upload well canvas for {well_name}: {e}")
-            # Don't raise the exception - continue with next well
+
     
     def stop_scan_and_stitching(self):
         """
@@ -2172,7 +2114,6 @@ class SquidController:
                 
                 # Check if the well canvas exists
                 if not self._check_well_canvas_exists(well_row, well_column, wellplate_type):
-                    logger.warning(f"Well canvas for {well_row}{well_column} ({wellplate_type}) does not exist - skipping")
                     continue
                 
                 # Get well canvas and extract region
@@ -2292,7 +2233,7 @@ class SquidController:
                                       fps_target=10, action_ID='quick_scan_stitching',
                                       n_stripes=4, stripe_width_mm=4.0, dy_mm=0.9, velocity_scan_mm_per_s=7.0,
                                       do_contrast_autofocus=False, do_reflection_af=False, timepoint=0, 
-                                      experiment_name=None, well_padding_mm=1.0, uploading=False):
+                                      experiment_name=None, well_padding_mm=1.0):
         """
         Quick scan with live stitching to well-specific OME-Zarr canvases - brightfield only.
         Scans entire well plate, creating individual zarr canvases for each well.
@@ -2313,7 +2254,6 @@ class SquidController:
             timepoint (int): Timepoint index for the scan (default 0)
             experiment_name (str, optional): Name of the experiment to use. If None, uses active experiment or creates "default"
             well_padding_mm (float): Padding around each well in mm
-            uploading (bool): Enable background upload during scanning
         """
         
         # Validate exposure time
@@ -2516,10 +2456,6 @@ class SquidController:
                     
                     # Debug stitching status after completing well
                     self.debug_stitching_status()
-                    
-                    # Upload well canvas if uploading is enabled
-                    if uploading:
-                        await self._upload_well_canvas_after_completion(well_name, wellplate_type)
                     
                     # 3. After scanning for this well is done, move the z axis back to the remembered position
                     if do_contrast_autofocus or do_reflection_af:

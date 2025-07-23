@@ -539,12 +539,14 @@ class SquidArtifactManager:
             print("Upload worker not running")
             return
             
+        print("Stopping upload worker - waiting for queue to empty...")
         self.upload_worker_running = False
         
-        # Wait for upload worker to complete
+        # Wait for upload worker to complete and process remaining items
         if self.upload_worker_task:
             try:
-                await asyncio.wait_for(self.upload_worker_task, timeout=30.0)
+                # Give extra time for the worker to process remaining items in queue
+                await asyncio.wait_for(self.upload_worker_task, timeout=60.0)
             except asyncio.TimeoutError:
                 print("Upload worker did not stop gracefully, cancelling")
                 self.upload_worker_task.cancel()
@@ -662,6 +664,23 @@ class SquidArtifactManager:
                 print(f"Upload worker error: {e}")
                 # Don't break on general errors, continue processing
                 continue
+        
+        # Process any remaining items in the queue before stopping
+        print("Upload worker stopping - processing remaining items in queue...")
+        while not self.upload_queue.empty():
+            try:
+                well_info = self.upload_queue.get_nowait()
+                print(f"Processing remaining item: {well_info['name']}")
+                
+                # Upload with retry logic
+                success = await self._upload_single_well_with_retry(well_info)
+                
+                if not success:
+                    print(f"Failed to upload remaining item {well_info['name']}")
+                    
+            except Exception as e:
+                print(f"Error processing remaining upload item: {e}")
+                break
         
         print("Upload worker loop completed")
     

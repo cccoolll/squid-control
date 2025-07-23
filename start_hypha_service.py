@@ -2155,6 +2155,10 @@ class Microscope:
                 })
                 await self.zarr_artifact_manager.connect_server(zarr_server)
                 logger.info("Zarr artifact manager initialized successfully")
+                
+                # Pass the zarr artifact manager to the squid controller
+                self.squidController.zarr_artifact_manager = self.zarr_artifact_manager
+                logger.info("Zarr artifact manager passed to squid controller")
             else:
                 logger.warning("AGENT_LENS_WORKSPACE_TOKEN not found, zarr upload functionality disabled")
                 self.zarr_artifact_manager = None
@@ -3244,7 +3248,7 @@ class Microscope:
                                        wells_to_scan: List[str] = Field(default_factory=lambda: ['A1'], description="List of wells to scan (e.g., ['A1', 'B2', 'C3'])"),
                                        wellplate_type: str = Field('96', description="Well plate type ('6', '12', '24', '96', '384')"),
                                        well_padding_mm: float = Field(1.0, description="Padding around well in mm"),
-                                       uploading: bool = Field(False, description="Enable background upload during scanning"),
+                                       uploading: bool = Field(False, description="Enable upload after scanning is complete"),
                                        context=None):
         """
         Perform a normal scan with live stitching to OME-Zarr canvas using well-based approach.
@@ -3266,6 +3270,7 @@ class Microscope:
             wells_to_scan: List of wells to scan (e.g., ['A1', 'B2', 'C3'])
             wellplate_type: Well plate type ('6', '12', '24', '96', '384')
             well_padding_mm: Padding around well in mm
+            uploading: Enable upload after scanning is complete
             
         Returns:
             dict: Status of the scan
@@ -3289,37 +3294,7 @@ class Microscope:
             # Set scanning flag to prevent automatic video buffering restart during scan
             self.scanning_in_progress = True
             
-            # Start upload worker if uploading is enabled
-            if uploading and self.zarr_artifact_manager is not None:
-                try:
-                    # Prepare acquisition settings for upload
-                    acquisition_settings = {
-                        "microscope_service_id": self.service_id,
-                        "experiment_name": experiment_name or self.squidController.experiment_manager.current_experiment_name,
-                        "wellplate_type": wellplate_type,
-                        "illumination_settings": illumination_settings,
-                        "do_contrast_autofocus": do_contrast_autofocus,
-                        "do_reflection_af": do_reflection_af,
-                        "start_x_mm": start_x_mm,
-                        "start_y_mm": start_y_mm,
-                        "Nx": Nx,
-                        "Ny": Ny,
-                        "dx_mm": dx_mm,
-                        "dy_mm": dy_mm
-                    }
-                    
-                    await self.zarr_artifact_manager.start_upload_worker(
-                        microscope_service_id=self.service_id,
-                        experiment_id=experiment_name or self.squidController.experiment_manager.current_experiment_name,
-                        acquisition_settings=acquisition_settings,
-                        description=f"Normal scan with background upload - {action_ID}"
-                    )
-                    logger.info("Started background upload worker for normal scan")
-                except Exception as e:
-                    logger.error(f"Failed to start upload worker: {e}")
-                    # Continue with scan even if upload worker fails
-            
-            # Ensure the squid controller has the new method
+            # Perform the normal scan
             await self.squidController.normal_scan_with_stitching(
                 start_x_mm=start_x_mm,
                 start_y_mm=start_y_mm,
@@ -3335,9 +3310,23 @@ class Microscope:
                 experiment_name=experiment_name,
                 wells_to_scan=wells_to_scan,
                 wellplate_type=wellplate_type,
-                well_padding_mm=well_padding_mm,
-                uploading=uploading
+                well_padding_mm=well_padding_mm
             )
+            
+            # Upload the experiment if uploading is enabled
+            upload_result = None
+            if uploading:
+                try:
+                    logger.info("Uploading experiment after normal scan completion")
+                    upload_result = await self.upload_zarr_dataset(
+                        experiment_name=experiment_name or self.squidController.experiment_manager.current_experiment_name,
+                        description=f"Normal scan with stitching - {action_ID}",
+                        include_acquisition_settings=True
+                    )
+                    logger.info("Successfully uploaded experiment after normal scan")
+                except Exception as e:
+                    logger.error(f"Failed to upload experiment after normal scan: {e}")
+                    # Don't raise the exception - continue with response
             
             return {
                 "success": True,
@@ -3349,23 +3338,16 @@ class Microscope:
                     "total_area_mm2": (Nx * dx_mm) * (Ny * dy_mm),
                     "experiment_name": self.squidController.experiment_manager.current_experiment_name,  # Include the actual experiment used
                     "wells_scanned": wells_to_scan
-                }
+                },
+                "upload_result": upload_result
             }
         except Exception as e:
             logger.error(f"Failed to perform normal scan with stitching: {e}")
             raise e
         finally:
-            # Stop upload worker if it was started
-            if uploading and self.zarr_artifact_manager is not None:
-                try:
-                    await self.zarr_artifact_manager.stop_upload_worker()
-                    logger.info("Stopped background upload worker for normal scan")
-                except Exception as e:
-                    logger.error(f"Failed to stop upload worker: {e}")
-            
             # Always reset the scanning flag, regardless of success or failure
             self.scanning_in_progress = False
-            logger.info("Scanning completed, video buffering auto-start is now re-enabled")
+            logger.info("Normal scanning completed, video buffering auto-start is now re-enabled")
     
     
     @schema_function(skip_self=True)
@@ -3419,7 +3401,7 @@ class Microscope:
                                       do_reflection_af: bool = Field(False, description="Whether to perform reflection-based autofocus"),
                                       experiment_name: Optional[str] = Field(None, description="Name of the experiment to use. If None, uses active experiment or 'default' as fallback"),
                                       well_padding_mm: float = Field(1.0, description="Padding around each well in mm"),
-                                      uploading: bool = Field(False, description="Enable background upload during scanning"),
+                                      uploading: bool = Field(False, description="Enable upload after scanning is complete"),
                                       context=None):
         """
         Perform a quick scan with live stitching to OME-Zarr canvas - brightfield only.
@@ -3441,6 +3423,7 @@ class Microscope:
             do_reflection_af: Whether to perform reflection-based autofocus at each well
             experiment_name: Name of the experiment to use. If None, uses active experiment or 'default' as fallback
             well_padding_mm: Padding around each well in mm
+            uploading: Enable upload after scanning is complete
             
         Returns:
             dict: Status of the scan with performance metrics
@@ -3465,36 +3448,6 @@ class Microscope:
             # Set scanning flag to prevent automatic video buffering restart during scan
             self.scanning_in_progress = True
             
-            # Start upload worker if uploading is enabled
-            if uploading and self.zarr_artifact_manager is not None:
-                try:
-                    # Prepare acquisition settings for upload
-                    acquisition_settings = {
-                        "microscope_service_id": self.service_id,
-                        "experiment_name": experiment_name or self.squidController.experiment_manager.current_experiment_name,
-                        "wellplate_type": wellplate_type,
-                        "exposure_time_ms": exposure_time,
-                        "intensity": intensity,
-                        "fps_target": fps_target,
-                        "n_stripes": n_stripes,
-                        "stripe_width_mm": stripe_width_mm,
-                        "dy_mm": dy_mm,
-                        "velocity_scan_mm_per_s": velocity_scan_mm_per_s,
-                        "do_contrast_autofocus": do_contrast_autofocus,
-                        "do_reflection_af": do_reflection_af
-                    }
-                    
-                    await self.zarr_artifact_manager.start_upload_worker(
-                        microscope_service_id=self.service_id,
-                        experiment_id=experiment_name or self.squidController.experiment_manager.current_experiment_name,
-                        acquisition_settings=acquisition_settings,
-                        description=f"Quick scan with background upload - {action_ID}"
-                    )
-                    logger.info("Started background upload worker for quick scan")
-                except Exception as e:
-                    logger.error(f"Failed to start upload worker: {e}")
-                    # Continue with scan even if upload worker fails
-            
             # Record start time for performance metrics
             start_time = time.time()
             
@@ -3512,8 +3465,7 @@ class Microscope:
                 do_contrast_autofocus=do_contrast_autofocus,
                 do_reflection_af=do_reflection_af,
                 experiment_name=experiment_name,
-                well_padding_mm=well_padding_mm,
-                uploading=uploading
+                well_padding_mm=well_padding_mm
             )
             
             # Calculate performance metrics
@@ -3533,6 +3485,21 @@ class Microscope:
             config = wellplate_configs.get(wellplate_type_str, wellplate_configs['96'])
             total_wells = config['rows'] * config['cols']
             total_stripes = total_wells * n_stripes
+            
+            # Upload the experiment if uploading is enabled
+            upload_result = None
+            if uploading:
+                try:
+                    logger.info("Uploading experiment after quick scan completion")
+                    upload_result = await self.upload_zarr_dataset(
+                        experiment_name=experiment_name or self.squidController.experiment_manager.current_experiment_name,
+                        description=f"Quick scan with stitching - {action_ID}",
+                        include_acquisition_settings=True
+                    )
+                    logger.info("Successfully uploaded experiment after quick scan")
+                except Exception as e:
+                    logger.error(f"Failed to upload experiment after quick scan: {e}")
+                    # Don't raise the exception - continue with response
             
             return {
                 "success": True,
@@ -3562,7 +3529,8 @@ class Microscope:
                     "action_id": action_ID,
                     "pattern": f"{n_stripes}-stripe × {stripe_width_mm}mm serpentine per well",
                     "experiment_name": self.squidController.experiment_manager.current_experiment_name
-                }
+                },
+                "upload_result": upload_result
             }
             
         except ValueError as e:
@@ -3572,14 +3540,6 @@ class Microscope:
             logger.error(f"Failed to perform quick scan with stitching: {e}")
             raise e
         finally:
-            # Stop upload worker if it was started
-            if uploading and self.zarr_artifact_manager is not None:
-                try:
-                    await self.zarr_artifact_manager.stop_upload_worker()
-                    logger.info("Stopped background upload worker for quick scan")
-                except Exception as e:
-                    logger.error(f"Failed to stop upload worker: {e}")
-            
             # Always reset the scanning flag, regardless of success or failure
             self.scanning_in_progress = False
             logger.info("Quick scanning completed, video buffering auto-start is now re-enabled")
